@@ -80,7 +80,7 @@ export default defineConfig({
 
   /* Run your local dev server before starting the tests */
   webServer: {
-    command: "http-server -p 9891 ./e2e/server/",
+    command: "python3 -m http.server 9891 --bind 127.0.0.1 --directory .",
     port: 9891,
     timeout: 60 * 1000, // 1 minute
     reuseExistingServer: !process.env.CI,

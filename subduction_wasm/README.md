@@ -3,6 +3,85 @@
 > [!WARNING]
 > This is an early release preview. It has a very unstable API. No guarantees are given. DO NOT use for production use cases at this time. USE AT YOUR OWN RISK.
 
+## Plain-object API
+
+`Subduction` is the only public library class. IDs, digests, and topics are
+64-character hex strings; checkpoint prefixes are 24-character hex strings.
+Input accepts either case, without `0x`; output is always lowercase. Blobs and
+signed envelopes remain `Uint8Array`. Metadata, sync results, and stream events
+are recursively plain objects and need no `.free()` calls.
+
+```javascript
+import {
+  Subduction, createMemorySigner, createMemoryStorage,
+} from "@automerge/subduction";
+
+const node = new Subduction({
+  signer: createMemorySigner(),
+  storage: createMemoryStorage(),
+});
+try {
+  await node.storeBatch(treeId, {
+    commits: [{ head: commitHash, parents: parentHashes, blob: changeBytes }],
+  });
+  const results = await node.syncWithAllPeers(treeId, { subscribe: true });
+  for (const [peerId, result] of Object.entries(results)) {
+    console.log(peerId, result.success, result.stats);
+  }
+} finally {
+  try { await node.close(); } finally { node.free(); }
+}
+```
+
+Data arguments are synchronously decoded/copied into owned Rust values before
+asynchronous work is scheduled. Callers may reuse or mutate their objects and
+ordinary buffers once a method returns. Inputs are neither consumed nor detached;
+freezing is optional. Shared-memory payloads are rejected. Outputs own independent
+JS memory and remain usable after shutdown. Services (storage, signers, policies,
+transports, callbacks, and cancellation signals) remain live interfaces.
+
+### Migration from wrapper classes
+
+This is a breaking API change; there is no implicit legacy-wrapper conversion.
+
+| Previously | Now |
+| --- | --- |
+| `PeerId`, `CommitId`, `SedimentreeId`, `Digest`, `Topic` constructors | Hex strings |
+| `Checkpoint.fromBytes(bytes)` | 24-character hex prefix (`commitId.slice(0, 24)` for a valid hex ID) |
+| `new MemoryStorage()` | `createMemoryStorage()` |
+| `IndexedDbStorage.setup(indexedDB, name)` | `createIndexedDbStorage(indexedDB, name)` |
+| `MemorySigner.generate()` / `.fromBytes(seed)` | `createMemorySigner()` / `createMemorySigner(seed)` |
+| `WebCryptoSigner.setup()` | `createWebCryptoSigner()` |
+| `new CommitInput(new LooseCommit(...), blob)` | `{ head, parents, blob }` |
+| `new FragmentInput(new Fragment(...), blob)` | `{ head, boundary, checkpoints, blob }` |
+| `storeCommit(id, head, parents, blob)` | `storeCommit(id, { head, parents, blob })` |
+| `storeBuiltBatch(id, commits, fragments)` for ordinary publication | `storeBatch(id, { commits, fragments })` |
+| Precomputed metadata publication | `storeBuiltBatch(id, { commits: [{ metadata, blob }], fragments: [...] })` |
+| Positional sync boolean/timeout | `{ subscribe, timeoutMilliseconds }` options |
+| `PeerResultMap.getResult(peer)` / `.entries()` | `results[peer]` / `Object.entries(results)` |
+| `Depth.value` | Numeric depth |
+| Metadata wrappers | Records from `getCommits`, `getFragments`, or stored-update streams |
+| `AuthenticatedTransport.setup(...)` then `addConnection(...)` | `node.connectTransport(transport, { expectedPeerId })` |
+| Discovery transport setup | `connectTransport` / `acceptTransport` with `{ serviceName }` |
+
+Custom storage implementations receive hex IDs and signed bytes; loads return
+`{ signed: Uint8Array, blob: Uint8Array }` records, not classes. The built-in
+IndexedDB backend retains the existing version-1 stores, indexes, keys, and record
+layout. Its returned structural object has `close()`; storage is caller-owned and
+is not closed by the node. Storage is trusted to preserve locally signed or
+previously verified envelopes. On reload Subduction checks encoding and blob
+agreement, but does not re-verify signatures. Storage callbacks are not an
+admission path for unverified network records.
+
+Custom policies, remote-head observers, ephemeral callbacks, and frame handlers
+also receive hex identifiers. `hashMetricOverride` now takes a commit ID string
+and returns a numeric depth. Existing infallible Rust signer/metric trait contracts
+still require a valid signature/public key and a nonthrowing valid depth metric;
+this representation change does not make those traits fallible.
+
+The detailed boundary design is in [POJO_API.md](../POJO_API.md). Synchronization,
+authorization, cancellation, and partial-write guarantees are unchanged.
+
 ## Build package
 
 From the repository root:
@@ -34,6 +113,19 @@ Run tests:
 ```
 pnpm test
 ```
+
+Rebuild and test the public package and its TypeScript declarations:
+
+```sh
+pnpm run test:pojo
+```
+
+This requires a Wasm-enabled Rust toolchain, wasm-bodge, esbuild, TypeScript, and a
+`wasm-bindgen` CLI matching `Cargo.lock`. Override the Rust toolchain and bindgen
+location using `CARGO_TOOLCHAIN` and `WASM_BINDGEN` if needed. The script rebuilds
+`dist/`, typechecks a consumer against the emitted package declarations, and runs
+Node tests against both release and debug wrappers. Browser tests use that same
+built public wrapper and require a current `subduction_cli` (or `SUBDUCTION_CLI`).
 
 View Playwright report:
 ```
@@ -148,8 +240,11 @@ support and `Symbol.asyncDispose` are not included in this change.
 `wasm-bindgen`-generated types ownership rules can be confusing and cumbersome, with different behavior depending on which side of the Wasm boundary your type was created from. To help keep this straight, we adopt the naming convention:
 
 > [!NOTE]
-> Types exported from Rust are prefixed with `Wasm`.
+> Internal Rust wrapper types are prefixed with `Wasm`.
 > Types imported from JS are prefixed with `Js`.
+
+These are implementation conventions, not public JavaScript construction
+requirements. Private drivers may still use Wasm wrappers internally.
 
 ## Debugging with Chrome DevTools
 

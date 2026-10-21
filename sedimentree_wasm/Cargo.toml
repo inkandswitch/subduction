@@ -17,12 +17,8 @@ rust-version.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-async-lock = { workspace = true }
-base58 = { workspace = true }
-from_js_ref = { workspace = true }
 futures = { workspace = true }
 future_form = { workspace = true }
-getrandom = { workspace = true, features = ["js"] }
 js-sys = { workspace = true }
 sedimentree_core = { workspace = true }
 subduction_core = { workspace = true }
@@ -32,37 +28,13 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
-wasm_refgen = { workspace = true }
-
-[dependencies.web-sys]
-version = "0.3.98"
-default-features = false
-features = []
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
 
 [features]
 default = []
-# IndexedDB storage backend
-idb = [
-  "web-sys/DomException",
-  "web-sys/DomStringList",
-  "web-sys/IdbCursorWithValue",
-  "web-sys/IdbDatabase",
-  "web-sys/IdbFactory",
-  "web-sys/IdbIndex",
-  "web-sys/IdbKeyRange",
-  "web-sys/IdbObjectStore",
-  "web-sys/IdbObjectStoreParameters",
-  "web-sys/IdbOpenDbRequest",
-  "web-sys/IdbRequest",
-  "web-sys/IdbTransaction",
-  "web-sys/IdbTransactionMode",
-  "web-sys/IdbVersionChangeEvent",
-]
 std = [
-  "async-lock/std",
   "futures/std",
   "js-sys/std",
   "sedimentree_core/std",

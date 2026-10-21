@@ -11,15 +11,9 @@
 
     <!-- Note the usage of `type=module` here as this is an ES6 module -->
     <script type="module">
-      import init, * as subduction from './pkg/subduction_wasm.js';
-
-      async function run() {
-        await init();
-        window.subduction = subduction;
-        window.subductionReady = true;
-      }
-
-      run();
+      import * as subduction from '/dist/wrapper/esm/web.js';
+      window.subduction = subduction;
+      window.subductionReady = true;
     </script>
   </body>
 </html>

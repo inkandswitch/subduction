@@ -5,13 +5,13 @@
 
 use futures::{FutureExt, future::poll_fn};
 use js_sys::{Object, Reflect};
-use sedimentree_wasm::sedimentree_id::WasmSedimentreeId;
+use sedimentree_core::{blob::Blob, id::SedimentreeId, loose_commit::id::CommitId};
 use subduction_core::timeout::Timeout;
 use subduction_wasm::{
     memory_signer::JsMemorySigner,
     signer::JsSigner,
-    subduction::{JsSubductionOptions, WasmSubduction},
-    transport::{JsTransport, authenticated::WasmAuthenticatedTransport, longpoll::JsTimeout},
+    subduction::{JsSubductionOptions, Node, SubductionApi},
+    transport::{JsTransport, authenticated, longpoll::JsTimeout},
 };
 use wasm_bindgen::{JsCast, prelude::*};
 use wasm_bindgen_futures::JsFuture;
@@ -19,11 +19,21 @@ use wasm_bindgen_test::wasm_bindgen_test;
 
 #[wasm_bindgen(inline_js = r#"
 export function storage() {
-  return { reads: 0, released: false,
+  const s = { reads: 0, released: false,
     loadAllSedimentreeIds: async () => [],
     containsSedimentreeId: async () => false,
     loadAllCommits: async () => [], loadAllFragments: async () => [],
+    listCommitIds: async () => [], listFragmentIds: async () => [],
+    loadCommit: async () => undefined, loadFragment: async () => undefined,
   };
+  // A complete read-only service for the public constructor. Individual tests
+  // replace write hooks where needed; unexpected writes must fail loudly.
+  for (const method of ['saveSedimentreeId', 'deleteSedimentreeId', 'saveCommit',
+    'deleteCommit', 'deleteAllCommits', 'saveFragment', 'deleteFragment',
+    'deleteAllFragments', 'saveBatchAll']) {
+    s[method] = async () => { throw new Error(`unexpected ${method}`); };
+  }
+  return s;
 }
 export function blockedStorage() {
   const s = storage();
@@ -163,7 +173,8 @@ export async function closeThroughBindings(node, id, store) {
   release(store);
 }
 export async function reentrantDisconnect(a, b, ta, tb) {
-  await Promise.all([a.connectTransport(ta, 'test'), b.acceptTransport(tb, 'test')]);
+  const audience = { kind: 'discover', serviceName: 'test' };
+  await Promise.all([a.connectTransport(ta, audience), b.acceptTransport(tb, audience)]);
   const disconnect = ta.disconnect.bind(ta);
   ta.disconnect = async () => { a.close(); await disconnect(); };
   await a.close();
@@ -220,7 +231,7 @@ extern "C" {
     fn reentrant_disconnect(a: JsValue, b: JsValue, ta: JsValue, tb: JsValue) -> js_sys::Promise;
 }
 
-fn node(seed: u8, storage: &JsValue, policy: Option<&JsValue>) -> WasmSubduction {
+fn options(seed: u8, storage: &JsValue, policy: Option<&JsValue>) -> JsValue {
     let opts = Object::new();
     Reflect::set(&opts, &"storage".into(), storage).unwrap();
     Reflect::set(
@@ -232,7 +243,10 @@ fn node(seed: u8, storage: &JsValue, policy: Option<&JsValue>) -> WasmSubduction
     if let Some(policy) = policy {
         Reflect::set(&opts, &"policy".into(), policy).unwrap();
     }
-    WasmSubduction::new(opts.unchecked_ref::<JsSubductionOptions>()).unwrap()
+    opts.into()
+}
+fn node(seed: u8, storage: &JsValue, policy: Option<&JsValue>) -> Node {
+    Node::new(options(seed, storage, policy).unchecked_ref::<JsSubductionOptions>()).unwrap()
 }
 fn count(value: &JsValue, field: &str) -> f64 {
     Reflect::get(value, &field.into())
@@ -246,15 +260,15 @@ fn name(error: &JsValue) -> String {
         .as_string()
         .unwrap()
 }
-async fn close(node: &WasmSubduction) {
+async fn close(node: &Node) {
     JsFuture::from(node.close()).await.unwrap();
 }
 
 #[wasm_bindgen_test]
 async fn js_bindings_release_cancelled_borrows_before_free() {
     let store = blocked_storage();
-    let node = node(1, &store, None);
-    let id = WasmSedimentreeId::from_bytes(&[1; 32]).unwrap();
+    let node = SubductionApi::new(&options(1, &store, None)).unwrap();
+    let id = "01".repeat(32);
     JsFuture::from(close_through_bindings(node.into(), id.into(), &store))
         .await
         .unwrap();
@@ -262,8 +276,8 @@ async fn js_bindings_release_cancelled_borrows_before_free() {
 
 #[wasm_bindgen_test]
 async fn disconnect_callback_can_reenter_close() {
-    let a = node(1, &storage(), None);
-    let b = node(2, &storage(), None);
+    let a = SubductionApi::new(&options(1, &storage(), None)).unwrap();
+    let b = SubductionApi::new(&options(2, &storage(), None)).unwrap();
     let transports = pair();
     JsFuture::from(reentrant_disconnect(
         a.into(),
@@ -291,11 +305,7 @@ async fn close_before_background_start_is_idempotent_and_rejects_new_work() {
     assert_eq!(
         name(
             &node
-                .store_built_batch(
-                    &WasmSedimentreeId::from_bytes(&[1; 32]).unwrap(),
-                    vec![],
-                    vec![]
-                )
+                .store_built_batch(&SedimentreeId::new([1; 32]), vec![], vec![])
                 .await
                 .unwrap_err()
         ),
@@ -333,7 +343,7 @@ async fn close_cancels_handshake_and_cleans_unregistered_transport() {
 async fn close_cancels_storage_wait_but_does_not_claim_to_cancel_javascript() {
     let store = blocked_storage();
     let node = node(1, &store, None);
-    let id = WasmSedimentreeId::from_bytes(&[1; 32]).unwrap();
+    let id = SedimentreeId::new([1; 32]);
     let mut read = node.get_blobs(&id).boxed_local();
     poll_fn(|cx| {
         assert!(read.as_mut().poll(cx).is_pending());
@@ -354,10 +364,10 @@ async fn close_cancels_storage_wait_but_does_not_claim_to_cancel_javascript() {
 async fn close_does_not_rollback_an_already_started_storage_write() {
     let store = blocked_write_storage();
     let node = node(1, &store, None);
-    let id = WasmSedimentreeId::from_bytes(&[1; 32]).unwrap();
-    let head = sedimentree_wasm::commit_id::WasmCommitId::from_bytes(&[2; 32]).unwrap();
-    let blob = js_sys::Uint8Array::from(&[1u8][..]);
-    let writing = node.store_commit(&id, &head, vec![], &blob);
+    let id = SedimentreeId::new([1; 32]);
+    let head = CommitId::new([2; 32]);
+    let blob = Blob::new(vec![1]);
+    let writing = node.store_commit(&id, &head, vec![], blob);
     let closing = async {
         while Reflect::get(&store, &"release".into())
             .unwrap()
@@ -389,7 +399,7 @@ async fn duplicate_registration_does_not_disconnect_an_existing_connection() {
     let signer: JsSigner =
         JsValue::from(JsMemorySigner::from_bytes(&[1; 32]).unwrap()).unchecked_into();
     let (authenticated, accepted) = futures::join!(
-        WasmAuthenticatedTransport::setup_discover(ta.clone(), &signer, Some("test".into()), None),
+        authenticated::setup_discover(ta.clone(), &signer, Some("test".into())),
         b.accept_transport(tb, "test".into()),
     );
     let authenticated = authenticated.unwrap();
@@ -402,19 +412,19 @@ async fn duplicate_registration_does_not_disconnect_an_existing_connection() {
     tick().await; // Give an incorrectly armed cleanup guard a chance to run.
     assert_eq!(count(ta.as_ref(), "closes"), 0.0);
     assert_eq!(a.connected_peer_ids().await.unwrap().len(), 1);
-    let id = WasmSedimentreeId::from_bytes(&[1; 32]).unwrap();
+    let id = SedimentreeId::new([1; 32]);
     assert!(
         a.sync_with_peer(&authenticated.peer_id(), &id, false, None)
             .await
             .unwrap()
-            .success()
+            .0
     );
     close(&a).await;
     close(&b).await;
     assert_eq!(count(ta.as_ref(), "closes"), 1.0);
 }
 
-async fn wait_for_peer_count(node: &WasmSubduction, count: usize) {
+async fn wait_for_peer_count(node: &Node, count: usize) {
     JsTimeout
         .timeout(
             core::time::Duration::from_secs(2),
@@ -434,7 +444,7 @@ async fn partial_link_cleanup(cancel: bool) {
     let policy = policy_gate();
     let a = node(1, &storage(), None);
     let b = node(2, &storage(), Some(&policy));
-    let linking = WasmSubduction::link(&a, &b);
+    let linking = Node::link(&a, &b);
     let interrupt = async {
         // One side has actually registered before the other side fails/cancels.
         wait_for_peer_count(&a, 1).await;
@@ -491,7 +501,7 @@ async fn link_cancellation_disconnects_both_sides() {
 async fn link_owns_and_closes_real_message_ports() {
     let a = node(1, &storage(), None);
     let b = node(2, &storage(), None);
-    WasmSubduction::link(&a, &b).await.unwrap();
+    Node::link(&a, &b).await.unwrap();
     assert_eq!(a.connected_peer_ids().await.unwrap().len(), 1);
     let ((), ()) = futures::join!(close(&a), close(&b));
 }
@@ -510,9 +520,9 @@ async fn connected_nodes_close_all_transports_and_dropped_waiter_does_not_stop_c
     let peer = a_peer.unwrap();
     b_peer.unwrap();
     assert_eq!(a.connected_peer_ids().await.unwrap().len(), 1);
-    let id = WasmSedimentreeId::from_bytes(&[1; 32]).unwrap();
+    let id = SedimentreeId::new([1; 32]);
     let result = a.sync_with_peer(&peer, &id, false, None).await.unwrap();
-    assert!(result.success()); // The empty exchange still completes normally.
+    assert!(result.0); // The empty exchange still completes normally.
     drop(a.close());
     tick().await;
     close(&a).await;
@@ -591,13 +601,8 @@ async fn close_stops_established_longpoll_drivers_and_aborts_pending_fetch() {
     );
     let peer = connected.unwrap();
     accepted.unwrap();
-    let id = WasmSedimentreeId::from_bytes(&[1; 32]).unwrap();
-    assert!(
-        a.sync_with_peer(&peer, &id, false, None)
-            .await
-            .unwrap()
-            .success()
-    );
+    let id = SedimentreeId::new([1; 32]);
+    assert!(a.sync_with_peer(&peer, &id, false, None).await.unwrap().0);
     while poll_count() == 0 {
         tick().await;
     }
@@ -624,7 +629,7 @@ async fn close_wakes_a_pending_sync() {
     let peer = a_peer.unwrap();
     b_peer.unwrap();
     Reflect::set(ta.as_ref(), &"paused".into(), &JsValue::TRUE).unwrap();
-    let id = WasmSedimentreeId::from_bytes(&[1; 32]).unwrap();
+    let id = SedimentreeId::new([1; 32]);
     let syncing = a.sync_with_peer(&peer, &id, false, Some(60_000));
     let closing = async {
         while Reflect::get(ta.as_ref(), &"sentWhilePaused".into())

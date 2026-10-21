@@ -6,6 +6,7 @@
   binaryen,
   esbuild,
   nodejs,
+  typescript,
   cargoLock,
   # Workspace crate holding package.json, e.g. "subduction_wasm".
   crate,
@@ -32,6 +33,7 @@ rustPlatform.buildRustPackage {
     binaryen
     esbuild
     nodejs
+    typescript
   ];
 
   CARGO_NET_OFFLINE = "true";

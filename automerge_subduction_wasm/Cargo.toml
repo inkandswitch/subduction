@@ -30,7 +30,6 @@ subduction_wasm_bootstrap = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 wasm-bindgen = { workspace = true }
-wasm_refgen = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 getrandom_03 = { package = "getrandom", version = "0.3", features = [
@@ -42,9 +41,7 @@ getrandom_04 = { package = "getrandom", version = "0.4", features = [
 ] }
 
 [features]
-default = ["idb", "std", "wasm-tracing"]
-# IndexedDB storage backend (browser-only).
-idb = ["subduction_wasm/idb"]
+default = ["std", "wasm-tracing"]
 std = [
   "blake3/std",
   "js-sys/std",

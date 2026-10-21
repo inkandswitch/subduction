@@ -14,6 +14,7 @@ target
 **/mutants.out*/
 
 **/dist/
+**/.wasm-bodge/
 /npm-artifacts/
 /result
 **/node_modules/

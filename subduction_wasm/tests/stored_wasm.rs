@@ -12,21 +12,25 @@ use sedimentree_core::{
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
 };
-use sedimentree_wasm::{
-    commit_id::WasmCommitId, loose_commit::WasmLooseCommit, sedimentree_id::WasmSedimentreeId,
-    storage::memory::MemoryStorage,
-};
+use sedimentree_wasm::storage::JsStorage;
 use std::{collections::BTreeSet, time::Duration};
 use subduction_core::timeout::Timeout;
 use subduction_wasm::{
-    batch_input::WasmCommitInput,
     memory_signer::JsMemorySigner,
-    subduction::{JsSubductionOptions, WasmSubduction},
+    subduction::{JsSubductionOptions, Node},
     transport::longpoll::JsTimeout,
 };
 use wasm_bindgen::{JsCast, prelude::*};
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::wasm_bindgen_test;
+
+// Exercise the same JS backend as the public wrapper, without exporting a
+// redundant Rust -> JS -> Rust factory from the library bindings.
+#[wasm_bindgen(module = "/js/storage.js")]
+extern "C" {
+    #[wasm_bindgen(js_name = memoryStorage)]
+    fn create_memory_storage() -> JsStorage;
+}
 
 #[wasm_bindgen(inline_js = r#"
 export function nextEvent(iterator) {
@@ -146,7 +150,7 @@ extern "C" {
         reason: &JsValue,
     ) -> js_sys::Promise;
 }
-fn node(seed: u8, storage: &JsValue) -> WasmSubduction {
+fn node(seed: u8, storage: &JsValue) -> Node {
     let opts = Object::new();
     Reflect::set(&opts, &"storage".into(), storage).unwrap();
     Reflect::set(
@@ -155,10 +159,10 @@ fn node(seed: u8, storage: &JsValue) -> WasmSubduction {
         &JsMemorySigner::from_bytes(&[seed; 32]).unwrap().into(),
     )
     .unwrap();
-    WasmSubduction::new(opts.unchecked_ref::<JsSubductionOptions>()).unwrap()
+    Node::new(opts.unchecked_ref::<JsSubductionOptions>()).unwrap()
 }
-fn id() -> WasmSedimentreeId {
-    WasmSedimentreeId::from_bytes(&[33; 32]).unwrap()
+const fn id() -> SedimentreeId {
+    SedimentreeId::new([33; 32])
 }
 fn kind(event: &JsValue) -> String {
     Reflect::get(event, &"type".into())
@@ -198,24 +202,19 @@ async fn entered(storage: &JsValue) {
         .await
         .unwrap();
 }
-async fn close(node: &WasmSubduction) {
+async fn close(node: &Node) {
     JsFuture::from(node.close()).await.unwrap();
 }
 
 #[wasm_bindgen_test]
 async fn iterator_markers_stay_open_and_close_interrupts_next() {
-    let storage = JsValue::from(MemoryStorage::new());
+    let storage = JsValue::from(create_memory_storage());
     let node = node(1, &storage);
     let iterator: JsValue = node.watch_stored(&id()).unwrap().into();
     assert_eq!(kind(&event(&iterator).await), "storageChecked");
-    node.store_commit(
-        &id(),
-        &WasmCommitId::from_bytes(&[2; 32]).unwrap(),
-        vec![],
-        &Uint8Array::from(&[4_u8][..]),
-    )
-    .await
-    .unwrap();
+    node.store_commit(&id(), &CommitId::new([2; 32]), vec![], Blob::new(vec![4]))
+        .await
+        .unwrap();
     let commit = event(&iterator).await;
     assert_eq!(kind(&commit), "commit");
     assert_eq!(
@@ -235,7 +234,7 @@ async fn iterator_markers_stay_open_and_close_interrupts_next() {
 
 #[wasm_bindgen_test]
 async fn for_await_break_and_node_close_release_iterators() {
-    let storage = JsValue::from(MemoryStorage::new());
+    let storage = JsValue::from(create_memory_storage());
     let node = node(2, &storage);
     let iterator: JsValue = node.watch_stored(&id()).unwrap().into();
     assert_eq!(
@@ -267,16 +266,16 @@ async fn for_await_break_and_node_close_release_iterators() {
 
 #[wasm_bindgen_test]
 async fn cancelled_caller_does_not_hide_a_later_storage_completion() {
-    let storage = JsValue::from(MemoryStorage::new());
+    let storage = JsValue::from(create_memory_storage());
     gate_write(&storage);
     let node = node(3, &storage);
     let iterator: JsValue = node.watch_stored(&id()).unwrap().into();
     assert_eq!(kind(&event(&iterator).await), "storageChecked");
     let id = id();
-    let head = WasmCommitId::from_bytes(&[3; 32]).unwrap();
-    let blob = Uint8Array::from(&[5_u8][..]);
+    let head = CommitId::new([3; 32]);
+    let blob = Blob::new(vec![5]);
     let (abort, registration) = AbortHandle::new_pair();
-    let writing = Abortable::new(node.store_commit(&id, &head, vec![], &blob), registration);
+    let writing = Abortable::new(node.store_commit(&id, &head, vec![], blob), registration);
     let cancel = async {
         entered(&storage).await;
         abort.abort();
@@ -296,7 +295,7 @@ async fn cancelled_caller_does_not_hide_a_later_storage_completion() {
 
 #[wasm_bindgen_test]
 async fn partial_batch_failure_rescans_persisted_items() {
-    let storage = JsValue::from(MemoryStorage::new());
+    let storage = JsValue::from(create_memory_storage());
     partial_batch(&storage);
     let node = node(4, &storage);
     let iterator: JsValue = node.watch_stored(&id()).unwrap().into();
@@ -311,7 +310,7 @@ async fn partial_batch_failure_rescans_persisted_items() {
                 BlobMeta::new(&blob),
             )
             .unwrap();
-            WasmCommitInput::new(WasmLooseCommit::from(commit), blob.as_slice())
+            (commit, blob)
         })
         .collect();
     assert!(
@@ -327,19 +326,14 @@ async fn partial_batch_failure_rescans_persisted_items() {
 
 #[wasm_bindgen_test]
 async fn overlapping_scan_and_write_cannot_miss_the_item() {
-    let storage = JsValue::from(MemoryStorage::new());
+    let storage = JsValue::from(create_memory_storage());
     gate_scan(&storage);
     let node = node(5, &storage);
     let iterator: JsValue = node.watch_stored(&id()).unwrap().into();
     entered(&storage).await;
-    node.store_commit(
-        &id(),
-        &WasmCommitId::from_bytes(&[6; 32]).unwrap(),
-        vec![],
-        &Uint8Array::from(&[6_u8][..]),
-    )
-    .await
-    .unwrap();
+    node.store_commit(&id(), &CommitId::new([6; 32]), vec![], Blob::new(vec![6]))
+        .await
+        .unwrap();
     JsFuture::from(release(&storage)).await.unwrap();
     assert_eq!(kind(&event(&iterator).await), "commit");
     assert_eq!(kind(&event(&iterator).await), "storageChecked");
@@ -348,7 +342,7 @@ async fn overlapping_scan_and_write_cannot_miss_the_item() {
 
 #[wasm_bindgen_test]
 async fn close_settles_concurrent_reads_and_is_reentrant_during_conversion() {
-    let node = node(8, &JsValue::from(MemoryStorage::new()));
+    let node = node(8, &JsValue::from(create_memory_storage()));
     let iterator: JsValue = node.watch_stored(&id()).unwrap().into();
     let result = JsFuture::from(reentrant_next(&iterator)).await.unwrap();
     assert_eq!(
@@ -373,7 +367,7 @@ async fn close_settles_concurrent_reads_and_is_reentrant_during_conversion() {
 
 #[wasm_bindgen_test]
 async fn empty_loading_waits_until_shutdown_and_closed_nodes_refuse_iterators() {
-    let node = node(9, &JsValue::from(MemoryStorage::new()));
+    let node = node(9, &JsValue::from(create_memory_storage()));
     let iterator: JsValue = node.load_and_watch(&id(), None).unwrap().into();
     assert_eq!(kind(&event(&iterator).await), "storageChecked");
     let pending = JsFuture::from(next_event(&iterator));
@@ -406,7 +400,7 @@ async fn empty_loading_waits_until_shutdown_and_closed_nodes_refuse_iterators() 
 
 #[wasm_bindgen_test]
 async fn already_aborted_load_throws_reason_without_starting_storage() {
-    let storage = JsValue::from(MemoryStorage::new());
+    let storage = JsValue::from(create_memory_storage());
     gate_scan(&storage);
     let node = node(12, &storage);
     let options = abort_options();
@@ -429,7 +423,7 @@ async fn already_aborted_load_throws_reason_without_starting_storage() {
 
 #[wasm_bindgen_test]
 async fn abort_interrupts_storage_wait_and_all_queued_reads_with_exact_reason() {
-    let storage = JsValue::from(MemoryStorage::new());
+    let storage = JsValue::from(create_memory_storage());
     gate_scan(&storage);
     let node = node(13, &storage);
     let options = abort_options();
@@ -457,7 +451,7 @@ async fn abort_interrupts_storage_wait_and_all_queued_reads_with_exact_reason() 
 
 #[wasm_bindgen_test]
 async fn caller_timeout_signal_rejects_with_timeout_reason() {
-    let storage = JsValue::from(MemoryStorage::new());
+    let storage = JsValue::from(create_memory_storage());
     gate_scan(&storage);
     let node = node(14, &storage);
     let options = timeout_options();
@@ -485,7 +479,7 @@ async fn caller_timeout_signal_rejects_with_timeout_reason() {
 
 #[wasm_bindgen_test]
 async fn signal_listeners_are_removed_on_close_break_and_shutdown() {
-    let node = node(15, &JsValue::from(MemoryStorage::new()));
+    let node = node(15, &JsValue::from(create_memory_storage()));
     for break_loop in [false, true] {
         let options = abort_options();
         let iterator: JsValue = node
@@ -521,7 +515,7 @@ async fn signal_listeners_are_removed_on_close_break_and_shutdown() {
 
 #[wasm_bindgen_test]
 async fn abort_can_reenter_during_event_conversion() {
-    let node = node(17, &JsValue::from(MemoryStorage::new()));
+    let node = node(17, &JsValue::from(create_memory_storage()));
     let options = abort_options();
     let iterator: JsValue = node
         .load_and_watch(&id(), Some(options.clone().unchecked_into()))
@@ -540,7 +534,7 @@ async fn abort_can_reenter_during_event_conversion() {
 
 #[wasm_bindgen_test]
 async fn node_shutdown_rejects_pending_signal_reads_and_removes_listener() {
-    let storage = JsValue::from(MemoryStorage::new());
+    let storage = JsValue::from(create_memory_storage());
     gate_scan(&storage);
     let node = node(16, &storage);
     let options = abort_options();
@@ -562,19 +556,19 @@ async fn node_shutdown_rejects_pending_signal_reads_and_removes_listener() {
 
 #[wasm_bindgen_test]
 async fn cached_load_syncs_with_peer_and_receives_subscribed_updates() {
-    let a = node(10, &JsValue::from(MemoryStorage::new()));
-    let b = node(11, &JsValue::from(MemoryStorage::new()));
+    let a = node(10, &JsValue::from(create_memory_storage()));
+    let b = node(11, &JsValue::from(create_memory_storage()));
     for (node, seed) in [(&a, 10_u8), (&b, 11_u8)] {
         node.store_commit(
             &id(),
-            &WasmCommitId::from_bytes(&[seed; 32]).unwrap(),
+            &CommitId::new([seed; 32]),
             vec![],
-            &Uint8Array::from(&[seed][..]),
+            Blob::new(vec![seed]),
         )
         .await
         .unwrap();
     }
-    WasmSubduction::link(&a, &b).await.unwrap();
+    Node::link(&a, &b).await.unwrap();
     let options = abort_options();
     let iterator: JsValue = a
         .load_and_watch(&id(), Some(options.clone().unchecked_into()))
@@ -589,14 +583,9 @@ async fn cached_load_syncs_with_peer_and_receives_subscribed_updates() {
         vec![11]
     );
     assert_eq!(kind(&event(&iterator).await), "peerSynced");
-    b.add_commit(
-        &id(),
-        &WasmCommitId::from_bytes(&[12; 32]).unwrap(),
-        vec![],
-        &Uint8Array::from(&[12_u8][..]),
-    )
-    .await
-    .unwrap();
+    b.add_commit(&id(), &CommitId::new([12; 32]), vec![], Blob::new(vec![12]))
+        .await
+        .unwrap();
     let pushed = event(&iterator).await;
     assert_eq!(kind(&pushed), "commit");
     assert_eq!(
@@ -616,17 +605,12 @@ async fn cached_load_syncs_with_peer_and_receives_subscribed_updates() {
 }
 
 async fn follows_connections_for_stream_lifetime(cached: bool) {
-    let a = node(20, &JsValue::from(MemoryStorage::new()));
-    let b = node(21, &JsValue::from(MemoryStorage::new()));
+    let a = node(20, &JsValue::from(create_memory_storage()));
+    let b = node(21, &JsValue::from(create_memory_storage()));
     if cached {
-        a.store_commit(
-            &id(),
-            &WasmCommitId::from_bytes(&[1; 32]).unwrap(),
-            vec![],
-            &Uint8Array::from(&[1_u8][..]),
-        )
-        .await
-        .unwrap();
+        a.store_commit(&id(), &CommitId::new([1; 32]), vec![], Blob::new(vec![1]))
+            .await
+            .unwrap();
     }
     let iterator: JsValue = a.load_and_watch(&id(), None).unwrap().into();
     if cached {
@@ -634,38 +618,23 @@ async fn follows_connections_for_stream_lifetime(cached: bool) {
     }
     assert_eq!(kind(&event(&iterator).await), "storageChecked");
     tick().await;
-    b.store_commit(
-        &id(),
-        &WasmCommitId::from_bytes(&[2; 32]).unwrap(),
-        vec![],
-        &Uint8Array::from(&[2_u8][..]),
-    )
-    .await
-    .unwrap();
-    WasmSubduction::link(&a, &b).await.unwrap();
+    b.store_commit(&id(), &CommitId::new([2; 32]), vec![], Blob::new(vec![2]))
+        .await
+        .unwrap();
+    Node::link(&a, &b).await.unwrap();
     assert_eq!(kind(&event(&iterator).await), "commit");
     assert_eq!(kind(&event(&iterator).await), "peerSynced");
-    b.add_commit(
-        &id(),
-        &WasmCommitId::from_bytes(&[3; 32]).unwrap(),
-        vec![],
-        &Uint8Array::from(&[3_u8][..]),
-    )
-    .await
-    .unwrap();
+    b.add_commit(&id(), &CommitId::new([3; 32]), vec![], Blob::new(vec![3]))
+        .await
+        .unwrap();
     assert_eq!(kind(&event(&iterator).await), "commit");
 
     a.disconnect_all().await.unwrap();
     b.disconnect_all().await.unwrap();
-    b.store_commit(
-        &id(),
-        &WasmCommitId::from_bytes(&[4; 32]).unwrap(),
-        vec![],
-        &Uint8Array::from(&[4_u8][..]),
-    )
-    .await
-    .unwrap();
-    WasmSubduction::link(&a, &b).await.unwrap();
+    b.store_commit(&id(), &CommitId::new([4; 32]), vec![], Blob::new(vec![4]))
+        .await
+        .unwrap();
+    Node::link(&a, &b).await.unwrap();
     let recovered = event(&iterator).await;
     assert_eq!(kind(&recovered), "commit");
     assert_eq!(
@@ -673,26 +642,16 @@ async fn follows_connections_for_stream_lifetime(cached: bool) {
         vec![4]
     );
     assert_eq!(kind(&event(&iterator).await), "peerSynced");
-    b.add_commit(
-        &id(),
-        &WasmCommitId::from_bytes(&[5; 32]).unwrap(),
-        vec![],
-        &Uint8Array::from(&[5_u8][..]),
-    )
-    .await
-    .unwrap();
+    b.add_commit(&id(), &CommitId::new([5; 32]), vec![], Blob::new(vec![5]))
+        .await
+        .unwrap();
     assert_eq!(kind(&event(&iterator).await), "commit");
 
-    let c = node(22, &JsValue::from(MemoryStorage::new()));
-    c.store_commit(
-        &id(),
-        &WasmCommitId::from_bytes(&[6; 32]).unwrap(),
-        vec![],
-        &Uint8Array::from(&[6_u8][..]),
-    )
-    .await
-    .unwrap();
-    WasmSubduction::link(&a, &c).await.unwrap();
+    let c = node(22, &JsValue::from(create_memory_storage()));
+    c.store_commit(&id(), &CommitId::new([6; 32]), vec![], Blob::new(vec![6]))
+        .await
+        .unwrap();
+    Node::link(&a, &c).await.unwrap();
     assert_eq!(kind(&event(&iterator).await), "commit");
     assert_eq!(kind(&event(&iterator).await), "peerSynced");
     close_iterator(&iterator);
@@ -713,27 +672,22 @@ async fn cached_load_follows_late_peers_and_reconnects() {
 
 #[wasm_bindgen_test]
 async fn load_from_real_peer_and_fetch_unknown_tree() {
-    let a = node(6, &JsValue::from(MemoryStorage::new()));
-    let b = node(7, &JsValue::from(MemoryStorage::new()));
-    b.store_commit(
-        &id(),
-        &WasmCommitId::from_bytes(&[7; 32]).unwrap(),
-        vec![],
-        &Uint8Array::from(&[7_u8][..]),
-    )
-    .await
-    .unwrap();
-    WasmSubduction::link(&a, &b).await.unwrap();
+    let a = node(6, &JsValue::from(create_memory_storage()));
+    let b = node(7, &JsValue::from(create_memory_storage()));
+    b.store_commit(&id(), &CommitId::new([7; 32]), vec![], Blob::new(vec![7]))
+        .await
+        .unwrap();
+    Node::link(&a, &b).await.unwrap();
     let iterator: JsValue = a.load_and_watch(&id(), None).unwrap().into();
     assert_eq!(kind(&event(&iterator).await), "storageChecked");
     assert_eq!(kind(&event(&iterator).await), "commit");
     assert_eq!(kind(&event(&iterator).await), "peerSynced");
-    let other_id = WasmSedimentreeId::from_bytes(&[34; 32]).unwrap();
+    let other_id = SedimentreeId::new([34; 32]);
     b.store_commit(
         &other_id,
-        &WasmCommitId::from_bytes(&[8; 32]).unwrap(),
+        &CommitId::new([8; 32]),
         vec![],
-        &Uint8Array::from(&[8_u8][..]),
+        Blob::new(vec![8]),
     )
     .await
     .unwrap();

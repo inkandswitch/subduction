@@ -1,19 +1,17 @@
-//! Persistent storage.
+//! Structural JavaScript storage interface. Identifiers are hex strings and
+//! records contain signed envelope bytes plus blob bytes, never Wasm wrappers.
 
-#[cfg(feature = "idb")]
-pub mod idb;
-
-use alloc::vec::Vec;
-use sedimentree_core::collections::Set;
-
+use crate::pojo as p;
+use alloc::{string::ToString, vec::Vec};
 use future_form::{FutureForm, Local};
 use futures::future::LocalBoxFuture;
-use js_sys::{Promise, Uint8Array};
+use js_sys::{Array, Function, Promise, Uint8Array};
 use sedimentree_core::{
     blob::{Blob, has_meta::HasBlobMeta},
     codec::{decode::DecodeFields, encode::EncodeFields, error::DecodeError, schema::Schema},
+    collections::Set,
     fragment::Fragment,
-    id::{BadSedimentreeId, SedimentreeId},
+    id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
 };
 use subduction_core::storage::traits::{
@@ -24,153 +22,14 @@ use subduction_crypto::{
     verified_meta::{BlobMismatch, VerifiedMeta},
     verified_signature::VerifiedSignature,
 };
-use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
-use from_js_ref::FromJsRef;
-
-use crate::{
-    commit_id::{JsCommitId, WasmCommitId},
-    fragment::WasmFragmentWithBlob,
-    loose_commit::WasmCommitWithBlob,
-    sedimentree_id::{
-        JsSedimentreeId, WasmConvertJsValueToSedimentreeIdArrayError, WasmSedimentreeId,
-        WasmSedimentreeIdsArray,
-    },
-    signed::{JsSignedFragment, JsSignedLooseCommit, WasmSignedFragment, WasmSignedLooseCommit},
-};
-
-#[wasm_bindgen(typescript_custom_section)]
-const TS: &str = r#"
-export interface SedimentreeStorage {
-    saveSedimentreeId(sedimentreeId: SedimentreeId): Promise<void>;
-    deleteSedimentreeId(sedimentreeId: SedimentreeId): Promise<void>;
-    loadAllSedimentreeIds(): Promise<SedimentreeId[]>;
-    // Optional single-key existence check. When implemented, it is used on the
-    // hydration hot path instead of enumerating every id via
-    // loadAllSedimentreeIds (which is O(total) — e.g. an IndexedDB getAllKeys).
-    // Backends over IndexedDB should implement this as a single `get`/`count`.
-    containsSedimentreeId?(sedimentreeId: SedimentreeId): Promise<boolean>;
-
-    // Compound storage for commits (signed data + blob stored together)
-    saveCommit(sedimentreeId: SedimentreeId, commitId: CommitId, signedCommit: SignedLooseCommit, blob: Uint8Array): Promise<void>;
-    loadCommit(sedimentreeId: SedimentreeId, commitId: CommitId): Promise<CommitWithBlob | null>;
-    listCommitIds(sedimentreeId: SedimentreeId): Promise<CommitId[]>;
-    loadAllCommits(sedimentreeId: SedimentreeId): Promise<CommitWithBlob[]>;
-    deleteCommit(sedimentreeId: SedimentreeId, commitId: CommitId): Promise<void>;
-    deleteAllCommits(sedimentreeId: SedimentreeId): Promise<void>;
-
-    // Compound storage for fragments (signed data + blob stored together)
-    saveFragment(sedimentreeId: SedimentreeId, fragmentHead: CommitId, signedFragment: SignedFragment, blob: Uint8Array): Promise<void>;
-    loadFragment(sedimentreeId: SedimentreeId, fragmentHead: CommitId): Promise<FragmentWithBlob | null>;
-    listFragmentIds(sedimentreeId: SedimentreeId): Promise<CommitId[]>;
-    loadAllFragments(sedimentreeId: SedimentreeId): Promise<FragmentWithBlob[]>;
-    deleteFragment(sedimentreeId: SedimentreeId, fragmentHead: CommitId): Promise<void>;
-    deleteAllFragments(sedimentreeId: SedimentreeId): Promise<void>;
-
-    // Batch save: write all commits + fragments in a single storage transaction.
-    saveBatchAll(sedimentreeId: SedimentreeId, commits: Array<{commitId: CommitId, signedCommit: SignedLooseCommit, blob: Uint8Array}>, fragments: Array<{fragmentHead: CommitId, signedFragment: SignedFragment, blob: Uint8Array}>): Promise<number>;
-}
-"#;
-
 #[wasm_bindgen]
 extern "C" {
-    /// A duck-typed storage backend interface.
-    #[wasm_bindgen(js_name = Storage, typescript_type = "SedimentreeStorage")]
+    /// Any object implementing `SedimentreeStorage`.
+    #[wasm_bindgen(typescript_type = "SedimentreeStorage")]
     pub type JsStorage;
-
-    // ==================== Sedimentree IDs ====================
-
-    #[wasm_bindgen(method, js_name = saveSedimentreeId)]
-    fn js_save_sedimentree_id(this: &JsStorage, sedimentree_id: &JsSedimentreeId) -> Promise;
-
-    #[wasm_bindgen(method, js_name = deleteSedimentreeId)]
-    fn js_delete_sedimentree_id(this: &JsStorage, sedimentree_id: &JsSedimentreeId) -> Promise;
-
-    #[wasm_bindgen(method, js_name = loadAllSedimentreeIds)]
-    fn js_load_all_sedimentree_ids(this: &JsStorage) -> Promise;
-
-    #[wasm_bindgen(method, js_name = containsSedimentreeId)]
-    fn js_contains_sedimentree_id(this: &JsStorage, sedimentree_id: &JsSedimentreeId) -> Promise;
-
-    // ==================== Commits (compound with blob) ====================
-
-    #[wasm_bindgen(method, js_name = saveCommit)]
-    fn js_save_commit(
-        this: &JsStorage,
-        sedimentree_id: &JsSedimentreeId,
-        commit_id: &JsCommitId,
-        signed_commit: &JsSignedLooseCommit,
-        blob: &Uint8Array,
-    ) -> Promise;
-
-    #[wasm_bindgen(method, js_name = listCommitIds)]
-    fn js_list_commit_ids(this: &JsStorage, sedimentree_id: &JsSedimentreeId) -> Promise;
-
-    #[wasm_bindgen(method, js_name = loadCommit)]
-    fn js_load_commit(
-        this: &JsStorage,
-        sedimentree_id: &JsSedimentreeId,
-        commit_id: &JsCommitId,
-    ) -> Promise;
-
-    #[wasm_bindgen(method, js_name = loadAllCommits)]
-    fn js_load_all_commits(this: &JsStorage, sedimentree_id: &JsSedimentreeId) -> Promise;
-
-    #[wasm_bindgen(method, js_name = deleteCommit)]
-    fn js_delete_commit(
-        this: &JsStorage,
-        sedimentree_id: &JsSedimentreeId,
-        commit_id: &JsCommitId,
-    ) -> Promise;
-
-    #[wasm_bindgen(method, js_name = deleteAllCommits)]
-    fn js_delete_all_commits(this: &JsStorage, sedimentree_id: &JsSedimentreeId) -> Promise;
-
-    // ==================== Fragments (compound with blob) ====================
-
-    #[wasm_bindgen(method, js_name = saveFragment)]
-    fn js_save_fragment(
-        this: &JsStorage,
-        sedimentree_id: &JsSedimentreeId,
-        fragment_head: &JsCommitId,
-        signed_fragment: &JsSignedFragment,
-        blob: &Uint8Array,
-    ) -> Promise;
-
-    #[wasm_bindgen(method, js_name = loadFragment)]
-    fn js_load_fragment(
-        this: &JsStorage,
-        sedimentree_id: &JsSedimentreeId,
-        fragment_head: &JsCommitId,
-    ) -> Promise;
-
-    #[wasm_bindgen(method, js_name = listFragmentIds)]
-    fn js_list_fragment_ids(this: &JsStorage, sedimentree_id: &JsSedimentreeId) -> Promise;
-
-    #[wasm_bindgen(method, js_name = loadAllFragments)]
-    fn js_load_all_fragments(this: &JsStorage, sedimentree_id: &JsSedimentreeId) -> Promise;
-
-    #[wasm_bindgen(method, js_name = deleteFragment)]
-    fn js_delete_fragment(
-        this: &JsStorage,
-        sedimentree_id: &JsSedimentreeId,
-        fragment_head: &JsCommitId,
-    ) -> Promise;
-
-    #[wasm_bindgen(method, js_name = deleteAllFragments)]
-    fn js_delete_all_fragments(this: &JsStorage, sedimentree_id: &JsSedimentreeId) -> Promise;
-
-    // ==================== Batch Operations ====================
-
-    #[wasm_bindgen(method, js_name = saveBatchAll)]
-    fn js_save_batch_all(
-        this: &JsStorage,
-        sedimentree_id: &JsSedimentreeId,
-        commits: &js_sys::Array,
-        fragments: &js_sys::Array,
-    ) -> Promise;
 }
 
 impl core::fmt::Debug for JsStorage {
@@ -179,609 +38,350 @@ impl core::fmt::Debug for JsStorage {
     }
 }
 
-/// Reconstruct a [`VerifiedMeta`] from app-supplied storage, re-hashing the
-/// blob against the signed payload's claimed metadata: "trust on load" is
-/// unenforceable when the JS app owns the store and load callbacks, and an
-/// unverified mismatch would be shipped to (and rejected by) every remote.
-/// Signatures are not re-verified; the cost is one hash over the blob.
-fn verify_blob_on_load<T: HasBlobMeta + Schema + EncodeFields + DecodeFields>(
-    signed: Signed<T>,
-    blob: Blob,
+impl JsStorage {
+    async fn call(&self, name: &str, args: &[JsValue]) -> Result<JsValue, JsStorageError> {
+        let method = p::field(self.as_ref(), name).map_err(JsStorageError::JsError)?;
+        let method: Function = method
+            .dyn_into()
+            .map_err(|_| JsStorageError::JsError(p::invalid(name, "expected a function")))?;
+        let args: Array = args.iter().collect();
+        let value = method
+            .apply(self.as_ref(), &args)
+            .map_err(JsStorageError::JsError)?;
+        JsFuture::from(Promise::resolve(&value))
+            .await
+            .map_err(JsStorageError::JsError)
+    }
+}
+
+fn id_value(id: SedimentreeId) -> JsValue {
+    p::hex(id.as_bytes()).into()
+}
+fn head_value(id: CommitId) -> JsValue {
+    p::hex(id.as_bytes()).into()
+}
+
+/// Reload an envelope that was signed locally or verified on network admission
+/// before being persisted. This follows the core `Storage` contract: storage is
+/// part of the trusted computing base, not an untrusted network input. A custom
+/// backend must preserve those envelopes; arbitrary externally supplied records
+/// must be signature-verified before entering this path.
+///
+/// We therefore skip *re-verifying* signatures (`try_from_trusted`), but still
+/// decode the envelope and check that the separately stored blob's digest and
+/// length match its signed metadata (`VerifiedMeta::new`). This catches mismatched
+/// record/blob pairs, not malicious edits to both metadata and blob or signatures.
+fn load_record<T: HasBlobMeta + Schema + EncodeFields + DecodeFields>(
+    value: &JsValue,
 ) -> Result<VerifiedMeta<T>, JsStorageError> {
+    let parse = || -> Result<_, JsValue> {
+        p::record(value, "stored")?;
+        Ok((
+            p::bytes(&p::field(value, "signed")?, "stored.signed")?,
+            p::bytes(&p::field(value, "blob")?, "stored.blob")?,
+        ))
+    };
+    let (signed, blob) = parse().map_err(JsStorageError::JsError)?;
+    let signed = Signed::<T>::try_decode(&signed)?;
     let verified = VerifiedSignature::try_from_trusted(signed)?;
-    Ok(VerifiedMeta::new(verified, blob)?)
+    Ok(VerifiedMeta::new(verified, Blob::new(blob))?)
+}
+
+fn load_records<T: HasBlobMeta + Schema + EncodeFields + DecodeFields>(
+    value: &JsValue,
+) -> Result<Vec<VerifiedMeta<T>>, JsStorageError> {
+    p::array(value, "stored")
+        .map_err(JsStorageError::JsError)?
+        .iter()
+        .map(load_record)
+        .collect()
+}
+
+fn load_ids(value: &JsValue) -> Result<Set<CommitId>, JsStorageError> {
+    p::ids(value, "ids")
+        .map(|ids| ids.into_iter().collect())
+        .map_err(JsStorageError::JsError)
 }
 
 impl Storage<Local> for JsStorage {
     type Error = JsStorageError;
 
-    // ==================== Sedimentree IDs ====================
-
     fn save_sedimentree_id(
         &self,
-        sedimentree_id: SedimentreeId,
+        id: SedimentreeId,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, "JsStorage::save_sedimentree_id");
-            let js_promise =
-                self.js_save_sedimentree_id(&WasmSedimentreeId::from(sedimentree_id).into());
-            JsFuture::from(js_promise)
-                .await
-                .map_err(JsStorageError::JsError)?;
+            self.call("saveSedimentreeId", &[id_value(id)]).await?;
             Ok(())
         })
     }
-
     fn delete_sedimentree_id(
         &self,
-        sedimentree_id: SedimentreeId,
+        id: SedimentreeId,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, "JsStorage::delete_sedimentree_id");
-            let js_promise =
-                self.js_delete_sedimentree_id(&WasmSedimentreeId::from(sedimentree_id).into());
-            JsFuture::from(js_promise)
-                .await
-                .map_err(JsStorageError::JsError)?;
+            self.call("deleteSedimentreeId", &[id_value(id)]).await?;
             Ok(())
         })
     }
-
     fn load_all_sedimentree_ids(
         &self,
     ) -> LocalBoxFuture<'_, Result<Set<SedimentreeId>, Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!("JsStorage::load_all_sedimentree_ids");
-            let js_promise = self.js_load_all_sedimentree_ids();
-            let js_value = JsFuture::from(js_promise)
-                .await
-                .map_err(JsStorageError::JsError)?;
-            let xs: Vec<WasmSedimentreeId> = WasmSedimentreeIdsArray::try_from(&js_value)?.0;
-            let mut ids = Set::new();
-            for wasm_id in xs {
-                ids.insert(wasm_id.into());
-            }
-            Ok(ids)
+            let value = self.call("loadAllSedimentreeIds", &[]).await?;
+            p::array(&value, "ids")
+                .map_err(JsStorageError::JsError)?
+                .iter()
+                .map(|v| p::tree(v, "ids[]").map_err(JsStorageError::JsError))
+                .collect()
         })
     }
-
     fn contains_sedimentree_id(
         &self,
-        sedimentree_id: SedimentreeId,
+        id: SedimentreeId,
     ) -> LocalBoxFuture<'_, Result<bool, Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, "JsStorage::contains_sedimentree_id");
-
-            // Prefer the optional single-key `containsSedimentreeId` when the
-            // backend implements it (O(1) on IndexedDB). When absent, fall
-            // back to enumerating all ids — correct, just O(total trees).
-            let has_method =
-                js_sys::Reflect::get(self.as_ref(), &JsValue::from_str("containsSedimentreeId"))
-                    .map(|m| m.is_function())
-                    .unwrap_or(false);
-
-            if has_method {
-                let js_promise = self
-                    .js_contains_sedimentree_id(&WasmSedimentreeId::from(sedimentree_id).into());
-                let js_value = JsFuture::from(js_promise)
-                    .await
-                    .map_err(JsStorageError::JsError)?;
-                return Ok(js_value.is_truthy());
+            let method = p::field(self.as_ref(), "containsSedimentreeId")
+                .map_err(JsStorageError::JsError)?;
+            if method.is_undefined() {
+                return Ok(self.load_all_sedimentree_ids().await?.contains(&id));
             }
-
-            let all = self.load_all_sedimentree_ids().await?;
-            Ok(all.contains(&sedimentree_id))
+            self.call("containsSedimentreeId", &[id_value(id)])
+                .await?
+                .as_bool()
+                .ok_or_else(|| {
+                    JsStorageError::JsError(p::invalid(
+                        "containsSedimentreeId",
+                        "expected a boolean",
+                    ))
+                })
         })
     }
-
-    // ==================== Commits (compound with blob) ====================
-
     fn save_loose_commit(
         &self,
-        sedimentree_id: SedimentreeId,
+        id: SedimentreeId,
         verified: VerifiedMeta<LooseCommit>,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         Local::from_future(async move {
-            let commit_id = verified.payload().head();
-            tracing::debug!(?sedimentree_id, ?commit_id, "JsStorage::save_loose_commit");
-
-            let signed: WasmSignedLooseCommit = verified.signed().clone().into();
-            let blob = Uint8Array::from(verified.blob().contents().as_slice());
-
-            let wasm_commit_id = WasmCommitId::from(commit_id);
-            let js_promise = self.js_save_commit(
-                &WasmSedimentreeId::from(sedimentree_id).into(),
-                &wasm_commit_id.into(),
-                &signed.into(),
-                &blob,
-            );
-            JsFuture::from(js_promise)
-                .await
-                .map_err(JsStorageError::JsError)?;
-
-            // Contract: persisting an item registers its sedimentree id —
-            // after the durable item write, so a failed save never leaves a
-            // registered-but-empty tree (see `Storage::save_loose_commit`).
-            JsFuture::from(
-                self.js_save_sedimentree_id(&WasmSedimentreeId::from(sedimentree_id).into()),
+            self.call(
+                "saveCommit",
+                &[
+                    id_value(id),
+                    head_value(verified.payload().head()),
+                    Uint8Array::from(verified.signed().as_bytes()).into(),
+                    Uint8Array::from(verified.blob().as_slice()).into(),
+                ],
             )
-            .await
-            .map_err(JsStorageError::JsError)?;
-
-            Ok(())
+            .await?;
+            // Register only after the item is durable.
+            self.save_sedimentree_id(id).await
         })
     }
-
     fn list_commit_ids(
         &self,
-        sedimentree_id: SedimentreeId,
+        id: SedimentreeId,
     ) -> LocalBoxFuture<'_, Result<Set<CommitId>, Self::Error>> {
-        Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, "JsStorage::list_commit_ids");
-            let js_promise =
-                self.js_list_commit_ids(&WasmSedimentreeId::from(sedimentree_id).into());
-            let js_value = JsFuture::from(js_promise)
-                .await
-                .map_err(JsStorageError::JsError)?;
-
-            let array = js_sys::Array::from(&js_value);
-            let mut result = Set::new();
-            for i in 0..array.length() {
-                let item = array.get(i);
-                let wasm_commit_id = WasmCommitId::try_from_js_value(&item).ok_or_else(|| {
-                    JsStorageError::UnexpectedJsType {
-                        expected: "CommitId",
-                        value: item,
-                    }
-                })?;
-                result.insert(CommitId::from(wasm_commit_id));
-            }
-            Ok(result)
-        })
+        Local::from_future(
+            async move { load_ids(&self.call("listCommitIds", &[id_value(id)]).await?) },
+        )
     }
-
     fn load_loose_commits(
         &self,
-        sedimentree_id: SedimentreeId,
+        id: SedimentreeId,
     ) -> LocalBoxFuture<'_, Result<Vec<VerifiedMeta<LooseCommit>>, Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, "JsStorage::load_loose_commits");
-            let js_promise =
-                self.js_load_all_commits(&WasmSedimentreeId::from(sedimentree_id).into());
-            let js_value = JsFuture::from(js_promise)
-                .await
-                .map_err(JsStorageError::JsError)?;
-
-            let array = js_sys::Array::from(&js_value);
-            let mut result = Vec::with_capacity(array.length() as usize);
-
-            for i in 0..array.length() {
-                let item = array.get(i);
-                let wasm_commit =
-                    WasmCommitWithBlob::try_from_js_value(&item).ok_or_else(|| {
-                        JsStorageError::UnexpectedJsType {
-                            expected: "CommitWithBlob",
-                            value: item,
-                        }
-                    })?;
-                let signed: Signed<LooseCommit> = wasm_commit.signed().into();
-                let blob = Blob::new(wasm_commit.blob().to_vec());
-                result.push(verify_blob_on_load(signed, blob)?);
-            }
-
-            Ok(result)
+            load_records(&self.call("loadAllCommits", &[id_value(id)]).await?)
         })
     }
-
     fn load_loose_commit_metas(
         &self,
-        sedimentree_id: SedimentreeId,
+        id: SedimentreeId,
     ) -> LocalBoxFuture<'_, Result<Vec<LooseCommit>, Self::Error>> {
-        // No JS-side metadata-only read: fall back to the full load and drop
-        // blobs. JS hosts store small blobs inline, so the wasted bytes are
-        // bounded.
-        Local::from_future(load_loose_commit_metas_via_full(self, sedimentree_id))
+        Local::from_future(load_loose_commit_metas_via_full(self, id))
     }
-
     fn load_loose_commit(
         &self,
-        sedimentree_id: SedimentreeId,
-        commit_id: CommitId,
+        id: SedimentreeId,
+        head: CommitId,
     ) -> LocalBoxFuture<'_, Result<Option<VerifiedMeta<LooseCommit>>, Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?commit_id, "JsStorage::load_loose_commit");
-            let js_promise = self.js_load_commit(
-                &WasmSedimentreeId::from(sedimentree_id).into(),
-                &WasmCommitId::from(commit_id).into(),
-            );
-            let js_value = JsFuture::from(js_promise)
-                .await
-                .map_err(JsStorageError::JsError)?;
-
-            if js_value.is_null() || js_value.is_undefined() {
-                return Ok(None);
+            let value = self
+                .call("loadCommit", &[id_value(id), head_value(head)])
+                .await?;
+            if value.is_null() || value.is_undefined() {
+                Ok(None)
+            } else {
+                load_record(&value).map(Some)
             }
-
-            let wasm_commit =
-                WasmCommitWithBlob::try_from_js_value(&js_value).ok_or_else(|| {
-                    JsStorageError::UnexpectedJsType {
-                        expected: "CommitWithBlob",
-                        value: js_value,
-                    }
-                })?;
-            let signed: Signed<LooseCommit> = wasm_commit.signed().into();
-            let blob = Blob::new(wasm_commit.blob().to_vec());
-            Ok(Some(verify_blob_on_load(signed, blob)?))
         })
     }
-
     fn delete_loose_commit(
         &self,
-        sedimentree_id: SedimentreeId,
-        commit_id: CommitId,
+        id: SedimentreeId,
+        head: CommitId,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(
-                ?sedimentree_id,
-                ?commit_id,
-                "JsStorage::delete_loose_commit"
-            );
-            let js_promise = self.js_delete_commit(
-                &WasmSedimentreeId::from(sedimentree_id).into(),
-                &WasmCommitId::from(commit_id).into(),
-            );
-            JsFuture::from(js_promise)
-                .await
-                .map_err(JsStorageError::JsError)?;
+            self.call("deleteCommit", &[id_value(id), head_value(head)])
+                .await?;
             Ok(())
         })
     }
-
     fn delete_loose_commits(
         &self,
-        sedimentree_id: SedimentreeId,
+        id: SedimentreeId,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, "JsStorage::delete_loose_commits");
-            let js_promise =
-                self.js_delete_all_commits(&WasmSedimentreeId::from(sedimentree_id).into());
-            JsFuture::from(js_promise)
-                .await
-                .map_err(JsStorageError::JsError)?;
+            self.call("deleteAllCommits", &[id_value(id)]).await?;
             Ok(())
         })
     }
-
-    // ==================== Fragments (compound with blob) ====================
-
     fn save_fragment(
         &self,
-        sedimentree_id: SedimentreeId,
+        id: SedimentreeId,
         verified: VerifiedMeta<Fragment>,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         Local::from_future(async move {
-            let fragment_head = verified.payload().head();
-            tracing::debug!(?sedimentree_id, ?fragment_head, "JsStorage::save_fragment");
-
-            let signed: WasmSignedFragment = verified.signed().clone().into();
-            let blob = Uint8Array::from(verified.blob().contents().as_slice());
-
-            let js_promise = self.js_save_fragment(
-                &WasmSedimentreeId::from(sedimentree_id).into(),
-                &WasmCommitId::from(fragment_head).into(),
-                &signed.into(),
-                &blob,
-            );
-            JsFuture::from(js_promise)
-                .await
-                .map_err(JsStorageError::JsError)?;
-
-            // Contract: persisting an item registers its sedimentree id —
-            // after the durable item write (see `Storage::save_loose_commit`).
-            JsFuture::from(
-                self.js_save_sedimentree_id(&WasmSedimentreeId::from(sedimentree_id).into()),
+            self.call(
+                "saveFragment",
+                &[
+                    id_value(id),
+                    head_value(verified.payload().head()),
+                    Uint8Array::from(verified.signed().as_bytes()).into(),
+                    Uint8Array::from(verified.blob().as_slice()).into(),
+                ],
             )
-            .await
-            .map_err(JsStorageError::JsError)?;
-
-            Ok(())
+            .await?;
+            self.save_sedimentree_id(id).await
         })
     }
-
-    fn load_fragment(
-        &self,
-        sedimentree_id: SedimentreeId,
-        fragment_head: CommitId,
-    ) -> LocalBoxFuture<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>> {
-        Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?fragment_head, "JsStorage::load_fragment");
-            let wasm_commit_id = WasmCommitId::from(fragment_head);
-            let js_promise = self.js_load_fragment(
-                &WasmSedimentreeId::from(sedimentree_id).into(),
-                &wasm_commit_id.into(),
-            );
-            let js_value = JsFuture::from(js_promise)
-                .await
-                .map_err(JsStorageError::JsError)?;
-
-            if js_value.is_null() || js_value.is_undefined() {
-                return Ok(None);
-            }
-
-            let wasm_fragment =
-                WasmFragmentWithBlob::try_from_js_value(&js_value).ok_or_else(|| {
-                    JsStorageError::UnexpectedJsType {
-                        expected: "FragmentWithBlob",
-                        value: js_value,
-                    }
-                })?;
-            let signed: Signed<Fragment> = wasm_fragment.signed().into();
-            let blob = Blob::new(wasm_fragment.blob().to_vec());
-
-            Ok(Some(verify_blob_on_load(signed, blob)?))
-        })
-    }
-
     fn list_fragment_ids(
         &self,
-        sedimentree_id: SedimentreeId,
+        id: SedimentreeId,
     ) -> LocalBoxFuture<'_, Result<Set<CommitId>, Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, "JsStorage::list_fragment_ids");
-            let js_promise =
-                self.js_list_fragment_ids(&WasmSedimentreeId::from(sedimentree_id).into());
-            let js_value = JsFuture::from(js_promise)
-                .await
-                .map_err(JsStorageError::JsError)?;
-
-            let array = js_sys::Array::from(&js_value);
-            let mut result = Set::new();
-            for i in 0..array.length() {
-                let item = array.get(i);
-                let wasm_commit_id = WasmCommitId::try_from_js_value(&item).ok_or_else(|| {
-                    JsStorageError::UnexpectedJsType {
-                        expected: "CommitId",
-                        value: item,
-                    }
-                })?;
-                result.insert(CommitId::from(wasm_commit_id));
-            }
-            Ok(result)
+            load_ids(&self.call("listFragmentIds", &[id_value(id)]).await?)
         })
     }
-
     fn load_fragments(
         &self,
-        sedimentree_id: SedimentreeId,
+        id: SedimentreeId,
     ) -> LocalBoxFuture<'_, Result<Vec<VerifiedMeta<Fragment>>, Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, "JsStorage::load_fragments");
-            let js_promise =
-                self.js_load_all_fragments(&WasmSedimentreeId::from(sedimentree_id).into());
-            let js_value = JsFuture::from(js_promise)
-                .await
-                .map_err(JsStorageError::JsError)?;
-
-            let array = js_sys::Array::from(&js_value);
-            let mut result = Vec::with_capacity(array.length() as usize);
-
-            for i in 0..array.length() {
-                let item = array.get(i);
-                let wasm_fragment =
-                    WasmFragmentWithBlob::try_from_js_value(&item).ok_or_else(|| {
-                        JsStorageError::UnexpectedJsType {
-                            expected: "FragmentWithBlob",
-                            value: item,
-                        }
-                    })?;
-                let signed: Signed<Fragment> = wasm_fragment.signed().into();
-                let blob = Blob::new(wasm_fragment.blob().to_vec());
-                result.push(verify_blob_on_load(signed, blob)?);
-            }
-
-            Ok(result)
+            load_records(&self.call("loadAllFragments", &[id_value(id)]).await?)
         })
     }
-
     fn load_fragment_metas(
         &self,
-        sedimentree_id: SedimentreeId,
+        id: SedimentreeId,
     ) -> LocalBoxFuture<'_, Result<Vec<Fragment>, Self::Error>> {
-        Local::from_future(load_fragment_metas_via_full(self, sedimentree_id))
+        Local::from_future(load_fragment_metas_via_full(self, id))
     }
-
+    fn load_fragment(
+        &self,
+        id: SedimentreeId,
+        head: CommitId,
+    ) -> LocalBoxFuture<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>> {
+        Local::from_future(async move {
+            let value = self
+                .call("loadFragment", &[id_value(id), head_value(head)])
+                .await?;
+            if value.is_null() || value.is_undefined() {
+                Ok(None)
+            } else {
+                load_record(&value).map(Some)
+            }
+        })
+    }
     fn delete_fragment(
         &self,
-        sedimentree_id: SedimentreeId,
-        fragment_head: CommitId,
+        id: SedimentreeId,
+        head: CommitId,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(
-                ?sedimentree_id,
-                ?fragment_head,
-                "JsStorage::delete_fragment"
-            );
-            let wasm_commit_id = WasmCommitId::from(fragment_head);
-            let js_promise = self.js_delete_fragment(
-                &WasmSedimentreeId::from(sedimentree_id).into(),
-                &wasm_commit_id.into(),
-            );
-            JsFuture::from(js_promise)
-                .await
-                .map_err(JsStorageError::JsError)?;
+            self.call("deleteFragment", &[id_value(id), head_value(head)])
+                .await?;
             Ok(())
         })
     }
-
-    fn delete_fragments(
-        &self,
-        sedimentree_id: SedimentreeId,
-    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
+    fn delete_fragments(&self, id: SedimentreeId) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, "JsStorage::delete_fragments");
-            let js_promise =
-                self.js_delete_all_fragments(&WasmSedimentreeId::from(sedimentree_id).into());
-            JsFuture::from(js_promise)
-                .await
-                .map_err(JsStorageError::JsError)?;
+            self.call("deleteAllFragments", &[id_value(id)]).await?;
             Ok(())
         })
     }
-
-    // ==================== Batch Operations ====================
-
-    #[allow(clippy::cast_possible_truncation)] // Wasm-only: u32 pointers
     fn save_batch(
         &self,
-        sedimentree_id: SedimentreeId,
+        id: SedimentreeId,
         commits: Vec<VerifiedMeta<LooseCommit>>,
         fragments: Vec<VerifiedMeta<Fragment>>,
     ) -> LocalBoxFuture<'_, Result<usize, Self::Error>> {
         Local::from_future(async move {
-            let num_commits = commits.len();
-            let num_fragments = fragments.len();
-            tracing::debug!(
-                ?sedimentree_id,
-                num_commits,
-                num_fragments,
-                "JsStorage::save_batch"
-            );
-
-            self.save_sedimentree_id(sedimentree_id).await?;
-
-            // Build JS arrays of {digest, signedCommit/signedFragment, blob}
-            // objects and cross the FFI boundary once. The JS side writes
-            // everything in a single IDB transaction.
-            let js_commits = js_sys::Array::new_with_length(num_commits as u32);
-            for (i, verified) in commits.into_iter().enumerate() {
-                let commit_id = verified.payload().head();
-                let signed: WasmSignedLooseCommit = verified.signed().clone().into();
-                let blob = Uint8Array::from(verified.blob().contents().as_slice());
-
-                let wasm_commit_id = WasmCommitId::from(commit_id);
-                let obj = js_sys::Object::new();
-                js_sys::Reflect::set(&obj, &JsValue::from_str("commitId"), &wasm_commit_id.into())
-                    .ok();
-                js_sys::Reflect::set(
-                    &obj,
-                    &JsValue::from_str("signedCommit"),
-                    &JsValue::from(signed),
-                )
-                .ok();
-                js_sys::Reflect::set(&obj, &JsValue::from_str("blob"), &blob).ok();
-                js_commits.set(i as u32, obj.into());
+            let count = commits.len() + fragments.len();
+            let commits = p::values(commits.iter().map(|v| {
+                p::object(&[
+                    ("commitId", head_value(v.payload().head())),
+                    (
+                        "signedCommit",
+                        Uint8Array::from(v.signed().as_bytes()).into(),
+                    ),
+                    ("blob", Uint8Array::from(v.blob().as_slice()).into()),
+                ])
+            }));
+            let fragments = p::values(fragments.iter().map(|v| {
+                p::object(&[
+                    ("fragmentHead", head_value(v.payload().head())),
+                    (
+                        "signedFragment",
+                        Uint8Array::from(v.signed().as_bytes()).into(),
+                    ),
+                    ("blob", Uint8Array::from(v.blob().as_slice()).into()),
+                ])
+            }));
+            // Preserve the storage contract and existing registration order.
+            self.save_sedimentree_id(id).await?;
+            let reported = self
+                .call("saveBatchAll", &[id_value(id), commits, fragments])
+                .await?;
+            if !js_sys::Number::is_safe_integer(&reported)
+                || reported.as_f64().is_none_or(|n| n < 0.0)
+            {
+                return Err(JsStorageError::JsError(p::invalid(
+                    "saveBatchAll return value",
+                    "expected a nonnegative safe integer",
+                )));
             }
-
-            let js_fragments = js_sys::Array::new_with_length(num_fragments as u32);
-            for (i, verified) in fragments.into_iter().enumerate() {
-                let fragment_head = verified.payload().head();
-                let signed: WasmSignedFragment = verified.signed().clone().into();
-                let blob = Uint8Array::from(verified.blob().contents().as_slice());
-
-                let obj = js_sys::Object::new();
-                js_sys::Reflect::set(
-                    &obj,
-                    &JsValue::from_str("fragmentHead"),
-                    &WasmCommitId::from(fragment_head).into(),
-                )
-                .ok();
-                js_sys::Reflect::set(
-                    &obj,
-                    &JsValue::from_str("signedFragment"),
-                    &JsValue::from(signed),
-                )
-                .ok();
-                js_sys::Reflect::set(&obj, &JsValue::from_str("blob"), &blob).ok();
-                js_fragments.set(i as u32, obj.into());
-            }
-
-            let js_promise = self.js_save_batch_all(
-                &WasmSedimentreeId::from(sedimentree_id).into(),
-                &js_commits,
-                &js_fragments,
-            );
-            JsFuture::from(js_promise)
-                .await
-                .map_err(JsStorageError::JsError)?;
-
-            Ok(num_commits + num_fragments)
+            // Preserve the core's existing input-count semantics, not a backend's
+            // potentially different notion of newly inserted records.
+            Ok(count)
         })
     }
 }
 
-/// Errors that can occur when using `JsStorage`.
-#[derive(Error, Debug)]
+/// Errors from a supplied storage implementation or its returned data.
+#[derive(Debug, thiserror::Error)]
 pub enum JsStorageError {
-    /// A sedimentree ID was not a string.
-    #[error("SedimentreeId was not a string: {0:?}")]
-    SedimentreeIdNotAString(JsValue),
-
-    /// A sedimentree ID string was invalid.
-    #[error(transparent)]
-    BadSedimentreeId(#[from] BadSedimentreeId),
-
-    /// A JavaScript error occurred.
+    /// A callback failed or returned an invalid value.
     #[error("JavaScript error: {0:?}")]
     JsError(JsValue),
-
-    /// Decoding failed.
+    /// Signed envelope decoding failed.
     #[error(transparent)]
     Decode(#[from] DecodeError),
-
-    /// Storage returned blob bytes that don't hash to the signed payload's
-    /// claimed metadata: the store is corrupt or the load callback returned
-    /// the wrong bytes (e.g. regenerated instead of original).
+    /// The blob does not match its signed metadata.
     #[error(transparent)]
     BlobMismatch(#[from] BlobMismatch),
-
-    /// Failed to compute digest from signed payload.
-    #[error("Failed to compute digest from signed payload")]
-    DigestComputationFailed,
-
-    /// Reflect error accessing JS object property.
-    #[error("Reflect error: {0:?}")]
-    ReflectError(JsValue),
-
-    /// The `JsValue` could not be converted into bytes.
-    #[error("Value was not bytes")]
-    NotBytes,
-
-    /// The `JsValue` could not be converted into an array of `SedimentreeId`s.
-    #[error("Value was not an array of SedimentreeIds: {0:?}")]
-    NotSedimentreeIdArray(#[from] WasmConvertJsValueToSedimentreeIdArrayError),
-
-    /// A JS value could not be cast to the expected type.
-    #[error("JS type cast failed: expected {expected}, got {value:?}")]
-    UnexpectedJsType {
-        /// The type name that was expected.
-        expected: &'static str,
-        /// The actual JS value received.
-        value: JsValue,
-    },
 }
 
 impl From<JsStorageError> for JsValue {
-    fn from(err: JsStorageError) -> Self {
-        let js_err = js_sys::Error::new(&alloc::string::ToString::to_string(&err));
-        js_err.set_name("SedimentreeStorageError");
-        // Attach the backend's own error as `cause` so callers can match on it
-        // instead of parsing the message. Non-enumerable, as `new Error(msg,
-        // { cause })` would make it, so `JSON.stringify` and `Object.keys`
-        // are unchanged.
-        if let JsStorageError::JsError(cause) = err {
+    fn from(error: JsStorageError) -> Self {
+        let js = js_sys::Error::new(&error.to_string());
+        js.set_name("SedimentreeStorageError");
+        if let JsStorageError::JsError(cause) = error {
             let descriptor = js_sys::Object::new();
-            js_sys::Reflect::set(&descriptor, &JsValue::from_str("value"), &cause).ok();
-            js_sys::Reflect::set(&descriptor, &JsValue::from_str("writable"), &JsValue::TRUE).ok();
-            js_sys::Reflect::set(
-                &descriptor,
-                &JsValue::from_str("configurable"),
-                &JsValue::TRUE,
-            )
-            .ok();
-            js_sys::Object::define_property(&js_err, &JsValue::from_str("cause"), &descriptor);
+            js_sys::Reflect::set(&descriptor, &"value".into(), &cause).ok();
+            js_sys::Reflect::set(&descriptor, &"writable".into(), &JsValue::TRUE).ok();
+            js_sys::Reflect::set(&descriptor, &"configurable".into(), &JsValue::TRUE).ok();
+            js_sys::Object::define_property(&js, &"cause".into(), &descriptor);
         }
-        js_err.into()
+        js.into()
     }
 }
-
-pub mod memory;

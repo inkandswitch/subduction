@@ -6,7 +6,9 @@
 #![allow(missing_docs, clippy::expect_used)]
 
 use js_sys::{BigInt, Error, JSON, Object, Reflect};
+use sedimentree_core::loose_commit::LooseCommit;
 use sedimentree_wasm::storage::JsStorageError;
+use subduction_crypto::signed::Signed;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -39,6 +41,7 @@ fn cause_is_not_enumerable() {
 
 #[wasm_bindgen_test]
 fn internal_failure_has_no_cause() {
-    let err: JsValue = JsStorageError::NotBytes.into();
+    let malformed = Signed::<LooseCommit>::try_decode(&[]).expect_err("empty envelope is invalid");
+    let err: JsValue = JsStorageError::from(malformed).into();
     assert!(cause(&err).is_undefined());
 }

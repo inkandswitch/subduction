@@ -342,7 +342,6 @@ dependencies = [
  "thiserror 2.0.20",
  "tracing",
  "wasm-bindgen",
- "wasm_refgen",
 ]
 
 [[package]]
@@ -1768,16 +1767,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
-]
-
-[[package]]
-name = "from_js_ref"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "191d6941d3c5d89eba4d1bbc40888d0da2b618193b333af0e3bb88867d48ae3a"
-dependencies = [
- "js-sys",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -4970,12 +4959,8 @@ dependencies = [
 name = "sedimentree_wasm"
 version = "0.19.0"
 dependencies = [
- "async-lock",
- "base58",
- "from_js_ref",
  "future_form",
  "futures",
- "getrandom 0.2.17",
  "js-sys",
  "sedimentree_core",
  "subduction_core",
@@ -4986,8 +4971,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
- "wasm_refgen",
- "web-sys",
 ]
 
 [[package]]
@@ -5643,9 +5626,7 @@ version = "0.26.0"
 dependencies = [
  "async-channel",
  "async-lock",
- "base58",
  "ed25519-dalek 2.2.0",
- "from_js_ref",
  "future_form",
  "futures",
  "futures-util",
@@ -5653,7 +5634,6 @@ dependencies = [
  "getrandom 0.3.4",
  "js-sys",
  "nonempty",
- "rand 0.8.8",
  "sedimentree_core",
  "sedimentree_wasm",
  "subduction_core",
@@ -5667,7 +5647,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
- "wasm_refgen",
  "web-sys",
 ]
 
@@ -6598,20 +6577,6 @@ source = "git+https://github.com/dsgallups/wasm-tracing.git?rev=9288999e1fbbd315
 dependencies = [
  "tracing",
  "tracing-subscriber",
- "wasm-bindgen",
-]
-
-[[package]]
-name = "wasm_refgen"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21c530371970a8c19fd98e930fa51fe709ff019851233b87749a3f0c0a951bb5"
-dependencies = [
- "from_js_ref",
- "heck",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
  "wasm-bindgen",
 ]
 

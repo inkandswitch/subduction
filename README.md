@@ -226,23 +226,19 @@ let subduction = Subduction::new(storage);
 ```typescript
 import * as subduction from '@automerge/subduction';
 
-// Create a Subduction instance
-const storage = new subduction.MemoryStorage();
-const syncer = new subduction.Subduction(storage);
-
-// Connect to a WebSocket server
-const ws = new WebSocket('ws://localhost:8080');
-const peerId = new subduction.PeerId(new Uint8Array(32)); // Your peer ID
-const subductionWs = await subduction.SubductionWebSocket.connect(
-  new URL('ws://localhost:8080'),
-  peerId,
-  5000
-);
-
-// Register the connection
-await syncer.register(subductionWs);
-
-// Start syncing...
+const syncer = new subduction.Subduction({
+  signer: await subduction.createWebCryptoSigner(),
+  storage: subduction.createMemoryStorage(),
+});
+try {
+  // Discovery authenticates the server without pinning an expected identity.
+  // Use connect(url, expectedPeerIdHex) when its identity is known in advance.
+  const peerId = await syncer.connectDiscover('ws://localhost:8080');
+  console.log(peerId); // Canonical 64-character hex string, not a wrapper.
+  // Publish plain { head, parents, blob } records and consume plain events.
+} finally {
+  try { await syncer.close(); } finally { syncer.free(); }
+}
 ```
 
 ## Development

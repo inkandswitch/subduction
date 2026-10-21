@@ -5,13 +5,14 @@
   "publishConfig": {
     "access": "public"
   },
-  "main": "./dist/cjs/node.cjs",
+  "main": "./dist/wrapper/cjs/node.cjs",
   "scripts": {
-    "build": "pnpm run build-node && pnpm run build-bundler && pnpm run build-slim",
+    "build": "wasm-bodge build --debug-profile wasm-debug",
     "build-node": "wasm-pack build --out-dir pkg-node --target nodejs --release",
     "build-bundler": "wasm-pack build --out-dir pkg --target bundler --release",
     "build-slim": "node build_slim.js",
     "test": "playwright test",
+    "test:pojo": "bash ../scripts/test-pojo-api.sh",
     "test:install": "playwright install",
     "test:report": "playwright show-report"
   },
@@ -34,8 +35,8 @@
     "url": "https://github.com/inkandswitch/subduction/issues"
   },
   "type": "module",
-  "module": "./dist/esm/bundler.js",
-  "types": "./dist/index.d.ts",
+  "module": "./dist/wrapper/esm/bundler.js",
+  "types": "./dist/wrapper/index.d.ts",
   "files": [
     "dist",
     "README.md"
@@ -48,10 +49,96 @@
     "./dist/esm/debug-bundler.js",
     "./dist/esm/debug-node.js",
     "./dist/esm/debug-web.js",
-    "./dist/esm/debug-workerd.js"
+    "./dist/esm/debug-workerd.js",
+    "./dist/wrapper/esm/bundler.js",
+    "./dist/wrapper/esm/node.js",
+    "./dist/wrapper/esm/web.js",
+    "./dist/wrapper/esm/workerd.js",
+    "./dist/wrapper/esm/debug-bundler.js",
+    "./dist/wrapper/esm/debug-node.js",
+    "./dist/wrapper/esm/debug-web.js",
+    "./dist/wrapper/esm/debug-workerd.js"
   ],
   "exports": {
     ".": {
+      "types": "./dist/wrapper/index.d.ts",
+      "workerd": {
+        "import": "./dist/wrapper/esm/workerd.js",
+        "require": "./dist/wrapper/cjs/web.cjs"
+      },
+      "node": {
+        "import": "./dist/wrapper/esm/node.js",
+        "require": "./dist/wrapper/cjs/node.cjs"
+      },
+      "browser": {
+        "import": "./dist/wrapper/esm/bundler.js",
+        "require": "./dist/wrapper/cjs/web.cjs"
+      },
+      "import": "./dist/wrapper/esm/web.js",
+      "require": "./dist/wrapper/cjs/web.cjs"
+    },
+    "./slim": {
+      "types": "./dist/wrapper/slim.d.ts",
+      "import": "./dist/wrapper/esm/slim.js",
+      "require": "./dist/wrapper/cjs/slim.cjs"
+    },
+    "./wasm": "./dist/subduction.wasm",
+    "./wasm-base64": {
+      "import": "./dist/esm/wasm-base64.js",
+      "require": "./dist/cjs/wasm-base64.cjs"
+    },
+    "./iife": "./dist/wrapper/iife/index.js",
+    "./debug": {
+      "types": "./dist/wrapper/index.d.ts",
+      "workerd": {
+        "import": "./dist/wrapper/esm/debug-workerd.js",
+        "require": "./dist/wrapper/cjs/debug-web.cjs"
+      },
+      "node": {
+        "import": "./dist/wrapper/esm/debug-node.js",
+        "require": "./dist/wrapper/cjs/debug-node.cjs"
+      },
+      "browser": {
+        "import": "./dist/wrapper/esm/debug-bundler.js",
+        "require": "./dist/wrapper/cjs/debug-web.cjs"
+      },
+      "import": "./dist/wrapper/esm/debug-web.js",
+      "require": "./dist/wrapper/cjs/debug-web.cjs"
+    },
+    "./debug/slim": {
+      "types": "./dist/wrapper/slim.d.ts",
+      "import": "./dist/wrapper/esm/debug-slim.js",
+      "require": "./dist/wrapper/cjs/debug-slim.cjs"
+    },
+    "./debug/wasm": "./dist/subduction-debug.wasm",
+    "./debug/wasm-base64": {
+      "import": "./dist/esm/debug-wasm-base64.js",
+      "require": "./dist/cjs/debug-wasm-base64.cjs"
+    },
+    "./debug/iife": "./dist/wrapper/iife/debug.js"
+  },
+  "wasm-bodge": {
+    "wrapper": {
+      "entry": "./js/index.ts",
+      "tsconfig": "./tsconfig.json",
+      "exposeBindings": false
+    }
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^22.20.1",
+    "fake-indexeddb": "^6.2.5",
+    "html-webpack-plugin": "^5.6.8",
+    "ts-loader": "^9.6.2",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.6",
+    "vite-plugin-wasm": "^3.6.0",
+    "webpack": "^5.109.2",
+    "webpack-cli": "^5.1.4",
+    "webpack-dev-server": "^5.2.6"
+  },
+  "imports": {
+    "#wasm-bodge/bindings": {
       "types": "./dist/index.d.ts",
       "workerd": {
         "import": "./dist/esm/workerd.js",
@@ -68,18 +155,12 @@
       "import": "./dist/esm/web.js",
       "require": "./dist/cjs/web.cjs"
     },
-    "./slim": {
-      "types": "./dist/index.d.ts",
+    "#wasm-bodge/bindings/slim": {
+      "types": "./dist/wasm_bindgen/web/subduction_wasm.d.ts",
       "import": "./dist/esm/slim.js",
       "require": "./dist/cjs/slim.cjs"
     },
-    "./wasm": "./dist/subduction.wasm",
-    "./wasm-base64": {
-      "import": "./dist/esm/wasm-base64.js",
-      "require": "./dist/cjs/wasm-base64.cjs"
-    },
-    "./iife": "./dist/iife/index.js",
-    "./debug": {
+    "#wasm-bodge/bindings/debug": {
       "types": "./dist/index.d.ts",
       "workerd": {
         "import": "./dist/esm/debug-workerd.js",
@@ -96,29 +177,10 @@
       "import": "./dist/esm/debug-web.js",
       "require": "./dist/cjs/debug-web.cjs"
     },
-    "./debug/slim": {
-      "types": "./dist/index.d.ts",
+    "#wasm-bodge/bindings/debug/slim": {
+      "types": "./dist/wasm_bindgen/web/subduction_wasm.d.ts",
       "import": "./dist/esm/debug-slim.js",
       "require": "./dist/cjs/debug-slim.cjs"
-    },
-    "./debug/wasm": "./dist/subduction-debug.wasm",
-    "./debug/wasm-base64": {
-      "import": "./dist/esm/debug-wasm-base64.js",
-      "require": "./dist/cjs/debug-wasm-base64.cjs"
-    },
-    "./debug/iife": "./dist/iife/debug.js"
-  },
-  "devDependencies": {
-    "@playwright/test": "^1.62.1",
-    "@types/node": "^22.20.1",
-    "fake-indexeddb": "^6.2.5",
-    "html-webpack-plugin": "^5.6.8",
-    "ts-loader": "^9.6.2",
-    "typescript": "^5.9.3",
-    "vite": "^7.3.6",
-    "vite-plugin-wasm": "^3.6.0",
-    "webpack": "^5.109.2",
-    "webpack-cli": "^5.1.4",
-    "webpack-dev-server": "^5.2.6"
+    }
   }
 }

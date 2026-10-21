@@ -2,21 +2,21 @@
 //! survives a Promise wait. Lifecycle and validity: see
 //! [the shared contract](../../SYNC_COMPLETION.md).
 
-use crate::{peer_id::WasmPeerId, runtime::Runtime};
+use crate::runtime::Runtime;
 use alloc::{rc::Rc, string::ToString};
 use async_lock::Mutex;
 use core::cell::Cell;
 use futures::{StreamExt, future::AbortHandle};
 use js_sys::{Object, Promise, Reflect, Uint8Array};
-use sedimentree_wasm::{fragment::WasmFragment, loose_commit::WasmLooseCommit};
+use sedimentree_wasm::pojo;
 use subduction_core::stored::{LoadError, StoredEvent, StoredItem, StoredUpdates};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(typescript_custom_section)]
 const TYPES: &str = r#"
 export type StoredUpdate =
-    | { type: "commit"; metadata: LooseCommit; blob: Uint8Array }
-    | { type: "fragment"; metadata: Fragment; blob: Uint8Array }
+    | { type: "commit"; metadata: CommitMetadata; blob: Uint8Array }
+    | { type: "fragment"; metadata: FragmentMetadata; blob: Uint8Array }
     | { type: "storageChecked" }
     | { type: "peerSynced"; peerId: PeerId }
     | { type: "rescanRequired" };
@@ -119,7 +119,7 @@ pub(crate) fn wrap(
 
 /// Implementation detail of `watchStored` and `loadAndWatch`. Use the returned
 /// iterator's `close()` or `for await` cancellation rather than this driver.
-#[wasm_bindgen]
+#[wasm_bindgen(private, skip_typescript)]
 pub struct StoredUpdatesDriver {
     stream: Rc<Mutex<StoredUpdates>>,
     runtime: Runtime,
@@ -207,26 +207,18 @@ fn iterator_result(event: Option<StoredEvent>) -> Result<JsValue, JsValue> {
         let value = Object::new();
         let kind = match event {
             StoredEvent::Item(StoredItem::Commit(item)) => {
-                set(
-                    &value,
-                    "metadata",
-                    &JsValue::from(WasmLooseCommit::from(item.payload().clone())),
-                )?;
+                set(&value, "metadata", &pojo::commit_metadata(item.payload()))?;
                 set(&value, "blob", &Uint8Array::from(item.blob().as_slice()))?;
                 "commit"
             }
             StoredEvent::Item(StoredItem::Fragment(item)) => {
-                set(
-                    &value,
-                    "metadata",
-                    &JsValue::from(WasmFragment::from(item.payload().clone())),
-                )?;
+                set(&value, "metadata", &pojo::fragment_metadata(item.payload()))?;
                 set(&value, "blob", &Uint8Array::from(item.blob().as_slice()))?;
                 "fragment"
             }
             StoredEvent::StorageChecked => "storageChecked",
             StoredEvent::PeerSynced { peer_id } => {
-                set(&value, "peerId", &JsValue::from(WasmPeerId::from(peer_id)))?;
+                set(&value, "peerId", &pojo::hex(peer_id.as_bytes()).into())?;
                 "peerSynced"
             }
             StoredEvent::RescanRequired => "rescanRequired",

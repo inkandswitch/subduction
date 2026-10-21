@@ -45,6 +45,12 @@ jobs:
       - name: Install dependencies
         run: cd ./subduction_wasm && pnpm i
 
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v21
+
+      - name: Setup Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@v13
+
       - name: Get Playwright version
         id: playwright-version
         run: echo "version=$(cd ./subduction_wasm && pnpm list @playwright/test --json | jq -r '.[0].devDependencies["@playwright/test"].version')" >> $GITHUB_OUTPUT
@@ -70,17 +76,14 @@ jobs:
       - name: Test on Wasm (Node) — sedimentree_wasm
         run: wasm-pack test --node sedimentree_wasm
 
-      - name: Build Wasm packages
-        run: cd ./subduction_wasm && pnpm build
-
-      - name: Build e2e server Wasm (web target)
-        run: wasm-pack build subduction_wasm --out-dir e2e/server/pkg --target web --release
+      - name: Test public package (Node and TypeScript)
+        run: nix develop --command bash scripts/test-pojo-api.sh
 
       - name: Build subduction_cli (needed for peer-connection and long-poll tests)
         run: cargo build --release -p subduction_cli
 
       - name: Test in browsers
-        run: cd ./subduction_wasm && npm install --global http-server && pnpm exec playwright test
+        run: cd ./subduction_wasm && pnpm exec playwright test
 
       - name: Upload Playwright test results
         if: failure()

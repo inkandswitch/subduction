@@ -31,12 +31,17 @@ assert(statSync(resolve(root, "README.md")).isFile());
 // Exercise actual Wasm initialization and a small API operation through Node's
 // package resolution in both module systems, including the debug variant.
 const check = `
-  function check(api) {
-    assert.equal(typeof api.Fragment.fromCheckpointPrefixes, "function");
-    const bytes = Uint8Array.from({ length: 12 }, (_, i) => i);
-    const checkpoint = api.Checkpoint.fromBytes(bytes);
-    assert.deepEqual(checkpoint.toBytes(), bytes);
-    checkpoint.free();
+  async function check(api) {
+    assert.equal(typeof api.Subduction, "function");
+    const signer = api.createMemorySigner();
+    assert.match(signer.peerId(), /^[0-9a-f]{64}$/);
+    const storage = api.createMemoryStorage();
+    const node = new api.Subduction({ signer, storage });
+    try {
+      const tree = "11".repeat(32), head = "22".repeat(32);
+      await node.storeCommit(tree, { head, parents: [], blob: Uint8Array.of(1) });
+      assert.deepEqual(await node.getHeads(tree), [head]);
+    } finally { await node.close(); node.free(); }
   }
 `;
 for (const mode of ["module", "commonjs"]) {
@@ -45,10 +50,10 @@ for (const mode of ["module", "commonjs"]) {
     : 'const assert = require("node:assert/strict");';
   const calls = [pkg.name, `${pkg.name}/debug`].map((name) =>
     mode === "module"
-      ? `check(await import(${JSON.stringify(name)}));`
-      : `check(require(${JSON.stringify(name)}));`
+      ? `await check(await import(${JSON.stringify(name)}));`
+      : `await check(require(${JSON.stringify(name)}));`
   ).join("\n");
-  const result = spawnSync(process.execPath, ["--input-type", mode, "--eval", `${prelude}\n${check}\n${calls}`], {
+  const result = spawnSync(process.execPath, ["--input-type", mode, "--eval", `${prelude}\n${check}\n(async () => { ${calls} })().catch(error => { console.error(error); process.exitCode = 1; });`], {
     cwd: root,
     stdio: "inherit",
   });

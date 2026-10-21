@@ -28,22 +28,18 @@ pub use sedimentree_wasm::{
     clear_subduction_logger, set_subduction_log_level, set_subduction_logger,
 };
 
-pub mod batch_input;
 pub mod clock;
 pub mod ephemeral;
 pub mod error;
-pub mod fragment;
+pub mod factories;
 pub(crate) mod handler;
 pub mod memory_signer;
-pub mod peer_id;
 pub mod policy;
 pub mod remote_heads;
 mod runtime;
 pub mod signer;
 pub mod stored;
 pub mod subduction;
-pub mod sync_stats;
 pub mod timer;
-pub mod topic;
 pub mod transport;
 pub mod wire;

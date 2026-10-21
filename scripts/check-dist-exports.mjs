@@ -1,9 +1,8 @@
 // Check that every entry point in package.json exists on disk before publishing.
 // Usage (from a package directory): node ../scripts/check-dist-exports.mjs
 //
-// `pnpm build` writes pkg/, pkg-node/ and pkg-slim/, but the published package
-// only ships dist/, which `bodge <crate>` produces. Publishing without running
-// bodge first uploads a package with no code in it.
+// Published packages ship dist/, not raw wasm-pack pkg/ outputs. Check the
+// configured entrypoints so publishing a missing or incomplete build fails.
 import { readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 

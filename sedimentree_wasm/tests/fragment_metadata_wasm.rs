@@ -1,114 +1,101 @@
-//! Checkpoint validation and fragment constructor/getter round trips.
-//!
-//! Run with `wasm-pack test --node sedimentree_wasm --test fragment_metadata_wasm`.
-
+//! POJO fragment admission/metadata round trips preserve core encoding.
 #![cfg(target_arch = "wasm32")]
-#![allow(missing_docs, clippy::unwrap_used)] // Known-valid test fixtures.
-
+#![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 use sedimentree_core::{
+    blob::{Blob, BlobMeta},
     codec::encode::Encode,
     fragment::{Fragment, checkpoint::Checkpoint},
+    id::SedimentreeId,
     loose_commit::id::CommitId,
 };
-use sedimentree_wasm::{
-    checkpoint::WasmCheckpoint,
-    commit_id::WasmCommitId,
-    fragment::{WasmFragment, WasmInvalidFragment},
-    loose_commit::WasmBlobMeta,
-    sedimentree_id::WasmSedimentreeId,
-};
+use sedimentree_wasm::pojo as p;
+use wasm_bindgen::JsValue;
 use wasm_bindgen_test::wasm_bindgen_test;
 
 #[wasm_bindgen_test]
-fn constructors_and_getters_preserve_core_value_and_encoding() {
-    let tree = WasmSedimentreeId::from_bytes(&[0xab; 32]).unwrap();
-    let head = WasmCommitId::from_bytes(&[0x80; 32]).unwrap();
-    let boundary = [
-        WasmCommitId::from_bytes(&[0xff; 32]).unwrap(),
-        WasmCommitId::from_bytes(&[0x10; 32]).unwrap(),
-    ];
+fn pojo_input_and_metadata_preserve_core_value_and_encoding() {
+    let tree = SedimentreeId::new([0xab; 32]);
+    let head = CommitId::new([0x80; 32]);
+    let boundary = [CommitId::new([0xff; 32]), CommitId::new([0x10; 32])];
     let mut collision = [0xff; 32];
     collision[31] = 0;
     let ids = [
         CommitId::new([0xff; 32]),
         CommitId::new([0; 32]),
         CommitId::new(collision),
-        CommitId::new([0x80; 32]), // Do not filter the head prefix.
-        CommitId::new([0x10; 32]), // Or boundary prefixes.
+        head,
+        boundary[1],
         CommitId::new([0; 32]),
     ];
-    let meta = WasmBlobMeta::new(&[1, 255, 0, 128]);
+    let blob = Blob::new(vec![1, 255, 0, 128]);
     for ids in [&ids[..], &[][..]] {
-        let full = WasmFragment::new(
-            &tree,
-            &head,
-            boundary
-                .iter()
-                .rev()
-                .chain(&boundary)
-                .cloned()
-                .map(Into::into)
-                .collect(),
-            ids.iter()
-                .copied()
-                .map(WasmCommitId::from)
-                .map(Into::into)
-                .collect(),
-            &meta,
+        let expected = Fragment::from_parts(
+            tree,
+            head,
+            boundary.into_iter().collect(),
+            ids.iter().copied().map(Checkpoint::new).collect(),
+            BlobMeta::new(&blob),
         )
         .unwrap();
-        let prefixes = WasmFragment::from_checkpoint_prefixes(
-            &tree,
-            &head,
-            boundary.iter().cloned().map(Into::into).collect(),
-            ids.iter()
-                .copied()
-                .map(Checkpoint::new)
-                .map(WasmCheckpoint::from)
-                .map(Into::into)
-                .collect(),
-            &meta,
-        )
-        .unwrap();
-        let reconstructed = WasmFragment::from_checkpoint_prefixes(
-            &prefixes.sedimentree_id(),
-            &prefixes.head(),
-            prefixes.boundary().into_iter().map(Into::into).collect(),
-            prefixes.checkpoints().into_iter().map(Into::into).collect(),
-            &prefixes.blob_meta(),
-        )
-        .unwrap();
-        let full = Fragment::from(full);
-        for fragment in [prefixes, reconstructed] {
-            let fragment = Fragment::from(fragment);
-            assert_eq!(fragment, full);
-            assert_eq!(fragment.encode(), full.encode());
+        let input = p::object(&[
+            ("head", p::hex(head.as_bytes()).into()),
+            (
+                "boundary",
+                p::values(
+                    boundary
+                        .iter()
+                        .rev()
+                        .chain(&boundary)
+                        .map(|id| p::hex(id.as_bytes()).into()),
+                ),
+            ),
+            (
+                "checkpoints",
+                p::values(
+                    ids.iter()
+                        .map(|id| p::hex(Checkpoint::new(*id).as_bytes()).into()),
+                ),
+            ),
+            ("blob", js_sys::Uint8Array::from(blob.as_slice()).into()),
+        ]);
+        let (admitted, copied_blob) = p::fragment_input(tree, &input, "fragment").unwrap();
+        assert_eq!(copied_blob, blob);
+        let reconstructed = p::read_fragment(&p::fragment_metadata(&admitted), "metadata").unwrap();
+        for fragment in [admitted, reconstructed] {
+            assert_eq!(fragment, expected);
+            assert_eq!(fragment.encode(), expected.encode());
         }
     }
 }
-
 #[wasm_bindgen_test]
-fn prefix_factory_rejects_unencodable_boundary_counts() {
-    let tree = WasmSedimentreeId::from_bytes(&[0; 32]).unwrap();
-    let head = WasmCommitId::from_bytes(&[0; 32]).unwrap();
-    let meta = WasmBlobMeta::new(&[]);
-    let boundary = (0..=u8::MAX)
-        .map(|byte| WasmCommitId::from(CommitId::new([byte; 32])).into())
-        .collect();
+fn pojo_rejects_unencodable_boundary_counts() {
+    let input = p::object(&[
+        ("head", p::hex(&[0; 32]).into()),
+        (
+            "boundary",
+            p::values((0..=u8::MAX).map(|byte| p::hex(&[byte; 32]).into())),
+        ),
+        ("checkpoints", js_sys::Array::new().into()),
+        ("blob", js_sys::Uint8Array::new_with_length(0).into()),
+    ]);
+    let error = p::fragment_input(SedimentreeId::new([0; 32]), &input, "fragment").unwrap_err();
     assert_eq!(
-        WasmFragment::from_checkpoint_prefixes(&tree, &head, boundary, vec![], &meta),
-        Err(WasmInvalidFragment::TooManyBoundaries(256)),
+        p::field(&error, "name").unwrap(),
+        JsValue::from_str("TypeError")
     );
 }
-
 #[wasm_bindgen_test]
-fn checkpoint_bytes_are_exact_and_truncation_is_not_hashing() {
+fn checkpoint_hex_is_exact_and_truncation_is_not_hashing() {
     for length in [0, 11, 13, 32] {
-        assert!(WasmCheckpoint::from_bytes(&vec![0; length]).is_err());
+        assert!(p::unhex::<12>(&p::hex(&vec![0; length]).into(), "checkpoint").is_err());
     }
-    let id = WasmCommitId::from_bytes(&[0xa5; 32]).unwrap();
-    let prefix = WasmCheckpoint::from_commit_id(&id);
-    assert_eq!(prefix.to_bytes(), vec![0xa5; 12]);
-    assert_eq!(prefix, WasmCheckpoint::from_bytes(&[0xa5; 12]).unwrap());
-    assert_eq!(id.to_bytes(), vec![0xa5; 32]);
+    let id = CommitId::new([0xa5; 32]);
+    let prefix = Checkpoint::new(id);
+    let hex_id = p::hex(id.as_bytes());
+    assert_eq!(p::hex(prefix.as_bytes()), hex_id[..24]);
+    assert_eq!(
+        p::unhex::<12>(&hex_id[..24].into(), "checkpoint").unwrap(),
+        [0xa5; 12]
+    );
+    assert_eq!(id.as_bytes(), &[0xa5; 32]);
 }

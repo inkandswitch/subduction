@@ -1,163 +1,70 @@
-# Subduction Wasm E2E Tests
+# Subduction JavaScript API tests
 
-End-to-end Playwright tests for `subduction_wasm`.
+The browser suites exercise the public plain-object API, not private Wasm value
+wrappers. They cover memory/IndexedDB persistence, snapshots and streams,
+MessageChannel authentication, WebSocket/HTTP long-poll interoperability with a
+real Rust server, and ephemeral gossip.
 
-## Setup
+## Build and run
 
-1. **Build the Wasm package:**
+From the repository root, with a Wasm-enabled Rust toolchain:
 
-```bash
+```sh
+cargo build -p subduction_cli
 cd subduction_wasm
 pnpm install
 pnpm build
+pnpm exec playwright install
+pnpm exec playwright test --project chromium
 ```
 
-2. **Build subduction_cli (for peer connection tests):**
+The tests load the wasm-bodge public wrapper from `dist/wrapper/esm/web.js`,
+including the JS storage backends. Rebuild after Rust or JS changes (`pnpm build`);
+raw wasm-bindgen output no longer includes those factories. Building requires
+wasm-bodge and its prerequisites: a matching wasm-bindgen CLI, esbuild, TypeScript,
+and wasm-opt. For a development build without wasm-opt, run
+`wasm-bodge build --debug-profile wasm-debug --no-wasm-opt`.
+The Playwright fixture serves this package directory using Python 3 on port 9891.
 
-```bash
-cd ..  # to subduction root
-cargo build --release -p subduction_cli
+Network tests use `SUBDUCTION_CLI` if provided, otherwise the release binary when
+present, falling back to `target/debug/subduction_cli`. Ensure the selected binary
+was built from the current checkout. Each worker gets an isolated ephemeral server
+port. Fixtures wait for readiness and terminate owned server processes afterward.
+Network tests are not skipped in CI.
+
+```sh
+pnpm exec playwright test subduction.spec.ts messagechannel-connection.spec.ts
+pnpm exec playwright test peer-connection.spec.ts longpoll-connection.spec.ts
+pnpm exec playwright test ephemeral.spec.ts
+pnpm exec playwright test --project firefox
+pnpm exec playwright test --project webkit
+pnpm exec playwright test --trace on
+pnpm exec playwright show-report
 ```
 
-3. **Install Playwright browsers:**
+## Node and declaration tests
 
-```bash
-cd subduction_wasm
-npx playwright install
+```sh
+pnpm run test:pojo
 ```
 
-## Running Tests
+This rebuilds the wasm-bodge public package in `dist/`, compiles
+`tests/pojo-consumer.ts` against its emitted declarations, and runs
+`tests/pojo-api.test.cjs` against both release and debug wrappers. It deliberately
+builds first so stale generated JS or declarations cannot hide a regression.
+The tests assert that only `Subduction` is exported as a
+library class and that the declared methods exist at runtime. They also cover
+cross-realm inputs, Buffer slices, invalid/shared/detached buffers, conversion
+before asynchronous work, callback errors, validation before side effects, signed
+record round trips, and lifecycle behavior.
 
-### Run All Tests
+`wasm-bindgen` must match the version in `Cargo.lock`. Alternate installations can
+be selected with `CARGO_TOOLCHAIN=stable` and `WASM_BINDGEN=/path/to/wasm-bindgen`.
+To test an already-built package without rebuilding:
 
-```bash
-npx playwright test
+```sh
+POJO_WASM_PATH=/absolute/path/to/dist/wrapper/cjs/node.cjs node --test tests/pojo-api.test.cjs
 ```
 
-### Run Specific Test Files
-
-```bash
-# Core functionality tests only
-npx playwright test subduction.spec.ts
-
-# Peer connection tests only (all browsers)
-npx playwright test peer-connection.spec.ts
-```
-
-### Run with UI
-
-```bash
-npx playwright test --ui
-```
-
-### Run in Headed Mode (see browser)
-
-```bash
-npx playwright test --headed
-```
-
-### Run Specific Browser
-
-```bash
-npx playwright test --project=chromium
-npx playwright test --project=firefox
-npx playwright test --project=webkit
-```
-
-### View Test Report
-
-```bash
-npx playwright show-report
-```
-
-## Notes
-
-### Peer Connection Tests
-
-- **CI behavior:** Peer connection tests are skipped in CI environments (set `CI=true`) to avoid flakiness from long build times and server startup delays. They run normally in local development.
-- **Serial execution:** Peer connection tests run serially within each browser to avoid connection conflicts
-- **Multi-browser support:** Each browser runs its own WebSocket server on a different port
-  - Chromium: 9892 (WebSocket) + 6669 (console_subscriber)
-  - Firefox: 9893 (WebSocket) + 6670 (console_subscriber)
-  - WebKit: 9894 (WebSocket) + 6671 (console_subscriber)
-- **Server lifecycle:** Tests start `subduction_cli` in `beforeAll` and stop it in `afterAll`
-- **Port configuration:** Uses `TOKIO_CONSOLE_BIND` environment variable to assign different console_subscriber ports per browser, preventing port conflicts when running tests in parallel
-- **Health checks:** Tests actively wait for the server to be listening on the port (up to 10s locally, 15s in CI) rather than using fixed delays, making tests faster and more reliable
-
-### Cleaning Up Stale Processes
-
-If peer connection tests fail with "Address already in use", kill stale processes:
-
-```bash
-ps aux | grep subduction_cli
-pkill -9 subduction_cli
-```
-
-### Debugging
-
-```bash
-# Run with debug output
-DEBUG=pw:api npx playwright test
-
-# Run single test with trace
-npx playwright test --trace on --grep "should connect to WebSocket server"
-
-# Open trace viewer
-npx playwright show-trace trace.zip
-```
-
-## Test Architecture
-
-### Core Tests
-```
-Browser → http-server (port 9891) → index.html → pkg-slim (Wasm)
-  ↓
-page.evaluate() → window.subduction → Wasm API
-  ↓
-Assertions in Node.js test runner
-```
-
-### Peer Connection Tests
-```
-Node.js Test → spawn(subduction_cli) → WebSocket Server (port 9892)
-  ↓
-Browser → http-server (port 9891) → index.html → pkg-slim (Wasm)
-  ↓
-page.evaluate() → SubductionWebSocket.connect(ws://127.0.0.1:9892)
-  ↓
-Wasm Client ←WebSocket→ Rust Server (subduction_cli)
-  ↓
-Assertions verify actual peer sync operations
-```
-
-## Configuration Files
-
-- `playwright.config.ts` - Playwright test configuration
-- `e2e/config.ts` - Test URL configuration
-- `e2e/server/index.html` - Test HTML page that loads Wasm
-- `e2e/server/pkg/` - Symlink to `pkg-slim` (base64-encoded Wasm)
-
-## Troubleshooting
-
-### Tests hang or timeout
-- Check if http-server is accessible: `curl http://localhost:9891`
-- Check if WebSocket server is running: `lsof -i :9892`
-- Ensure pkg-slim is built: `ls e2e/server/pkg/`
-
-### Wasm not loading
-- Rebuild Wasm: `pnpm build`
-- Check symlink: `ls -la e2e/server/pkg`
-- Should point to `../../pkg-slim`
-
-### Server startup timeout
-- Check for port conflicts: `lsof -i :9892`
-- Kill stale processes: `pkill subduction_cli`
-- Increase timeout in test file if needed
-
-## Development Workflow
-
-1. Make changes to Rust code
-2. Rebuild Wasm: `pnpm build`
-3. Run tests: `npx playwright test`
-4. View failures: `npx playwright show-report`
-5. Debug specific test: `npx playwright test --debug --grep "test name"`
+The Rust Wasm tests remain separate and retain detailed lifecycle, reentry,
+partial-write recovery, reconnect, and iterator cancellation regressions.

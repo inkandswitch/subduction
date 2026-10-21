@@ -1,18 +1,16 @@
-//! Wasm bindings for the HTTP long-poll transport.
-//!
-//! Provides [`SubductionLongPoll`] (JS name) for connecting to a server
-//! via HTTP long-poll from browser/worker environments.
-
+//! Long-poll transport driver and Rust-only authenticated connection helpers.
+use super::fetch_client::FetchHttpClient;
+use crate::{signer::JsSigner, timer, transport::OnDisconnect};
 use alloc::string::{String, ToString};
 use core::time::Duration;
-
 use future_form::Local;
 use futures::FutureExt;
 use subduction_core::{
     authenticated::Authenticated,
+    peer::id::PeerId,
     spawn::Spawn,
     timeout::{TimedOut, Timeout},
-    transport::{Transport, message::MessageTransport},
+    transport::Transport,
 };
 use subduction_http_longpoll::{
     client::HttpLongPollClient, session::SessionId, transport::HttpLongPollTransport,
@@ -21,19 +19,9 @@ use thiserror::Error;
 use wasm_bindgen::{closure::Closure, prelude::*};
 use wasm_bindgen_futures::JsFuture;
 
-use super::fetch_client::FetchHttpClient;
-use crate::{peer_id::WasmPeerId, signer::JsSigner, timer, transport::OnDisconnect};
-
-// ---------------------------------------------------------------------------
-// Timeout: direct `globalThis.setTimeout` binding
-// ---------------------------------------------------------------------------
-
-/// A [`Timeout<Local>`] backed by `globalThis.setTimeout`.
-///
-/// Works in browsers, web workers, service workers, Node.js, Deno, and Bun.
+/// Timeout backed by the host's setTimeout, also usable outside browsers.
 #[derive(Debug, Clone, Copy)]
 pub struct JsTimeout;
-
 impl Timeout<Local> for JsTimeout {
     fn timeout<'a, T: 'a>(
         &'a self,
@@ -44,7 +32,6 @@ impl Timeout<Local> for JsTimeout {
             future::{Either, select},
             pin_mut,
         };
-
         async move {
             let ms = i32::try_from(dur.as_millis()).unwrap_or(i32::MAX);
             let mut timer_id = JsValue::UNDEFINED;
@@ -62,7 +49,6 @@ impl Timeout<Local> for JsTimeout {
         .boxed_local()
     }
 }
-
 struct ClearTimer(JsValue);
 impl Drop for ClearTimer {
     fn drop(&mut self) {
@@ -70,368 +56,157 @@ impl Drop for ClearTimer {
     }
 }
 
-/// JS-facing wrapper around [`HttpLongPollTransport`] that exposes the
-/// byte-oriented [`Transport`](super::JsTransport) interface
-/// (`sendBytes`/`recvBytes`/`disconnect`/`onDisconnect`) so it can be used as a
-/// duck-typed `JsTransport` from JavaScript.
-#[wasm_bindgen(js_name = SubductionHttpLongPoll)]
+/// Private resource driver implementing the structural JS byte-transport service.
+#[wasm_bindgen(js_name = SubductionHttpLongPoll, private, skip_typescript)]
 #[derive(Debug, Clone)]
 pub struct WasmHttpLongPoll {
     inner: HttpLongPollTransport,
-    /// Optional callback fired when the transport disconnects.
     on_disconnect: OnDisconnect,
 }
-
 impl WasmHttpLongPoll {
-    /// Wrap a raw long-poll transport for JS exposure.
-    pub(crate) fn new(transport: HttpLongPollTransport) -> Self {
+    pub(crate) fn new(inner: HttpLongPollTransport) -> Self {
         Self {
-            inner: transport,
+            inner,
             on_disconnect: OnDisconnect::default(),
         }
     }
-
-    /// Fire the disconnect callback if registered.
-    fn fire_on_disconnect(&self) {
-        self.on_disconnect.take_and_fire();
-    }
 }
-
-/// Error from a long-poll transport method exposed to JS.
+/// Failure of a driver method.
 #[derive(Debug, Clone, Copy, Error)]
 pub enum WasmHttpLongPollError {
     /// Outbound channel closed.
     #[error(transparent)]
     Send(#[from] subduction_http_longpoll::error::SendError),
-
     /// Inbound channel closed.
     #[error(transparent)]
     Recv(#[from] subduction_http_longpoll::error::RecvError),
-
-    /// Disconnection failed.
+    /// Disconnect failed.
     #[error(transparent)]
     Disconnect(#[from] subduction_http_longpoll::error::DisconnectionError),
 }
-
 impl From<WasmHttpLongPollError> for JsValue {
     fn from(err: WasmHttpLongPollError) -> Self {
-        let js_err = js_sys::Error::new(&err.to_string());
-        js_err.set_name(match &err {
+        let error = js_sys::Error::new(&err.to_string());
+        error.set_name(match err {
             WasmHttpLongPollError::Send(_) => "HttpLongPollSendError",
             WasmHttpLongPollError::Recv(_) => "HttpLongPollRecvError",
             WasmHttpLongPollError::Disconnect(_) => "HttpLongPollDisconnectError",
         });
-        js_err.into()
+        error.into()
     }
 }
-
 #[wasm_bindgen(js_class = SubductionHttpLongPoll)]
 impl WasmHttpLongPoll {
-    /// Send raw bytes over the transport.
-    ///
+    /// Send an owned frame.
     /// # Errors
-    ///
-    /// Returns an error if the outbound channel is closed.
+    /// Returns an error when the outbound channel is closed.
     #[wasm_bindgen(js_name = sendBytes)]
     pub async fn send_bytes(&self, bytes: &[u8]) -> Result<(), WasmHttpLongPollError> {
         Transport::<Local>::send_bytes(&self.inner, bytes).await?;
         Ok(())
     }
-
-    /// Receive the next message frame as raw bytes.
-    ///
+    /// Receive a frame.
     /// # Errors
-    ///
-    /// Returns an error if the inbound channel is closed.
+    /// Returns an error when the inbound channel is closed.
     #[wasm_bindgen(js_name = recvBytes)]
     pub async fn recv_bytes(&self) -> Result<js_sys::Uint8Array, WasmHttpLongPollError> {
         let bytes = Transport::<Local>::recv_bytes(&self.inner).await?;
         Ok(js_sys::Uint8Array::from(bytes.as_slice()))
     }
-
-    /// Disconnect from the peer gracefully.
-    ///
-    /// Fires the `onDisconnect` callback if one is registered.
-    ///
+    /// Disconnect and notify the runtime observer.
     /// # Errors
-    ///
-    /// Returns an error if the disconnect fails.
-    #[wasm_bindgen(js_name = disconnect)]
+    /// Propagates disconnect failures.
     pub async fn disconnect(&self) -> Result<(), WasmHttpLongPollError> {
         Transport::<Local>::disconnect(&self.inner).await?;
-        self.fire_on_disconnect();
+        self.on_disconnect.take_and_fire();
         Ok(())
     }
-
-    /// Register a callback to be invoked when the transport disconnects.
-    ///
-    /// Part of the [`Transport`](super::JsTransport) interface contract.
-    /// Typically called by internal wiring rather than directly by user code.
+    /// Install the disconnect observer.
     #[wasm_bindgen(js_name = onDisconnect)]
     pub fn on_disconnect(&self, callback: js_sys::Function) {
-        let closure = Closure::<dyn Fn()>::new(move || {
+        self.on_disconnect.set(Closure::<dyn Fn()>::new(move || {
             if let Err(e) = callback.call0(&JsValue::NULL) {
                 tracing::error!("onDisconnect callback threw: {e:?}");
             }
-        });
-        self.on_disconnect.set(closure);
+        }));
     }
 }
-
-/// An authenticated HTTP long-poll transport.
-///
-/// This wrapper proves that the transport has completed the Subduction handshake
-/// and the peer identity has been cryptographically verified.
-///
-/// Obtain via [`SubductionLongPoll::tryConnect`] or [`SubductionLongPoll::tryDiscover`].
-#[wasm_bindgen(js_name = AuthenticatedLongPoll)]
-#[derive(Debug)]
-pub struct WasmAuthenticatedLongPoll {
-    inner: Authenticated<HttpLongPollTransport, Local>,
-    session_id: SessionId,
-    on_disconnect: Option<js_sys::Function>,
+fn make_client(url: &str) -> HttpLongPollClient<FetchHttpClient> {
+    HttpLongPollClient::new(url, FetchHttpClient::new())
 }
-
-#[wasm_bindgen(js_class = AuthenticatedLongPoll)]
-impl WasmAuthenticatedLongPoll {
-    /// The verified peer identity.
-    #[must_use]
-    #[wasm_bindgen(getter, js_name = peerId)]
-    pub fn peer_id(&self) -> WasmPeerId {
-        self.inner.peer_id().into()
-    }
-
-    /// The session ID assigned by the server.
-    #[must_use]
-    #[wasm_bindgen(getter, js_name = sessionId)]
-    pub fn session_id(&self) -> String {
-        self.session_id.to_hex()
-    }
-
-    /// Convert to a transport-erased [`AuthenticatedTransport`](super::authenticated::WasmAuthenticatedTransport).
-    #[must_use]
-    #[wasm_bindgen(js_name = toTransport)]
-    pub fn to_transport(self) -> super::authenticated::WasmAuthenticatedTransport {
-        let peer_id = self.inner.peer_id();
-        let on_disconnect = self.on_disconnect;
-        super::authenticated::WasmAuthenticatedTransport::from_authenticated(self.inner.map(
-            move |lp| {
-                let wasm_lp = WasmHttpLongPoll::new(lp);
-                if let Some(cb) = on_disconnect {
-                    let peer_id: JsValue = WasmPeerId::from(peer_id).into();
-                    let closure = Closure::<dyn Fn()>::new(move || {
-                        if let Err(e) = cb.call1(&JsValue::NULL, &peer_id) {
-                            tracing::error!("onDisconnect callback threw: {e:?}");
-                        }
-                    });
-                    wasm_lp.on_disconnect.set(closure);
-                }
-                let transport: super::JsTransport =
-                    wasm_bindgen::JsValue::from(wasm_lp).unchecked_into();
-                MessageTransport::new(transport)
-            },
-        ))
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Transport factory
-// ---------------------------------------------------------------------------
-
-/// Build an [`HttpLongPollClient`] configured for the browser.
-fn make_client(base_url: &str) -> HttpLongPollClient<FetchHttpClient> {
-    HttpLongPollClient::new(base_url, FetchHttpClient::new())
-}
-
-/// Extract the host from a URL, falling back to the full URL on parse failure.
-///
-/// Uses simple string parsing to avoid a `web_sys` dependency (which
-/// wouldn't work in Node.js or native contexts).
-fn host_from_url(url: &str) -> alloc::string::String {
-    // Strip scheme (e.g., "http://", "https://")
+fn host_from_url(url: &str) -> String {
     let without_scheme = url.find("://").map_or(url, |i| &url[i + 3..]);
-
-    // Take everything up to the first `/` or end of string
-    let host = without_scheme
+    without_scheme
         .find('/')
-        .map_or(without_scheme, |i| &without_scheme[..i]);
-
-    host.into()
+        .map_or(without_scheme, |i| &without_scheme[..i])
+        .into()
 }
-
-/// Get the current timestamp from JS `Date.now()`.
+#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
 fn js_now() -> subduction_core::timestamp::TimestampSeconds {
-    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     subduction_core::timestamp::TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64)
 }
-
-/// HTTP long-poll transport factory for browser/worker environments.
-///
-/// Analogous to [`SubductionWebSocket`] but uses HTTP long-poll instead of WebSocket.
-#[wasm_bindgen(js_name = SubductionLongPoll)]
-#[derive(Debug, Clone, Copy)]
-pub struct WasmLongPoll;
-
-#[wasm_bindgen(js_class = SubductionLongPoll)]
-impl WasmLongPoll {
-    /// Connect to a server with a known peer ID.
-    ///
-    /// # Arguments
-    ///
-    /// * `base_url` - The server's HTTP base URL (e.g., `http://localhost:8080`)
-    /// * `signer` - The client's signer for authentication
-    /// * `expected_peer_id` - The expected server peer ID (verified during handshake)
-    /// * `on_disconnect` - Optional callback invoked with the peer's [`PeerId`] when the connection closes
-    ///
-    /// # Errors
-    ///
-    /// Returns [`LongPollTransportError`] if connection or handshake fails.
-    #[wasm_bindgen(js_name = tryConnect)]
-    pub async fn try_connect(
-        base_url: &str,
-        signer: &JsSigner,
-        expected_peer_id: &WasmPeerId,
-        on_disconnect: Option<js_sys::Function>,
-    ) -> Result<WasmAuthenticatedLongPoll, LongPollTransportError> {
-        let client = make_client(base_url);
-
-        let result = client
-            .connect(signer, expected_peer_id.clone().into(), js_now())
-            .await
-            .map_err(|e| LongPollTransportError::Connection(e.to_string()))?;
-
-        // Spawn background tasks
-        wasm_bindgen_futures::spawn_local(result.poll_task);
-        wasm_bindgen_futures::spawn_local(result.send_task);
-
-        Ok(WasmAuthenticatedLongPoll {
-            inner: result.authenticated,
-            session_id: result.session_id,
-            on_disconnect,
-        })
-    }
-
-    /// Connect to a server using discovery mode.
-    ///
-    /// # Arguments
-    ///
-    /// * `base_url` - The server's HTTP base URL (e.g., `http://localhost:8080`)
-    /// * `signer` - The client's signer for authentication
-    /// * `service_name` - The service name for discovery. If omitted, the base URL is used.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`LongPollTransportError`] if connection or handshake fails.
-    #[wasm_bindgen(js_name = tryDiscover)]
-    pub async fn try_discover(
-        base_url: &str,
-        signer: &JsSigner,
-        service_name: Option<String>,
-        on_disconnect: Option<js_sys::Function>,
-    ) -> Result<WasmAuthenticatedLongPoll, LongPollTransportError> {
-        let client = make_client(base_url);
-        let service_name = service_name.unwrap_or_else(|| host_from_url(base_url));
-
-        let result = client
-            .connect_discover(signer, &service_name, js_now())
-            .await
-            .map_err(|e| LongPollTransportError::Connection(e.to_string()))?;
-
-        // Spawn background tasks
-        wasm_bindgen_futures::spawn_local(result.poll_task);
-        wasm_bindgen_futures::spawn_local(result.send_task);
-
-        Ok(WasmAuthenticatedLongPoll {
-            inner: result.authenticated,
-            session_id: result.session_id,
-            on_disconnect,
-        })
-    }
-
-    /// Connect and return the raw `Authenticated` transport (for internal use).
-    pub(crate) async fn connect_authenticated(
-        base_url: &str,
-        signer: &JsSigner,
-        expected_peer_id: &WasmPeerId,
-        spawner: &crate::runtime::WasmSpawn,
-    ) -> Result<(Authenticated<HttpLongPollTransport, Local>, SessionId), LongPollTransportError>
-    {
-        let client = make_client(base_url);
-
-        let result = client
-            .connect(signer, expected_peer_id.clone().into(), js_now())
-            .await
-            .map_err(|e| LongPollTransportError::Connection(e.to_string()))?;
-
-        spawner.spawn(result.poll_task);
-        spawner.spawn(result.send_task);
-
-        Ok((result.authenticated, result.session_id))
-    }
-
-    /// Connect using discovery and return the raw `Authenticated` transport.
-    pub(crate) async fn connect_discover_authenticated(
-        base_url: &str,
-        signer: &JsSigner,
-        service_name: Option<String>,
-        spawner: &crate::runtime::WasmSpawn,
-    ) -> Result<(Authenticated<HttpLongPollTransport, Local>, SessionId), LongPollTransportError>
-    {
-        let client = make_client(base_url);
-        let service_name = service_name.unwrap_or_else(|| host_from_url(base_url));
-
-        let result = client
-            .connect_discover(signer, &service_name, js_now())
-            .await
-            .map_err(|e| LongPollTransportError::Connection(e.to_string()))?;
-
-        spawner.spawn(result.poll_task);
-        spawner.spawn(result.send_task);
-
-        Ok((result.authenticated, result.session_id))
-    }
+pub(crate) async fn connect_authenticated(
+    url: &str,
+    signer: &JsSigner,
+    peer: &PeerId,
+    spawner: &crate::runtime::WasmSpawn,
+) -> Result<(Authenticated<HttpLongPollTransport, Local>, SessionId), LongPollTransportError> {
+    let result = make_client(url)
+        .connect(signer, *peer, js_now())
+        .await
+        .map_err(|e| LongPollTransportError::Connection(e.to_string()))?;
+    spawner.spawn(result.poll_task);
+    spawner.spawn(result.send_task);
+    Ok((result.authenticated, result.session_id))
 }
-
-/// Error connecting via HTTP long-poll.
+pub(crate) async fn connect_discover_authenticated(
+    url: &str,
+    signer: &JsSigner,
+    service: Option<String>,
+    spawner: &crate::runtime::WasmSpawn,
+) -> Result<(Authenticated<HttpLongPollTransport, Local>, SessionId), LongPollTransportError> {
+    let service = service.unwrap_or_else(|| host_from_url(url));
+    let result = make_client(url)
+        .connect_discover(signer, &service, js_now())
+        .await
+        .map_err(|e| LongPollTransportError::Connection(e.to_string()))?;
+    spawner.spawn(result.poll_task);
+    spawner.spawn(result.send_task);
+    Ok((result.authenticated, result.session_id))
+}
+/// Failure while connecting or authenticating a long-poll session.
 #[derive(Debug, Error)]
 pub enum LongPollTransportError {
     /// Connection or handshake failed.
     #[error("long-poll connection failed: {0}")]
     Connection(String),
 }
-
 impl From<LongPollTransportError> for JsValue {
     fn from(err: LongPollTransportError) -> Self {
-        let js_err = js_sys::Error::new(&err.to_string());
-        js_err.set_name("LongPollTransportError");
-        js_err.into()
+        let error = js_sys::Error::new(&err.to_string());
+        error.set_name("LongPollTransportError");
+        error.into()
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn host_from_url_with_scheme_and_path() {
         assert_eq!(host_from_url("https://example.com/path"), "example.com");
     }
-
     #[test]
     fn host_from_url_with_scheme_and_port() {
         assert_eq!(host_from_url("http://localhost:8080/api"), "localhost:8080");
     }
-
     #[test]
     fn host_from_url_without_scheme() {
         assert_eq!(host_from_url("example.com/path"), "example.com");
     }
-
     #[test]
     fn host_from_url_bare_host() {
         assert_eq!(host_from_url("localhost"), "localhost");
     }
-
     #[test]
     fn host_from_url_with_port_no_path() {
         assert_eq!(host_from_url("http://localhost:8080"), "localhost:8080");

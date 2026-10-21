@@ -7,11 +7,8 @@
 
 use future_form::Local;
 use js_sys::Uint8Array;
-use subduction_core::peer::id::PeerId;
 use subduction_crypto::signer::{Signer, memory::MemorySigner};
 use wasm_bindgen::prelude::*;
-
-use crate::peer_id::WasmPeerId;
 
 /// An in-memory Ed25519 signer exposed to JavaScript.
 ///
@@ -21,12 +18,12 @@ use crate::peer_id::WasmPeerId;
 /// # Example
 ///
 /// ```javascript
-/// import { MemorySigner } from "@automerge/subduction";
+/// import { createMemorySigner } from "@automerge/subduction";
 ///
-/// const signer = MemorySigner.generate();
-/// console.log("Peer ID:", signer.peerId().toString());
+/// const signer = createMemorySigner();
+/// console.log("Peer ID:", signer.peerId());
 /// ```
-#[wasm_bindgen(js_name = MemorySigner)]
+#[wasm_bindgen(js_name = MemorySigner, private, skip_typescript)]
 #[derive(Debug)]
 pub struct JsMemorySigner(MemorySigner);
 
@@ -93,13 +90,5 @@ impl JsMemorySigner {
     pub fn verifying_key(&self) -> Uint8Array {
         let vk = Signer::<Local>::verifying_key(&self.0);
         Uint8Array::from(vk.to_bytes().as_slice())
-    }
-
-    /// Get the peer ID derived from this signer's verifying key.
-    #[wasm_bindgen(js_name = peerId)]
-    #[must_use]
-    pub fn peer_id(&self) -> WasmPeerId {
-        let vk = Signer::<Local>::verifying_key(&self.0);
-        WasmPeerId::from(PeerId::from(vk))
     }
 }

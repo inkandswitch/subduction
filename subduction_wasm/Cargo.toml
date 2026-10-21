@@ -20,16 +20,13 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 async-channel = { workspace = true }
 async-lock = { workspace = true }
-base58 = { workspace = true }
 ed25519-dalek = { workspace = true }
-from_js_ref = { workspace = true }
 futures = { workspace = true }
 future_form = { workspace = true }
 futures-util = { workspace = true }
 getrandom = { workspace = true, features = ["js"] }
 js-sys = { workspace = true }
 nonempty = { workspace = true }
-rand = { workspace = true }
 sedimentree_core = { workspace = true }
 sedimentree_wasm = { workspace = true }
 subduction_core = { workspace = true }
@@ -42,7 +39,6 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
-wasm_refgen = { workspace = true }
 
 [dependencies.web-sys]
 version = "0.3.98"
@@ -89,15 +85,12 @@ wasm-bindgen-test = "0.3"
 
 [features]
 default = []
-# IndexedDB storage backend
-idb = ["sedimentree_wasm/idb"]
 std = [
   "async-channel/std",
   "async-lock/std",
   "futures/std",
   "futures-util/std",
   "js-sys/std",
-  "rand/std",
   "sedimentree_core/std",
   "sedimentree_wasm/std",
   "subduction_core/std",

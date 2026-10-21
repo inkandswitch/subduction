@@ -79,7 +79,6 @@ dhat = "0.3"
 ed25519-dalek = { version = "2.1", default-features = false }
 event-listener = { version = "5.4", default-features = false }
 eyre = "0.6"
-from_js_ref = "0.2.0" # no_std by default
 future_form = "0.3.0"
 futures = { version = "0.3.31", default-features = false, features = [
   "alloc",
@@ -139,7 +138,6 @@ url = { version = "2.5", default-features = false }
 wasm-bindgen = { version = "=0.2.121", default-features = false }
 wasm-bindgen-futures = { version = "=0.4.71", default-features = false }
 wasm-tracing = { version = "3.0.0-alpha.0", git = "https://github.com/dsgallups/wasm-tracing.git", rev = "9288999e1fbbd315bfa0602488138d40b2a55299" }
-wasm_refgen = "0.2.0" # no_std by default
 windows-sys = "0.61.2"
 
 [workspace.lints.rust]
