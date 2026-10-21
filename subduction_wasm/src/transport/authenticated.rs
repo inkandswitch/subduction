@@ -1,321 +1,106 @@
-//! Transport-erased authenticated transport wrapper.
-//!
-//! [`WasmAuthenticatedTransport`] is the common type accepted by
-//! [`addConnection`](crate::subduction::WasmSubduction::add_connection).
-//! All transport types (WebSocket, HTTP long-poll, custom JS) converge
-//! to this type before being registered with Subduction.
-
+//! Authentication of structural JS transports. The result is the core Rust
+//! authentication witness, never a wasm-bindgen class or a forgeable JS record.
+#![allow(clippy::missing_errors_doc)] // All helpers propagate handshake failures.
+use super::{DEFAULT_LOCAL_SERVICE_NAME, JsTransport};
+use crate::{error::WasmHandshakeError, signer::JsSigner};
 use alloc::string::String;
-
+use core::time::Duration;
 use future_form::Local;
 use subduction_core::{
     authenticated::Authenticated,
     handshake::{self as hs, audience::Audience},
+    nonce_cache::NonceCache,
+    peer::id::PeerId,
     timestamp::TimestampSeconds,
     transport::message::MessageTransport,
 };
 use subduction_crypto::{nonce::Nonce, signer::Signer};
-use wasm_bindgen::prelude::*;
 
-use crate::{error::WasmHandshakeError, peer_id::WasmPeerId, signer::JsSigner};
+/// Core proof of a successfully authenticated transport.
+pub type AuthenticatedTransport = Authenticated<MessageTransport<JsTransport>, Local>;
 
-use super::{DEFAULT_LOCAL_SERVICE_NAME, JsTransport};
-
-/// A transport-erased authenticated transport.
-///
-/// Wraps an [`Authenticated<MessageTransport<JsTransport>>`] and is the common type
-/// accepted by [`addConnection`](crate::subduction::WasmSubduction::add_connection).
-///
-/// # Construction
-///
-/// There are three ways to obtain an `AuthenticatedTransport`:
-///
-/// 1. **Custom transport** — implement the `Transport` interface
-///    (`sendBytes`/`recvBytes`/`disconnect`/`onDisconnect`) and call
-///    [`setup`](Self::setup):
-///
-///    ```js
-///    const auth = await AuthenticatedTransport.setup(myTransport, signer, peerId, (peerId) => {
-///        console.log(`${peerId} disconnected`);
-///    });
-///    ```
-///
-/// 2. **From WebSocket** — authenticate via [`SubductionWebSocket`] then convert:
-///
-///    ```js
-///    const wsAuth = await SubductionWebSocket.tryConnect(url, signer, peerId, (peerId) => {
-///        console.log(`${peerId} disconnected`);
-///    });
-///    const auth = wsAuth.toTransport();
-///    ```
-///
-/// 3. **From HTTP long-poll** — same pattern via [`SubductionLongPoll`]:
-///
-///    ```js
-///    const lpAuth = await SubductionLongPoll.tryConnect(url, signer, peerId, (peerId) => {
-///        console.log(`${peerId} disconnected`);
-///    });
-///    const auth = lpAuth.toTransport();
-///    ```
-#[wasm_bindgen(js_name = AuthenticatedTransport)]
-#[derive(Debug)]
-pub struct WasmAuthenticatedTransport {
-    inner: Authenticated<MessageTransport<JsTransport>, Local>,
+#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+fn now() -> TimestampSeconds {
+    TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64)
 }
 
-impl WasmAuthenticatedTransport {
-    /// Access the inner `Authenticated` transport.
-    pub(crate) fn inner(&self) -> &Authenticated<MessageTransport<JsTransport>, Local> {
-        &self.inner
-    }
-
-    /// Consume and return the inner `Authenticated` transport.
-    pub(crate) fn into_inner(self) -> Authenticated<MessageTransport<JsTransport>, Local> {
-        self.inner
-    }
-
-    /// Construct from an `Authenticated<MessageTransport<JsTransport>>`.
-    pub(crate) fn from_authenticated(
-        inner: Authenticated<MessageTransport<JsTransport>, Local>,
-    ) -> Self {
-        Self { inner }
-    }
+/// Initiate a handshake with an expected peer identity.
+pub async fn setup(
+    transport: JsTransport,
+    signer: &JsSigner,
+    peer: &PeerId,
+) -> Result<AuthenticatedTransport, WasmHandshakeError> {
+    initiate(transport, signer, Audience::known(*peer)).await
 }
-
-#[wasm_bindgen(js_class = AuthenticatedTransport)]
-impl WasmAuthenticatedTransport {
-    /// Run the Subduction handshake over a custom transport, producing an
-    /// authenticated transport.
-    ///
-    /// The `transport` object must implement the `Transport` interface
-    /// (`sendBytes`/`recvBytes`/`disconnect`/`onDisconnect`).
-    /// The same object is used for both the handshake phase and post-handshake
-    /// communication.
-    ///
-    /// # Arguments
-    ///
-    /// * `transport` - A `Transport` implementing `sendBytes`/`recvBytes`/`disconnect`/`onDisconnect`
-    /// * `signer` - The client's signer for authentication
-    /// * `expected_peer_id` - The expected server peer ID (verified during handshake)
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`HandshakeError`](WasmHandshakeError) if the handshake fails.
-    #[wasm_bindgen]
-    pub async fn setup(
-        transport: JsTransport,
-        signer: &JsSigner,
-        expected_peer_id: &WasmPeerId,
-        on_disconnect: Option<js_sys::Function>,
-    ) -> Result<WasmAuthenticatedTransport, WasmHandshakeError> {
-        let audience = Audience::known(expected_peer_id.clone().into());
-        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        let now = TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64);
-        let nonce = Nonce::random();
-
-        let (authenticated, peer_id) = hs::initiate::<Local, _, _, _, _>(
-            transport,
-            |transport, peer_id| (MessageTransport::new(transport), peer_id),
-            signer,
-            audience,
-            now,
-            nonce,
-        )
-        .await?;
-
-        tracing::info!("Handshake complete: authenticated peer {peer_id}");
-
-        let result = Self {
-            inner: authenticated,
-        };
-        if let Some(cb) = on_disconnect {
-            install_js_disconnect_callback(&result, cb);
-        }
-        Ok(result)
-    }
-
-    /// Run the Subduction handshake over a custom transport using discovery
-    /// mode, producing an authenticated transport.
-    ///
-    /// Unlike [`setup`](Self::setup) which requires a known peer ID,
-    /// this method discovers the peer's identity during the handshake
-    /// using a shared service name.
-    ///
-    /// # Arguments
-    ///
-    /// * `transport` - A `Transport` implementing `sendBytes`/`recvBytes`/`disconnect`/`onDisconnect`
-    /// * `signer` - The client's signer for authentication
-    /// * `service_name` - Shared service name for discovery.
-    ///   Defaults to [`DEFAULT_LOCAL_SERVICE_NAME`] (`"subduction:local"`) if omitted.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`HandshakeError`](WasmHandshakeError) if the handshake fails.
-    #[wasm_bindgen(js_name = setupDiscover)]
-    pub async fn setup_discover(
-        transport: JsTransport,
-        signer: &JsSigner,
-        service_name: Option<String>,
-        on_disconnect: Option<js_sys::Function>,
-    ) -> Result<WasmAuthenticatedTransport, WasmHandshakeError> {
-        let service_name = service_name.unwrap_or_else(|| DEFAULT_LOCAL_SERVICE_NAME.into());
-        let audience = Audience::discover(service_name.as_bytes());
-        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        let now = TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64);
-        let nonce = Nonce::random();
-
-        let (authenticated, peer_id) = hs::initiate::<Local, _, _, _, _>(
-            transport,
-            |transport, peer_id| (MessageTransport::new(transport), peer_id),
-            signer,
-            audience,
-            now,
-            nonce,
-        )
-        .await?;
-
-        tracing::info!("Discovery handshake complete: authenticated peer {peer_id}");
-
-        let result = Self {
-            inner: authenticated,
-        };
-        if let Some(cb) = on_disconnect {
-            install_js_disconnect_callback(&result, cb);
-        }
-        Ok(result)
-    }
-
-    /// Accept an incoming handshake over a custom transport (responder side).
-    ///
-    /// This is the counterpart to [`setup`](Self::setup). The initiator calls
-    /// `setup`, and the responder calls `accept` over the same underlying channel.
-    ///
-    /// # Arguments
-    ///
-    /// * `transport` - A `Transport` implementing `sendBytes`/`recvBytes`/`disconnect`/`onDisconnect`
-    /// * `signer` - The responder's signer for authentication
-    /// * `max_drift_seconds` - Maximum acceptable clock drift in seconds (default: 600)
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`HandshakeError`](WasmHandshakeError) if the handshake fails.
-    #[wasm_bindgen]
-    pub async fn accept(
-        transport: JsTransport,
-        signer: &JsSigner,
-        max_drift_seconds: Option<u32>,
-        on_disconnect: Option<js_sys::Function>,
-    ) -> Result<WasmAuthenticatedTransport, WasmHandshakeError> {
-        use core::time::Duration;
-        use subduction_core::nonce_cache::NonceCache;
-
-        let our_peer_id = signer.verifying_key().into();
-        let nonce_cache = NonceCache::default();
-        let max_drift = Duration::from_secs(u64::from(max_drift_seconds.unwrap_or(600)));
-
-        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        let now = TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64);
-
-        let (authenticated, peer_id) = hs::respond::<Local, _, _, _, _>(
-            transport,
-            |transport, peer_id| (MessageTransport::new(transport), peer_id),
-            signer,
-            &nonce_cache,
-            our_peer_id,
-            None,
-            now,
-            max_drift,
-        )
-        .await?;
-
-        tracing::info!("Handshake complete (responder): authenticated peer {peer_id}");
-
-        let result = Self {
-            inner: authenticated,
-        };
-        if let Some(cb) = on_disconnect {
-            install_js_disconnect_callback(&result, cb);
-        }
-        Ok(result)
-    }
-
-    /// Accept an incoming discovery handshake, verifying the service name.
-    ///
-    /// Like [`accept`](Self::accept) but filters by the expected
-    /// [`Audience::discover`] service name. Rejects handshakes
-    /// targeting a different service.
-    ///
-    /// # Arguments
-    ///
-    /// * `transport` - A `Transport` implementing `sendBytes`/`recvBytes`/`disconnect`/`onDisconnect`
-    /// * `signer` - The responder's signer for authentication
-    /// * `service_name` - Expected service name (must match the initiator's)
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`HandshakeError`](WasmHandshakeError) if the handshake fails
-    /// or the service name doesn't match.
-    pub(crate) async fn accept_discover(
-        transport: JsTransport,
-        signer: &JsSigner,
-        service_name: String,
-        on_disconnect: Option<js_sys::Function>,
-    ) -> Result<WasmAuthenticatedTransport, WasmHandshakeError> {
-        use core::time::Duration;
-        use subduction_core::nonce_cache::NonceCache;
-
-        let our_peer_id = signer.verifying_key().into();
-        let nonce_cache = NonceCache::default();
-        let max_drift = Duration::from_secs(600);
-        let audience = Audience::discover(service_name.as_bytes());
-
-        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        let now = TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64);
-
-        let (authenticated, peer_id) = hs::respond::<Local, _, _, _, _>(
-            transport,
-            |transport, peer_id| (MessageTransport::new(transport), peer_id),
-            signer,
-            &nonce_cache,
-            our_peer_id,
-            Some(audience),
-            now,
-            max_drift,
-        )
-        .await?;
-
-        tracing::info!("Discovery handshake complete (responder): authenticated peer {peer_id}");
-
-        let result = Self {
-            inner: authenticated,
-        };
-        if let Some(cb) = on_disconnect {
-            install_js_disconnect_callback(&result, cb);
-        }
-        Ok(result)
-    }
-
-    /// The verified peer identity.
-    #[must_use]
-    #[wasm_bindgen(getter, js_name = peerId)]
-    pub fn peer_id(&self) -> WasmPeerId {
-        self.inner.peer_id().into()
-    }
+/// Initiate discovery with a service name.
+pub async fn setup_discover(
+    transport: JsTransport,
+    signer: &JsSigner,
+    service: Option<String>,
+) -> Result<AuthenticatedTransport, WasmHandshakeError> {
+    let service = service.unwrap_or_else(|| DEFAULT_LOCAL_SERVICE_NAME.into());
+    initiate(transport, signer, Audience::discover(service.as_bytes())).await
 }
-
-/// Install a PeerId-injecting disconnect callback on a `JsTransport`.
-///
-/// The [`Closure`] is leaked via `.forget()` because the JS function must
-/// outlive the `WasmAuthenticatedTransport` (which is consumed by
-/// `add_connection`). The leak is bounded: one `Closure` per connection.
-fn install_js_disconnect_callback(auth: &WasmAuthenticatedTransport, callback: js_sys::Function) {
-    let peer_id: JsValue = WasmPeerId::from(auth.inner.peer_id()).into();
-    let wrapper = wasm_bindgen::closure::Closure::<dyn Fn()>::new(move || {
-        if let Err(e) = callback.call1(&JsValue::NULL, &peer_id) {
-            tracing::error!("onDisconnect callback threw: {e:?}");
-        }
-    });
-    let func: js_sys::Function = wrapper.as_ref().unchecked_ref::<js_sys::Function>().clone();
-    wrapper.forget();
-    auth.inner.inner().inner().js_on_disconnect(&func);
+async fn initiate(
+    transport: JsTransport,
+    signer: &JsSigner,
+    audience: Audience,
+) -> Result<AuthenticatedTransport, WasmHandshakeError> {
+    let (auth, _) = hs::initiate::<Local, _, _, _, _>(
+        transport,
+        |transport, peer| (MessageTransport::new(transport), peer),
+        signer,
+        audience,
+        now(),
+        Nonce::random(),
+    )
+    .await?;
+    Ok(auth)
+}
+/// Accept an incoming handshake addressed to this signer.
+pub async fn accept(
+    transport: JsTransport,
+    signer: &JsSigner,
+    max_drift_seconds: Option<u32>,
+) -> Result<AuthenticatedTransport, WasmHandshakeError> {
+    respond(
+        transport,
+        signer,
+        None,
+        Duration::from_secs(u64::from(max_drift_seconds.unwrap_or(600))),
+    )
+    .await
+}
+/// Accept discovery only for the specified service name.
+pub async fn accept_discover(
+    transport: JsTransport,
+    signer: &JsSigner,
+    service: String,
+) -> Result<AuthenticatedTransport, WasmHandshakeError> {
+    respond(
+        transport,
+        signer,
+        Some(Audience::discover(service.as_bytes())),
+        Duration::from_secs(600),
+    )
+    .await
+}
+async fn respond(
+    transport: JsTransport,
+    signer: &JsSigner,
+    audience: Option<Audience>,
+    max_drift: Duration,
+) -> Result<AuthenticatedTransport, WasmHandshakeError> {
+    let (auth, _) = hs::respond::<Local, _, _, _, _>(
+        transport,
+        |transport, peer| (MessageTransport::new(transport), peer),
+        signer,
+        &NonceCache::default(),
+        signer.verifying_key().into(),
+        audience,
+        now(),
+        max_drift,
+    )
+    .await?;
+    Ok(auth)
 }

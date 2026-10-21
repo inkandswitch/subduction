@@ -315,7 +315,7 @@ struct TransportState {
 }
 /// A node-owned transport with idempotent, tracked cleanup.
 #[derive(Debug, Clone)]
-pub(crate) struct ManagedTransport(Rc<TransportState>);
+pub struct ManagedTransport(Rc<TransportState>);
 impl PartialEq for ManagedTransport {
     fn eq(&self, other: &Self) -> bool {
         self.0.inner == other.0.inner

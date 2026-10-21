@@ -53,13 +53,5 @@ pub fn clear_subduction_logger() {
     subduction_wasm_bootstrap::clear_subduction_logger();
 }
 
-pub mod checkpoint;
-pub mod commit_id;
-pub mod depth;
-pub mod digest;
-pub mod fragment;
-pub mod loose_commit;
-pub mod sedimentree;
-pub mod sedimentree_id;
-pub mod signed;
+pub mod pojo;
 pub mod storage;

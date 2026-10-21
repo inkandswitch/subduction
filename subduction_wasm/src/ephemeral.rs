@@ -4,7 +4,7 @@ use subduction_core::peer::id::PeerId;
 use subduction_ephemeral::topic::Topic;
 use wasm_bindgen::JsValue;
 
-use crate::{peer_id::WasmPeerId, topic::WasmTopic};
+use sedimentree_wasm::pojo::hex;
 
 /// Forwards inbound [`EphemeralEvent`]s to a JavaScript callback.
 ///
@@ -26,8 +26,8 @@ impl JsEphemeralObserver {
 
     /// Forward an ephemeral event to the JS callback.
     pub fn on_event(&self, topic: Topic, sender: PeerId, payload: &[u8]) {
-        let js_topic = WasmTopic::from(topic);
-        let js_sender = WasmPeerId::from(sender);
+        let js_topic = hex(topic.as_bytes());
+        let js_sender = hex(sender.as_bytes());
         let js_payload = js_sys::Uint8Array::from(payload);
 
         if let Err(e) = self.callback.call3(

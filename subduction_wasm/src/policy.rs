@@ -17,9 +17,9 @@ use alloc::{collections::BTreeSet, format, string::String, vec::Vec};
 
 use future_form::Local;
 use futures::FutureExt;
-use js_sys::{Promise, Uint8Array};
+use js_sys::Promise;
 use sedimentree_core::id::SedimentreeId;
-use sedimentree_wasm::sedimentree_id::WasmSedimentreeId;
+use sedimentree_wasm::pojo::{hex, unhex};
 use subduction_core::{
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
@@ -27,8 +27,6 @@ use subduction_core::{
 use subduction_crypto::verified_author::VerifiedAuthor;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
-
-use crate::peer_id::WasmPeerId;
 
 // ── TypeScript interface ────────────────────────────────────────────────
 
@@ -59,28 +57,28 @@ extern "C" {
     pub type JsPolicy;
 
     #[wasm_bindgen(method, catch, js_name = authorizeConnect)]
-    fn js_authorize_connect(this: &JsPolicy, peer_id: WasmPeerId) -> Result<Promise, JsValue>;
+    fn js_authorize_connect(this: &JsPolicy, peer_id: String) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = authorizeFetch)]
     fn js_authorize_fetch(
         this: &JsPolicy,
-        peer_id: WasmPeerId,
-        sedimentree_id: WasmSedimentreeId,
+        peer_id: String,
+        sedimentree_id: String,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = authorizePut)]
     fn js_authorize_put(
         this: &JsPolicy,
-        requestor: WasmPeerId,
-        author: WasmPeerId,
-        sedimentree_id: WasmSedimentreeId,
+        requestor: String,
+        author: String,
+        sedimentree_id: String,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = filterAuthorizedFetch)]
     fn js_filter_authorized_fetch(
         this: &JsPolicy,
-        peer_id: WasmPeerId,
-        ids: Vec<WasmSedimentreeId>,
+        peer_id: String,
+        ids: Vec<String>,
     ) -> Result<Promise, JsValue>;
 }
 
@@ -145,7 +143,7 @@ impl ConnectionPolicy<Local> for JsPolicy {
         peer_id: PeerId,
     ) -> <Local as future_form::FutureForm>::Future<'_, Result<(), Self::ConnectionDisallowed>>
     {
-        let result = self.js_authorize_connect(WasmPeerId::from(peer_id));
+        let result = self.js_authorize_connect(hex(peer_id.as_bytes()));
         async move { await_void_promise(result).await }.boxed_local()
     }
 }
@@ -161,10 +159,7 @@ impl StoragePolicy<Local> for JsPolicy {
         peer: PeerId,
         sedimentree_id: SedimentreeId,
     ) -> <Local as future_form::FutureForm>::Future<'_, Result<(), Self::FetchDisallowed>> {
-        let result = self.js_authorize_fetch(
-            WasmPeerId::from(peer),
-            WasmSedimentreeId::from(sedimentree_id),
-        );
+        let result = self.js_authorize_fetch(hex(peer.as_bytes()), hex(sedimentree_id.as_bytes()));
         async move { await_void_promise(result).await }.boxed_local()
     }
 
@@ -175,9 +170,9 @@ impl StoragePolicy<Local> for JsPolicy {
         sedimentree_id: SedimentreeId,
     ) -> <Local as future_form::FutureForm>::Future<'_, Result<(), Self::PutDisallowed>> {
         let result = self.js_authorize_put(
-            WasmPeerId::from(requestor),
-            WasmPeerId::from(PeerId::from(*author.verifying_key())),
-            WasmSedimentreeId::from(sedimentree_id),
+            hex(requestor.as_bytes()),
+            hex(author.verifying_key().as_bytes()),
+            hex(sedimentree_id.as_bytes()),
         );
         async move { await_void_promise(result).await }.boxed_local()
     }
@@ -187,9 +182,8 @@ impl StoragePolicy<Local> for JsPolicy {
         peer: PeerId,
         ids: Vec<SedimentreeId>,
     ) -> <Local as future_form::FutureForm>::Future<'_, Vec<SedimentreeId>> {
-        let wasm_ids: Vec<WasmSedimentreeId> =
-            ids.iter().copied().map(WasmSedimentreeId::from).collect();
-        let result = self.js_filter_authorized_fetch(WasmPeerId::from(peer), wasm_ids);
+        let js_ids = ids.iter().map(|id| hex(id.as_bytes())).collect();
+        let result = self.js_filter_authorized_fetch(hex(peer.as_bytes()), js_ids);
         async move {
             let Ok(promise) = result else {
                 return Vec::new();
@@ -199,24 +193,18 @@ impl StoragePolicy<Local> for JsPolicy {
                 return Vec::new();
             };
 
-            let Ok(arr) = resolved.dyn_into::<js_sys::Array>() else {
+            let Ok(arr) =
+                sedimentree_wasm::pojo::array(&resolved, "filterAuthorizedFetch return value")
+            else {
                 return Vec::new();
             };
 
             // Intersect with the original list to prevent a buggy/malicious
             // policy from expanding the authorized set.
             let allowed: BTreeSet<SedimentreeId> = ids.into_iter().collect();
-            arr.iter()
+            arr.into_iter()
                 .filter_map(|item| {
-                    // The returned items are WasmSedimentreeId objects;
-                    // extract bytes via their toBytes() method.
-                    let to_bytes = js_sys::Reflect::get(&item, &"toBytes".into()).ok()?;
-                    let func: js_sys::Function = to_bytes.dyn_into().ok()?;
-                    let bytes_val = func.call0(&item).ok()?;
-                    let bytes: Uint8Array = bytes_val.dyn_into().ok()?;
-                    let vec = bytes.to_vec();
-                    let arr: [u8; 32] = vec.try_into().ok()?;
-                    let id = SedimentreeId::new(arr);
+                    let id = SedimentreeId::new(unhex(&item, "filterAuthorizedFetch[]").ok()?);
                     allowed.contains(&id).then_some(id)
                 })
                 .collect()

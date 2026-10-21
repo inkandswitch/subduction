@@ -25,6 +25,13 @@ jobs:
       - name: Test scripts/js-release.py
         run: python3 scripts/test_js_release.py
 
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+
+      - name: Test package smoke checker
+        run: node --test scripts/check-js-package.test.mjs
+
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
