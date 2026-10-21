@@ -23,11 +23,10 @@ use wasm_bindgen::prelude::*;
 
 use crate::{
     clock::JsClock,
-    peer_id::WasmPeerId,
     policy::{JsPolicy, ephemeral::JsEphemeralPolicy},
     remote_heads::JsRemoteHeadsObserver,
     runtime::ManagedTransport,
-    subduction::{WASM_SHARD_COUNT, WasmHashMetric, WasmSpawn},
+    subduction::{JsDepthMetric, WASM_SHARD_COUNT, WasmSpawn},
     wire::WireMessage,
 };
 use sedimentree_wasm::storage::JsStorage;
@@ -60,11 +59,11 @@ extern "C" {
     fn js_on_message(
         this: &JsFrameHandler,
         payload: Uint8Array,
-        peer_id: WasmPeerId,
+        peer_id: String,
     ) -> Result<(), JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = onPeerDisconnect)]
-    fn js_on_peer_disconnect(this: &JsFrameHandler, peer_id: WasmPeerId) -> Result<(), JsValue>;
+    fn js_on_peer_disconnect(this: &JsFrameHandler, peer_id: String) -> Result<(), JsValue>;
 }
 
 impl core::fmt::Debug for JsFrameHandler {
@@ -118,7 +117,7 @@ impl Handler<Local, WasmConn> for WasmKeyhiveHandler {
             let guard = self.handler.lock().await;
             if let Some(ref handler) = *guard {
                 let payload = Uint8Array::from(message.payload());
-                let peer_id = WasmPeerId::from(conn.peer_id());
+                let peer_id = sedimentree_wasm::pojo::hex(conn.peer_id().as_bytes());
                 handler
                     .js_on_message(payload, peer_id)
                     .map_err(|e| WasmKeyhiveHandlerError(format!("{e:?}")))?;
@@ -131,7 +130,7 @@ impl Handler<Local, WasmConn> for WasmKeyhiveHandler {
         Box::pin(async move {
             let guard = self.handler.lock().await;
             if let Some(ref handler) = *guard {
-                let peer_id = WasmPeerId::from(peer);
+                let peer_id = sedimentree_wasm::pojo::hex(peer.as_bytes());
                 if let Err(e) = handler.js_on_peer_disconnect(peer_id) {
                     tracing::error!("keyhive frame handler onPeerDisconnect error: {:?}", e);
                 }
@@ -147,7 +146,7 @@ type WasmSyncHandler = SyncHandler<
     JsStorage,
     WasmConn,
     JsPolicy,
-    WasmHashMetric,
+    JsDepthMetric,
     WasmSpawn,
     { WASM_SHARD_COUNT },
     JsRemoteHeadsObserver,

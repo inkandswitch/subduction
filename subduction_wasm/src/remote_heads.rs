@@ -1,19 +1,17 @@
 //! Wasm [`RemoteHeadsObserver`] that forwards notifications to a JS callback.
 
 use sedimentree_core::id::SedimentreeId;
-use sedimentree_wasm::{commit_id::WasmCommitId, sedimentree_id::WasmSedimentreeId};
+use sedimentree_wasm::pojo::hex;
 use subduction_core::{
     peer::id::PeerId,
     remote_heads::{RemoteHeads, RemoteHeadsObserver},
 };
 use wasm_bindgen::JsValue;
 
-use crate::peer_id::WasmPeerId;
-
 /// A [`RemoteHeadsObserver`] that optionally calls a JavaScript function.
 ///
 /// When a callback is set, it is invoked with `(sedimentreeId, peerId, heads)`
-/// where `heads` is an array of `Digest` objects.
+/// where all identifiers (including the commit IDs in `heads`) are canonical hex strings.
 #[derive(Clone, Default)]
 pub struct JsRemoteHeadsObserver {
     callback: Option<js_sys::Function>,
@@ -48,12 +46,12 @@ impl RemoteHeadsObserver for JsRemoteHeadsObserver {
         let Some(ref callback) = self.callback else {
             return;
         };
-        let js_id = WasmSedimentreeId::from(id);
-        let js_peer = WasmPeerId::from(peer);
+        let js_id = hex(id.as_bytes());
+        let js_peer = hex(peer.as_bytes());
         let js_heads = heads
             .heads
             .into_iter()
-            .map(|d| JsValue::from(WasmCommitId::from(d)))
+            .map(|d| JsValue::from(hex(d.as_bytes())))
             .collect::<js_sys::Array>();
 
         if let Err(e) = callback.call3(

@@ -1,22 +1,19 @@
 //! [`MessagePort`]-based [`Transport`] adapter.
 //!
-//! Provides [`MessagePortTransport`] — a Wasm-exported class that wraps a
-//! [`MessagePort`] (or any object with the same `postMessage` / `onmessage`
-//! interface) into a `Transport` suitable for peer-to-peer authentication
-//! via [`AuthenticatedTransport.setup`] / `.accept`.
+//! The public `makeMessagePortTransport` factory returns a structural transport.
+//! Its private driver wraps a `MessagePort` (or an object with the same
+//! `postMessage` / `onmessage` / `close` interface). Nodes own authentication and
+//! clean up admitted transports.
 //!
 //! # Example (JavaScript)
 //!
 //! ```js
-//! const { MessagePortTransport, AuthenticatedTransport } = await import("subduction_wasm");
-//!
+//! import { makeMessagePortTransport } from "@automerge/subduction";
+//! // Given two Subduction nodes, nodeA and nodeB:
 //! const channel = new MessageChannel();
-//! const transportA = new MessagePortTransport(channel.port1);
-//! const transportB = new MessagePortTransport(channel.port2);
-//!
-//! const [authA, authB] = await Promise.all([
-//!   AuthenticatedTransport.setup(transportA, signerA, 5000),
-//!   AuthenticatedTransport.accept(transportB, signerB, nonceCache, 5000),
+//! await Promise.all([
+//!   nodeA.connectTransport(makeMessagePortTransport(channel.port1), { serviceName: "local" }),
+//!   nodeB.acceptTransport(makeMessagePortTransport(channel.port2), { serviceName: "local" }),
 //! ]);
 //! ```
 
@@ -77,7 +74,7 @@ fn closed_error() -> JsValue {
 /// Implements the byte-oriented `Transport` interface (`sendBytes`,
 /// `recvBytes`, `disconnect`) using the port as the underlying channel.
 /// After the handshake, the [`Authenticated`] wrapper provides the sync API.
-#[wasm_bindgen(js_name = MessagePortTransport)]
+#[wasm_bindgen(js_name = MessagePortTransport, private, skip_typescript)]
 pub struct WasmMessagePortTransport {
     port: Rc<Port>,
     queue: SharedQueue,
@@ -202,9 +199,9 @@ impl WasmMessagePortTransport {
     }
 }
 
-/// Convenience factory — equivalent to `new MessagePortTransport(port)`.
+/// Create a structural `Transport` backed by a message port.
 #[must_use]
 #[wasm_bindgen(js_name = makeMessagePortTransport)]
-pub fn make_message_port_transport(port: JsValue) -> WasmMessagePortTransport {
-    WasmMessagePortTransport::new(port)
+pub fn make_message_port_transport(port: JsValue) -> super::JsTransport {
+    crate::factories::message_port(port)
 }
