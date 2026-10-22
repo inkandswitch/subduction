@@ -1,0 +1,67 @@
+# Sync-efficiency ratchet baselines. Lower is better for every metric.
+# Values are deterministic and checked exactly: a higher value fails as a
+# regression, a lower one fails as a stale baseline. Re-record with:
+#   UPDATE_SYNC_BASELINES=1 cargo test --features arbitrary --test sync_efficiency
+# and commit the diff only when the change is an improvement (or an
+# intentional, reviewed trade-off).
+subduction.am_layout.add_commit.fanout_bytes.n300 = 529
+subduction.am_layout.add_commit.fanout_bytes.n3000 = 1169
+subduction.am_layout.add_commit.total_bytes.n300 = 1058
+subduction.am_layout.add_commit.total_bytes.n3000 = 2338
+subduction.am_layout.add_commit.upload_bytes.n300 = 412
+subduction.am_layout.add_commit.upload_bytes.n3000 = 732
+subduction.am_layout.cold_sync.bytes.n300 = 105030
+subduction.am_layout.cold_sync.bytes.n3000 = 1065110
+subduction.am_layout.cold_sync.frames.n300 = 2
+subduction.am_layout.cold_sync.frames.n3000 = 2
+subduction.am_layout.cold_sync.redundant_loose.n300 = 255
+subduction.am_layout.cold_sync.redundant_loose.n3000 = 2805
+subduction.am_layout.cold_sync.wire_per_payload_x100.n300 = 547
+subduction.am_layout.cold_sync.wire_per_payload_x100.n3000 = 554
+subduction.am_layout.in_sync_round.frames.n300 = 2
+subduction.am_layout.in_sync_round.frames.n3000 = 2
+subduction.am_layout.in_sync_round.request_bytes.n300 = 2510
+subduction.am_layout.in_sync_round.request_bytes.n3000 = 24190
+subduction.am_layout.in_sync_round.response_bytes.n300 = 166
+subduction.am_layout.in_sync_round.response_bytes.n3000 = 486
+subduction.am_layout.in_sync_round.total_bytes.n300 = 2676
+subduction.am_layout.in_sync_round.total_bytes.n3000 = 24676
+subduction.am_layout.incremental_commit.fanout_bytes.n300 = 529
+subduction.am_layout.incremental_commit.fanout_bytes.n3000 = 1169
+subduction.am_layout.incremental_commit.total_bytes.n300 = 3750
+subduction.am_layout.incremental_commit.total_bytes.n3000 = 27030
+subduction.am_layout.incremental_commit.upload_bytes.n300 = 2930
+subduction.am_layout.incremental_commit.upload_bytes.n3000 = 24930
+subduction.am_layout.incremental_commit.upload_growth_10x_history_x100 = 850
+subduction.full_layout.add_commit.fanout_bytes.n300 = 465
+subduction.full_layout.add_commit.fanout_bytes.n3000 = 465
+subduction.full_layout.add_commit.total_bytes.n300 = 930
+subduction.full_layout.add_commit.total_bytes.n3000 = 930
+subduction.full_layout.add_commit.upload_bytes.n300 = 380
+subduction.full_layout.add_commit.upload_bytes.n3000 = 380
+subduction.full_layout.cold_sync.bytes.n300 = 29805
+subduction.full_layout.cold_sync.bytes.n3000 = 237315
+subduction.full_layout.cold_sync.frames.n300 = 2
+subduction.full_layout.cold_sync.frames.n3000 = 2
+subduction.full_layout.cold_sync.redundant_loose.n300 = 0
+subduction.full_layout.cold_sync.redundant_loose.n3000 = 0
+subduction.full_layout.cold_sync.wire_per_payload_x100.n300 = 155
+subduction.full_layout.cold_sync.wire_per_payload_x100.n3000 = 123
+subduction.full_layout.covered_push.rebroadcast_loose_frames = 1
+subduction.full_layout.covered_push.server_stray_loose = 1
+subduction.full_layout.covered_resend.rebroadcast_loose_frames = 1
+subduction.full_layout.covered_resend.uploaded_loose_frames = 1
+subduction.full_layout.in_sync_round.frames.n300 = 2
+subduction.full_layout.in_sync_round.frames.n3000 = 2
+subduction.full_layout.in_sync_round.request_bytes.n300 = 470
+subduction.full_layout.in_sync_round.request_bytes.n3000 = 1750
+subduction.full_layout.in_sync_round.response_bytes.n300 = 134
+subduction.full_layout.in_sync_round.response_bytes.n3000 = 134
+subduction.full_layout.in_sync_round.total_bytes.n300 = 604
+subduction.full_layout.in_sync_round.total_bytes.n3000 = 1884
+subduction.full_layout.incremental_commit.fanout_bytes.n300 = 465
+subduction.full_layout.incremental_commit.fanout_bytes.n3000 = 465
+subduction.full_layout.incremental_commit.total_bytes.n300 = 1550
+subduction.full_layout.incremental_commit.total_bytes.n3000 = 2830
+subduction.full_layout.incremental_commit.upload_bytes.n300 = 858
+subduction.full_layout.incremental_commit.upload_bytes.n3000 = 2138
