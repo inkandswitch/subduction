@@ -15,12 +15,15 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+async-lock = { workspace = true }
+blake3 = { workspace = true }
 future_form = { workspace = true }
 futures = { workspace = true }
 # The git `keyhive_crypto` that `keyline` uses. Declared here instead of the
 # workspace table, because `subduction_keyhive` still uses the crates.io
 # package with the same name and version.
 keyhive_crypto = { git = "https://github.com/inkandswitch/keyhive", branch = "split/11-keyline-in-core", default-features = false }
+keyhive_codec = { workspace = true }
 keyline = { workspace = true }
 sedimentree_core = { workspace = true }
 subduction_core = { workspace = true }
@@ -29,17 +32,22 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+async-channel = { workspace = true, features = ["std"] }
 bolero = { workspace = true }
 futures = { workspace = true, features = ["executor"] }
 keyline = { workspace = true, features = ["test_utils"] }
 keyline_memory = { workspace = true, features = ["std"] }
+subduction_core = { workspace = true, features = ["std", "test_utils"] }
 subduction_crypto = { workspace = true, features = ["std"] }
 testresult = { workspace = true }
 
 [features]
 default = []
 std = [
+  "async-lock/std",
+  "blake3/std",
   "futures/std",
+  "keyhive_codec/std",
   "keyhive_crypto/std",
   "keyline/std",
   "sedimentree_core/std",
