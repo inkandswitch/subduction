@@ -1,0 +1,53 @@
+[package]
+name = "subduction_keyline"
+version = "0.1.0"
+description = "Keyline-backed authorization for Subduction"
+
+categories = ["web-programming"]
+keywords = ["authorization", "keyline", "subduction", "sync"]
+readme = "./README.md"
+
+# Depends on unpublished git crates (`keyline`, `keyhive_crypto`).
+publish = false
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+future_form = { workspace = true }
+futures = { workspace = true }
+# The git `keyhive_crypto` that `keyline` uses. Declared here instead of the
+# workspace table, because `subduction_keyhive` still uses the crates.io
+# package with the same name and version.
+keyhive_crypto = { git = "https://github.com/inkandswitch/keyhive", branch = "split/11-keyline-in-core", default-features = false }
+keyline = { workspace = true }
+sedimentree_core = { workspace = true }
+subduction_core = { workspace = true }
+subduction_crypto = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+bolero = { workspace = true }
+futures = { workspace = true, features = ["executor"] }
+keyline = { workspace = true, features = ["test_utils"] }
+keyline_memory = { workspace = true, features = ["std"] }
+subduction_crypto = { workspace = true, features = ["std"] }
+testresult = { workspace = true }
+
+[features]
+default = []
+std = [
+  "futures/std",
+  "keyhive_crypto/std",
+  "keyline/std",
+  "sedimentree_core/std",
+  "subduction_core/std",
+  "subduction_crypto/std",
+  "thiserror/std",
+  "tracing/std",
+]
+
+[lints]
+workspace = true
