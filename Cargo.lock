@@ -5766,9 +5766,13 @@ dependencies = [
 name = "subduction_keyline"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
+ "async-lock",
+ "blake3",
  "bolero 0.13.4",
  "future_form",
  "futures",
+ "keyhive_codec",
  "keyhive_crypto 0.2.1 (git+https://github.com/inkandswitch/keyhive?branch=split%2F11-keyline-in-core)",
  "keyline",
  "keyline_memory",

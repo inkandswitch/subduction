@@ -102,6 +102,7 @@ keyhive_crypto = "0.2.1"
 # Keyline is unpublished; track the upstream branch until it is released.
 # Pin to a `rev` before merging. See `subduction_keyline/Cargo.toml` for the
 # matching git `keyhive_crypto`.
+keyhive_codec = { git = "https://github.com/inkandswitch/keyhive", branch = "split/11-keyline-in-core", default-features = false }
 keyline = { git = "https://github.com/inkandswitch/keyhive", branch = "split/11-keyline-in-core", default-features = false }
 keyline_memory = { git = "https://github.com/inkandswitch/keyhive", branch = "split/11-keyline-in-core", default-features = false }
 metrics = "0.24.6"

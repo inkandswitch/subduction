@@ -27,7 +27,7 @@
 //! Connect is permissive: a fresh peer has to be able to connect before it
 //! can learn the certificates that grant it anything.
 
-use alloc::vec::Vec;
+use alloc::{sync::Arc, vec::Vec};
 
 use future_form::{FutureForm, Local, Sendable, future_form};
 use keyhive_crypto::identifier::{Identifier, InvalidIdentifier};
@@ -52,28 +52,35 @@ pub const PUT_POWER: Power = Power::Relay;
 /// [`Keyline`] store.
 ///
 /// See the [module documentation](self) for the rules.
-#[derive(Debug, Clone, Default)]
+///
+/// Holds the store in an [`Arc`] so the policy and the
+/// [`KeylineHandler`](crate::handler::KeylineHandler) that fills it can
+/// share one store.
+#[derive(Debug)]
 pub struct KeylinePolicy<K> {
-    keyline: K,
+    keyline: Arc<K>,
 }
 
 impl<K> KeylinePolicy<K> {
     /// Authorize against `keyline`.
     #[must_use]
-    pub const fn new(keyline: K) -> Self {
+    pub const fn new(keyline: Arc<K>) -> Self {
         Self { keyline }
     }
 
     /// The store this policy reads.
     #[must_use]
-    pub const fn keyline(&self) -> &K {
+    pub const fn keyline(&self) -> &Arc<K> {
         &self.keyline
     }
+}
 
-    /// Recover the store.
-    #[must_use]
-    pub fn into_keyline(self) -> K {
-        self.keyline
+// Manual: the derive would bound `K: Clone`, which sharing does not need.
+impl<K> Clone for KeylinePolicy<K> {
+    fn clone(&self) -> Self {
+        Self {
+            keyline: Arc::clone(&self.keyline),
+        }
     }
 }
 
@@ -92,7 +99,7 @@ impl<Async: FutureForm, K> ConnectionPolicy<Async> for KeylinePolicy<K> {
     }
 }
 
-#[future_form(Sendable where K: Sync, K::Error: Send, Local)]
+#[future_form(Sendable where K: Send + Sync, K::Error: Send, Local)]
 impl<Async: FutureForm, K: Keyline<Async>> StoragePolicy<Async> for KeylinePolicy<K>
 where
     K::Error: 'static,
@@ -107,7 +114,7 @@ where
     ) -> Async::Future<'_, Result<(), Self::FetchDisallowed>> {
         Async::from_future(async move {
             let peer = peer_identifier(peer).map_err(FetchDisallowedError::InvalidPeerId)?;
-            fetch(&self.keyline, peer, sedimentree_id).await?;
+            fetch(self.keyline.as_ref(), peer, sedimentree_id).await?;
             Ok(())
         })
     }
@@ -123,7 +130,7 @@ where
                 peer_identifier(requestor).map_err(PutDisallowedError::InvalidRequestorId)?;
             let doc = sedimentree_identifier(sedimentree_id)
                 .map_err(PutDisallowedError::InvalidSedimentreeId)?;
-            let actual = effective_power(&self.keyline, doc, requestor)
+            let actual = effective_power(self.keyline.as_ref(), doc, requestor)
                 .await
                 .map_err(PutDisallowedError::Storage)?;
             InsufficientPowerError::require(PUT_POWER, actual)?;
@@ -143,7 +150,7 @@ where
 
             let mut authorized = Vec::with_capacity(ids.len());
             for id in ids {
-                match fetch(&self.keyline, peer, id).await {
+                match fetch(self.keyline.as_ref(), peer, id).await {
                     Ok(_) => authorized.push(id),
                     Err(FetchDisallowedError::Storage(e)) => {
                         tracing::warn!(sedimentree_id = %id, error = %e, "keyline store failed; denying fetch");
@@ -350,7 +357,7 @@ mod tests {
             certs.into_iter().collect(),
         ))
         .expect("the memory store is infallible");
-        KeylinePolicy::new(store)
+        KeylinePolicy::new(Arc::new(store))
     }
 
     fn connect(policy: &Policy, peer: PeerId) -> Result<(), ConnectionDisallowedError> {
