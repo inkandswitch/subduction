@@ -30,11 +30,11 @@
 //!   commit before each fragment head shows up as a spurious head.
 //! * **C13**: `BatchSyncRequest`/`Response` (and `RemoveSubscriptions`)
 //!   item counts are `u16` and wrap at 65,536.
-//! * **INGEST**: `insert_commit_locally` judges newness with
-//!   `has_loose_commit` on the *minimized* tree, so a re-received commit
-//!   that a fragment already covers counts as new and is fanned out again.
-//!   (It is no longer re-inserted as a stray: the tree remembers the items
-//!   minimization dropped.)
+//! * **INGEST** (fixed, guarded): newness of a received commit was judged
+//!   against the *minimized* tree, so a re-received commit that a fragment
+//!   already covers counted as new: it was fanned out again and re-inserted
+//!   as a stray `minimize` could never prune. Newness is now judged against
+//!   everything the tree holds.
 //! * **ECHO** (new): a responder asks the requester to send a commit it
 //!   already holds inside a fragment, because the set it diffs against is
 //!   its minimized tree (loose commits + fragment heads only).
@@ -350,10 +350,15 @@ struct Peer {
 
 impl Peer {
     fn new(name: &'static str, seed: u8) -> Self {
+        Self::with_storage(name, seed, MemoryStorage::new())
+    }
+
+    /// A node over `storage`, which may be a clone shared with another node.
+    fn with_storage(name: &'static str, seed: u8, storage: MemoryStorage) -> Self {
         let signer = MemorySigner::from_bytes(&[seed; 32]);
         let (node, _handler, listener, manager) = SubductionBuilder::new()
             .signer(signer.clone())
-            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+            .storage(storage, Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
             .timer(InstantTimeout)
             .build::<Sendable, Conn>();
@@ -1057,23 +1062,19 @@ async fn push_covered_commit() -> PushedCovered {
 }
 
 /// Ideal: a commit the server already holds inside a fragment is not new,
-/// so receiving it again must not be fanned out to subscribers. Today
-/// `insert_commit_locally` checks `has_loose_commit` against the minimized
-/// tree, where covered commits were pruned, so the commit is reported as
-/// new and broadcast (INGEST). Once C2 is fixed for automerge-repo's
-/// layout, this is what turns re-sends into fan-out storms.
+/// so receiving it again must not be fanned out to subscribers. Judged
+/// against the minimized tree (where covered commits were pruned), it would
+/// be, which is what turns re-sends into fan-out storms once trees really
+/// prune; newness is judged against what the tree holds. Guard.
 #[tokio::test]
-#[should_panic(expected = "KNOWN BUG INGEST:")]
 async fn covered_commit_push_is_not_rebroadcast() {
     let r = push_covered_commit().await;
-    known_bug(
-        "INGEST",
-        r.rebroadcast == 0,
-        &format!(
-            "server re-broadcast {} already-covered commit(s) to its subscriber:\n{}",
-            r.rebroadcast,
-            r.recorded.breakdown()
-        ),
+    assert_eq!(
+        r.rebroadcast,
+        0,
+        "server re-broadcast {} already-covered commit(s) to its subscriber:\n{}",
+        r.rebroadcast,
+        r.recorded.breakdown()
     );
 }
 
@@ -1159,6 +1160,53 @@ async fn covered_commit_ratchet() {
         "subduction.full_layout.covered_resend.rebroadcast_loose_frames",
         synced.frames_of("server->bob", "LooseCommit") as u64,
     );
+}
+
+/// Ideal: two nodes over one store (automerge-repo's page and service
+/// worker sharing an origin's `IndexedDB`) each take in what the other
+/// stored. Newness is judged per node, against what its own tree holds,
+/// not against the store: judged against the store, the page would treat
+/// commits the worker had just written as known, never add them to its
+/// tree, and be re-sent them on every round. Holds today; guard.
+#[tokio::test]
+async fn nodes_sharing_a_store_converge() {
+    let history = History::linear(N);
+    let longer = History::linear(N + 20);
+    let wire = Wire::default();
+    let server = Peer::new("server", 1);
+    server.seed(&history, Layout::Full).await;
+    let store = MemoryStorage::new();
+    let page = Peer::with_storage("page", 5, store.clone());
+    let worker = Peer::with_storage("worker", 6, store);
+    page.connect(&server, &wire).await;
+    page.sync_with(&server, &wire).await;
+
+    // The server learns 20 more commits; the worker stores them first.
+    server
+        .node
+        .store_built_batch(SID, longer.commits[N..].to_vec(), Vec::new())
+        .await
+        .expect("store_built_batch");
+    worker.connect(&server, &wire).await;
+    worker.sync_with(&server, &wire).await;
+    drop(wire.take());
+
+    let mut received = Vec::new();
+    for _ in 0..3 {
+        page.sync_with(&server, &wire).await;
+        received.push(
+            wire.take()
+                .responses_on("server->page")
+                .map(|r| r.response_commits.len())
+                .sum::<usize>(),
+        );
+    }
+    assert_eq!(
+        received,
+        [20, 0, 0],
+        "loose commits the page received per round"
+    );
+    assert_eq!(page.heads().await, server.heads().await);
 }
 
 /// Ideal: a commit pushed twice reaches each subscriber once; the second
