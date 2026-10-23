@@ -64,7 +64,7 @@ type CliListenError = ListenError<Sendable, MetricsStorage<RedbStorage>, CliConn
 /// repeating the full bound at every site.
 pub(crate) trait CliWireHandler:
     Handler<Sendable, CliConn, Message = CliWireMessage, HandlerError = CliListenError>
-    + RemoteHeadsNotifier
+    + RemoteHeadsNotifier<Sendable>
     + Send
     + Sync
     + 'static
@@ -73,7 +73,7 @@ pub(crate) trait CliWireHandler:
 
 impl<H> CliWireHandler for H where
     H: Handler<Sendable, CliConn, Message = CliWireMessage, HandlerError = CliListenError>
-        + RemoteHeadsNotifier
+        + RemoteHeadsNotifier<Sendable>
         + Send
         + Sync
         + 'static
@@ -170,25 +170,25 @@ impl core::fmt::Debug for CliHandlerOpenPolicy {
     }
 }
 
-impl RemoteHeadsNotifier for CliHandler {
+impl RemoteHeadsNotifier<Sendable> for CliHandler {
     fn notify_remote_heads(
         &self,
         id: sedimentree_core::id::SedimentreeId,
         peer: PeerId,
         heads: RemoteHeads,
-    ) {
-        self.core.notify_remote_heads(id, peer, heads);
+    ) -> BoxFuture<'_, ()> {
+        self.core.notify_remote_heads(id, peer, heads)
     }
 }
 
-impl RemoteHeadsNotifier for CliHandlerOpenPolicy {
+impl RemoteHeadsNotifier<Sendable> for CliHandlerOpenPolicy {
     fn notify_remote_heads(
         &self,
         id: sedimentree_core::id::SedimentreeId,
         peer: PeerId,
         heads: RemoteHeads,
-    ) {
-        RemoteHeadsNotifier::notify_remote_heads(self.sync.as_ref(), id, peer, heads);
+    ) -> BoxFuture<'_, ()> {
+        RemoteHeadsNotifier::notify_remote_heads(self.sync.as_ref(), id, peer, heads)
     }
 }
 
