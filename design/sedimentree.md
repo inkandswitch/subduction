@@ -217,6 +217,12 @@ let minimal = tree.minimize(&depth_metric);
 
 Two trees with the same content will have identical minimal representations.
 
+A node keeps its trees in minimal form, and remembers the heads of the
+commits and fragments minimization dropped (`MinimizedSedimentree`). It still
+holds them, so receiving one again is not new and it is not re-added.
+Re-added, a covered commit would have no loose path left to the fragment that
+covers it, and could never be pruned again.
+
 ### Minimal Hash
 
 Produce a deterministic fingerprint:

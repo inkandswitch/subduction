@@ -1035,15 +1035,16 @@ impl<
             // items.
             //
             // `get_or_insert_with` adopts a concurrently-installed value
-            // if one appeared and records an LRU access; the built tree
-            // is already minimal, so it is wrapped clean.
+            // if one appeared and records an LRU access. The built tree
+            // wraps the full history, so the items minimization drops
+            // stay held.
             let mut sedimentree = if loose_commits.is_empty() && fragments.is_empty() {
-                MinimizedSedimentree::already_minimal(Sedimentree::default())
+                MinimizedSedimentree::default()
             } else {
-                let built = Sedimentree::new(fragments, loose_commits).minimize(&self.depth_metric);
-                self.sedimentrees
-                    .get_or_insert_with(id, || MinimizedSedimentree::already_minimal(built))
-                    .await
+                let mut built =
+                    MinimizedSedimentree::new(Sedimentree::new(fragments, loose_commits));
+                built.ensure_minimized(&self.depth_metric);
+                self.sedimentrees.get_or_insert_with(id, || built).await
             };
 
             // The wire diff requires the minimal form. A freshly built

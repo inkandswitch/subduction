@@ -34,16 +34,25 @@
 //! a branchy one (merges inside fragments, a depth-2 fragment with
 //! checkpoints, and the depth-1 fragments it supports).
 
-#![allow(clippy::expect_used, clippy::panic, clippy::print_stderr)]
+#![allow(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::print_stderr
+)]
 
 use std::collections::BTreeSet;
 
+use rand::{Rng, SeedableRng, rngs::SmallRng, seq::SliceRandom};
 use sedimentree_core::{
     crypto::fingerprint::FingerprintSeed,
     depth::{CountLeadingZeroBytes, Depth},
     fragment::Fragment,
     loose_commit::{LooseCommit, id::CommitId},
-    sedimentree::{FingerprintDiff, FingerprintSummary, Sedimentree},
+    sedimentree::{
+        CommitOrFragment, FingerprintDiff, FingerprintSummary, Sedimentree,
+        minimized::MinimizedSedimentree,
+    },
     test_utils::sync_budget::{self, History, Layout, known_bug},
 };
 
@@ -568,5 +577,135 @@ fn am_layout_heads_ratchet() {
             &format!("sedimentree.am_layout.linear_history.heads.n{n}"),
             heads.len() as u64,
         );
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// re-sent items: the minimal tree must not depend on delivery history
+// ════════════════════════════════════════════════════════════════════════
+
+/// Every commit and fragment of `history` under `layout`, in a fixed order
+/// (the tree's own iteration order is not), so seeded shuffles reproduce.
+fn items(history: &History, layout: Layout) -> Vec<CommitOrFragment> {
+    let mut items: Vec<CommitOrFragment> = history.tree(layout).into_items().collect();
+    items.sort_by_key(|item| match item {
+        CommitOrFragment::Commit(c) => (0, c.head()),
+        CommitOrFragment::Fragment(f) => (1, f.head()),
+    });
+    items
+}
+
+/// Deliver one batch the way a node ingests it: add every item, then
+/// minimize once.
+fn deliver(resident: &mut MinimizedSedimentree, batch: &[CommitOrFragment]) {
+    for item in batch {
+        match item {
+            CommitOrFragment::Commit(c) => {
+                resident.add_commit(c.clone());
+            }
+            CommitOrFragment::Fragment(f) => {
+                resident.add_fragment(f.clone());
+            }
+        }
+    }
+    resident.ensure_minimized(&CountLeadingZeroBytes);
+}
+
+/// Ideal: receiving items a node already holds changes nothing. Pushed one
+/// at a time after the tree was minimized (a stale peer re-sending its old
+/// loose commits), covered commits used to come back as strays that
+/// `minimize` could never prune again, because the commits connecting them
+/// to their fragment were already gone. Guarded on the working layout.
+#[test]
+fn resent_items_leave_the_minimal_tree_unchanged() {
+    for history in [History::linear(N), History::branchy(BRANCHY_N)] {
+        let full = history.tree(Layout::Full);
+        let expected = full.minimize(&CountLeadingZeroBytes);
+        let mut resident = MinimizedSedimentree::new(full);
+        resident.ensure_minimized(&CountLeadingZeroBytes);
+        for item in items(&history, Layout::Full) {
+            deliver(&mut resident, core::slice::from_ref(&item));
+        }
+        assert_eq!(
+            resident.tree(),
+            &expected,
+            "{}: re-sent items changed the minimal tree ({} loose commits, expected {})",
+            label(&history),
+            resident.loose_commits().count(),
+            expected.loose_commits().count()
+        );
+    }
+}
+
+/// Ideal: the minimal tree depends only on when each item first arrived,
+/// never on re-sends. For random delivery schedules (random order, random
+/// batches, each batch also re-sending random earlier items), the tree
+/// equals the one built from the same schedule with the re-sends removed.
+/// Also checks nothing was lost: every delivered item is held, and every
+/// commit no longer in the tree is carried by a fragment that is.
+#[test]
+fn minimal_tree_ignores_resends() {
+    for (history, layout) in [
+        (History::linear(N), Layout::Full),
+        (History::branchy(BRANCHY_N), Layout::Full),
+        (History::linear(N), Layout::AutomergeRepo),
+    ] {
+        let all = items(&history, layout);
+        for seed in 0..16 {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let mut order: Vec<&CommitOrFragment> = all.iter().collect();
+            order.shuffle(&mut rng);
+
+            let mut with_resends = MinimizedSedimentree::default();
+            let mut first_only = MinimizedSedimentree::default();
+            let mut delivered: Vec<&CommitOrFragment> = Vec::new();
+            let mut rest = order.as_slice();
+            while !rest.is_empty() {
+                let (chunk, tail) = rest.split_at(rng.gen_range(1..=200).min(rest.len()));
+                rest = tail;
+                let fresh: Vec<CommitOrFragment> = chunk.iter().map(|i| (*i).clone()).collect();
+                let mut batch = fresh.clone();
+                for _ in 0..rng.gen_range(0..=delivered.len().min(100)) {
+                    batch.push(delivered[rng.gen_range(0..delivered.len())].clone());
+                }
+                batch.shuffle(&mut rng);
+                deliver(&mut with_resends, &batch);
+                deliver(&mut first_only, &fresh);
+                delivered.extend(chunk);
+            }
+
+            let what = format!("{} {layout:?} seed {seed}", label(&history));
+            assert_eq!(
+                with_resends.tree(),
+                first_only.tree(),
+                "{what}: re-sends changed the minimal tree"
+            );
+            for item in &all {
+                match item {
+                    CommitOrFragment::Commit(c) => {
+                        assert!(
+                            with_resends.holds_commit(c.head()),
+                            "{what}: commit not held"
+                        );
+                    }
+                    CommitOrFragment::Fragment(f) => {
+                        assert!(
+                            with_resends.holds_fragment(f.head()),
+                            "{what}: fragment not held"
+                        );
+                    }
+                }
+            }
+            let ids: Vec<CommitId> = history.commits.iter().map(|(c, _)| c.head()).collect();
+            let kept: Vec<CommitId> = with_resends.fragments().map(Fragment::head).collect();
+            let carried = history.redundant(&ids, &kept);
+            for (commit, _) in history.loose(layout) {
+                let id = commit.head();
+                assert!(
+                    with_resends.has_loose_commit(id) || carried.contains(&id),
+                    "{what}: commit {id:?} dropped without a kept fragment carrying it"
+                );
+            }
+        }
     }
 }

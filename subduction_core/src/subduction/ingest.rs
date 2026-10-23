@@ -491,9 +491,7 @@ pub(crate) async fn get_or_hydrate<
             // sync-request path) because the id is confirmed in the index, so
             // this cannot fabricate existence for a never-stored id.
             sedimentrees
-                .get_or_insert_with(id, || {
-                    MinimizedSedimentree::already_minimal(Sedimentree::default())
-                })
+                .get_or_insert_with(id, MinimizedSedimentree::default)
                 .await;
             #[cfg(feature = "metrics")]
             hydration.complete();
@@ -504,16 +502,13 @@ pub(crate) async fn get_or_hydrate<
         return Ok(None);
     }
 
-    let hydrated = Sedimentree::new(fragments, loose_commits).minimize(depth_metric);
+    // Wrap the full history, so the items minimization drops stay held.
+    let mut resident = MinimizedSedimentree::new(Sedimentree::new(fragments, loose_commits));
+    let hydrated = resident.minimized(depth_metric).clone();
 
     // Install (or adopt a concurrently-installed value). Enforces the LRU
-    // cap; the lock is only taken now, after the await above. The tree is
-    // already minimal, so wrap it clean.
-    sedimentrees
-        .get_or_insert_with(id, || {
-            MinimizedSedimentree::already_minimal(hydrated.clone())
-        })
-        .await;
+    // cap; the lock is only taken now, after the await above.
+    sedimentrees.get_or_insert_with(id, || resident).await;
     #[cfg(feature = "metrics")]
     hydration.complete();
     Ok(Some(hydrated))

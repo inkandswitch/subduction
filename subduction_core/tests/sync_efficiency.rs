@@ -32,11 +32,9 @@
 //!   item counts are `u16` and wrap at 65,536.
 //! * **INGEST**: `insert_commit_locally` judges newness with
 //!   `has_loose_commit` on the *minimized* tree, so a re-received commit
-//!   that a fragment already covers counts as new: it is fanned out again,
-//!   and inserted as a stray loose commit that `minimize` can never prune
-//!   (it has no loose path to its fragment's head). A fix has to consult
-//!   what the node holds (storage / fragment members), not the minimized
-//!   tree, or the stray stays.
+//!   that a fragment already covers counts as new and is fanned out again.
+//!   (It is no longer re-inserted as a stray: the tree remembers the items
+//!   minimization dropped.)
 //! * **ECHO** (new): a responder asks the requester to send a commit it
 //!   already holds inside a fragment, because the set it diffs against is
 //!   its minimized tree (loose commits + fragment heads only).
@@ -1080,22 +1078,17 @@ async fn covered_commit_push_is_not_rebroadcast() {
 }
 
 /// Ideal: receiving a covered commit leaves the server's minimized tree
-/// unchanged. Today the commit is inserted as a stray loose commit that
-/// `minimize` cannot prune (no loose path to its fragment's head), so it
-/// rides in every later summary and cold sync. A newness check run against
-/// the minimized tree *after* minimize cannot fix this; it has to consult
-/// what the node holds (INGEST).
+/// unchanged. Re-added, the commit would be a stray loose commit that
+/// `minimize` cannot prune (no loose path to its fragment's head), riding
+/// in every later summary and cold sync. The tree remembers what it holds,
+/// so the commit is not re-added; guard.
 #[tokio::test]
-#[should_panic(expected = "KNOWN BUG INGEST:")]
 async fn covered_commit_push_leaves_no_stray_loose_commit() {
     let r = push_covered_commit().await;
-    known_bug(
-        "INGEST",
-        r.stray == 0,
-        &format!(
-            "server keeps {} stray covered loose commit(s) after the push",
-            r.stray
-        ),
+    assert_eq!(
+        r.stray, 0,
+        "server keeps {} stray covered loose commit(s) after the push",
+        r.stray
     );
 }
 
