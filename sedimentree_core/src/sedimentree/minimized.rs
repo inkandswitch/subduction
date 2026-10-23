@@ -35,15 +35,16 @@
 //! [`minimized`](Self::minimized) (or [`ensure_minimized`](Self::ensure_minimized))
 //! first.
 
-use alloc::vec::Vec;
+use alloc::{collections::BTreeSet, vec::Vec};
 use core::ops::Deref;
 
 use crate::{
     collections::Set,
+    crypto::fingerprint::Fingerprint,
     depth::DepthMetric,
     fragment::Fragment,
     loose_commit::{LooseCommit, id::CommitId},
-    sedimentree::{CommitOrFragment, Sedimentree},
+    sedimentree::{CommitOrFragment, FingerprintDiff, FingerprintSummary, Sedimentree},
 };
 
 /// A [`Sedimentree`] plus an external "needs minimizing" flag and the heads
@@ -197,6 +198,58 @@ impl MinimizedSedimentree {
         self.tree.heads_assuming_minimal()
     }
 
+    /// Diff the minimal tree against a requestor's summary, as
+    /// [`Sedimentree::diff_remote_fingerprints`], but echo back only the
+    /// fingerprints of items this tree does not hold.
+    ///
+    /// The minimal tree is what we offer; what we hold also includes the
+    /// items minimization dropped. Echoing one of those (e.g. a loose commit
+    /// a kept fragment covers) would ask the requestor to upload data we
+    /// already have. Items held only inside a fragment's blob, never as a
+    /// loose commit, cannot be recognized and are still echoed.
+    pub fn responder_diff<M: DepthMetric>(
+        &mut self,
+        depth_metric: &M,
+        remote: &FingerprintSummary,
+    ) -> FingerprintDiff<'_> {
+        self.ensure_minimized(depth_metric);
+        let mut diff = self.tree.diff_remote_fingerprints(remote);
+        let mut unknown_commits: BTreeSet<Fingerprint<CommitId>> = diff
+            .remote_only_commit_fingerprints
+            .iter()
+            .copied()
+            .collect();
+        let mut unknown_fragments: BTreeSet<Fingerprint<CommitId>> = diff
+            .remote_only_fragment_fingerprints
+            .iter()
+            .copied()
+            .collect();
+        if unknown_commits.is_empty() && unknown_fragments.is_empty() {
+            return diff;
+        }
+
+        // Hash what we hold under the requestor's seed and strike it from
+        // the (usually few) unknown fingerprints, rather than collecting a
+        // set of everything held. Fragment heads count as held commits: a
+        // fragment's blob carries its head.
+        let seed = remote.seed();
+        if !unknown_commits.is_empty() {
+            for id in &self.held_commits {
+                unknown_commits.remove(&Fingerprint::new(seed, id));
+            }
+        }
+        for id in &self.held_fragments {
+            let fp = Fingerprint::new(seed, id);
+            unknown_commits.remove(&fp);
+            unknown_fragments.remove(&fp);
+        }
+        diff.remote_only_commit_fingerprints
+            .retain(|fp| unknown_commits.contains(fp));
+        diff.remote_only_fragment_fingerprints
+            .retain(|fp| unknown_fragments.contains(fp));
+        diff
+    }
+
     /// Consume the wrapper and return the inner tree (without minimizing).
     #[must_use]
     pub fn into_tree(self) -> Sedimentree {
@@ -224,7 +277,7 @@ mod tests {
 
     use crate::{
         blob::{Blob, BlobMeta},
-        crypto::fingerprint::FingerprintSeed,
+        crypto::fingerprint::{Fingerprint, FingerprintSeed},
         depth::CountLeadingZeroBytes,
         fragment::Fragment,
         id::SedimentreeId,
@@ -412,6 +465,29 @@ mod tests {
         // Re-added, `x` would be a tip with no loose path to the fragment's
         // head, so minimize could never prune it again.
         assert_eq!(*m.minimized(&CountLeadingZeroBytes), minimal);
+    }
+
+    /// A requestor that holds a commit we pruned is not asked to upload it,
+    /// though the minimal tree alone would echo it back.
+    #[test]
+    fn diff_does_not_request_held_commits() {
+        let (full, x) = covered_run();
+        let seed = FingerprintSeed::new(1, 2);
+        let remote = Sedimentree::new(vec![], vec![x.clone()]).fingerprint_summarize(&seed);
+
+        let mut m = MinimizedSedimentree::new(full.clone());
+        let offered = full.minimize(&CountLeadingZeroBytes);
+        assert_eq!(
+            offered
+                .diff_remote_fingerprints(&remote)
+                .remote_only_commit_fingerprints,
+            vec![Fingerprint::new(&seed, &x.head())],
+            "precondition: the minimal tree alone echoes x"
+        );
+
+        let diff = m.responder_diff(&CountLeadingZeroBytes, &remote);
+        assert!(diff.remote_only_commit_fingerprints.is_empty());
+        assert!(diff.remote_only_fragment_fingerprints.is_empty());
     }
 
     #[test]

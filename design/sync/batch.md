@@ -160,6 +160,14 @@ The diff produces:
 - **Responder-only items** → send data to requester (with blobs)
 - **Requester-only fingerprints** → echo back as `RequestedData`
 
+The responder offers from its minimal tree, but echoes back only what it does
+not hold at all (`MinimizedSedimentree::responder_diff`). A loose
+commit that a kept fragment covers was dropped from the minimal tree, yet the
+responder still holds it; asking for it would make the requester upload data
+the responder already has. A commit the responder holds only inside a
+fragment's blob, never as a loose commit, can't be recognized from fragment
+metadata and is still echoed.
+
 ## Reverse-Lookup (Requester Side)
 
 When the response echoes back fingerprints, the requester must resolve them to actual items. This is done by building a reverse-lookup table from the in-memory sedimentree using the same seed:

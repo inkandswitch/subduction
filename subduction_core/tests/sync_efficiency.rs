@@ -35,9 +35,10 @@
 //!   already covers counted as new: it was fanned out again and re-inserted
 //!   as a stray `minimize` could never prune. Newness is now judged against
 //!   everything the tree holds.
-//! * **ECHO** (new): a responder asks the requester to send a commit it
-//!   already holds inside a fragment, because the set it diffs against is
-//!   its minimized tree (loose commits + fragment heads only).
+//! * **ECHO** (fixed, guarded): a responder asked the requester to send a
+//!   commit it already holds inside a fragment, because the set it diffed
+//!   against was its minimized tree (loose commits + fragment heads only).
+//!   It now echoes back only fingerprints of items it does not hold.
 //!
 //! Waiting: after each operation the tests wait for the wire to go quiet
 //! (no new frame for [`QUIET_FOR`]). That bounds settling only; nothing
@@ -1113,26 +1114,23 @@ async fn sync_covered_commit() -> Recorded {
 }
 
 /// Ideal: the server does not ask carol for a commit it already holds
-/// inside a fragment. Today it does (ECHO): the set it diffs against is
-/// its minimized tree, which holds loose commits and fragment heads but
-/// not fragment members, so carol's fingerprint looks unknown. (The upload
-/// then trips INGEST too; that is measured separately above.)
+/// inside a fragment. Its minimized tree holds loose commits and fragment
+/// heads but not fragment members, so diffing against that alone made
+/// carol's fingerprint look unknown (ECHO); the diff now checks what the
+/// tree holds. Guard.
 #[tokio::test]
-#[should_panic(expected = "KNOWN BUG ECHO:")]
 async fn covered_commit_fingerprint_is_not_requested() {
     let recorded = sync_covered_commit().await;
     let requested: usize = recorded
         .responses_on("server->carol")
         .map(|r| r.response_requested)
         .sum();
-    known_bug(
-        "ECHO",
-        requested == 0,
-        &format!(
-            "server asked carol to upload {requested} commit(s) it already holds in a \
-             fragment:\n{}",
-            recorded.breakdown()
-        ),
+    assert_eq!(
+        requested,
+        0,
+        "server asked carol to upload {requested} commit(s) it already holds in a \
+         fragment:\n{}",
+        recorded.breakdown()
     );
 }
 
