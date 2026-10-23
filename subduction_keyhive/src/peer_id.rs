@@ -4,8 +4,7 @@ use alloc::string::{String, ToString};
 use core::fmt;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use ed25519_dalek::VerifyingKey;
-use keyhive_core::principal::identifier::Identifier;
+use keyhive_crypto::identifier::{Identifier, InvalidIdentifier};
 
 /// A peer identifier.
 ///
@@ -104,11 +103,10 @@ impl KeyhivePeerId {
     ///
     /// # Errors
     ///
-    /// Returns an error if the verifying key bytes do not represent a valid
-    /// Ed25519 public key.
-    pub fn to_identifier(&self) -> Result<Identifier, ed25519_dalek::SignatureError> {
-        let vk = VerifyingKey::from_bytes(&self.verifying_key)?;
-        Ok(Identifier::from(vk))
+    /// Returns an error if the verifying key bytes are not a canonical
+    /// Ed25519 point of large order.
+    pub fn to_identifier(&self) -> Result<Identifier, InvalidIdentifier> {
+        Identifier::from_bytes(self.verifying_key)
     }
 
     /// Encode the verifying key as base64.

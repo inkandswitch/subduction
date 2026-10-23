@@ -92,10 +92,7 @@ impl<Async: FutureForm, K> ConnectionPolicy<Async> for KeylinePolicy<K> {
         &self,
         peer: PeerId,
     ) -> Async::Future<'_, Result<(), Self::ConnectionDisallowed>> {
-        Async::from_future(async move {
-            peer_identifier(peer).map_err(ConnectionDisallowedError::InvalidPeerId)?;
-            Ok(())
-        })
+        Async::from_future(async move { authorize_connect(peer) })
     }
 }
 
@@ -112,11 +109,7 @@ where
         peer: PeerId,
         sedimentree_id: SedimentreeId,
     ) -> Async::Future<'_, Result<(), Self::FetchDisallowed>> {
-        Async::from_future(async move {
-            let peer = peer_identifier(peer).map_err(FetchDisallowedError::InvalidPeerId)?;
-            fetch(self.keyline.as_ref(), peer, sedimentree_id).await?;
-            Ok(())
-        })
+        Async::from_future(authorize_fetch(self.keyline.as_ref(), peer, sedimentree_id))
     }
 
     fn authorize_put(
@@ -125,17 +118,11 @@ where
         _author: VerifiedAuthor,
         sedimentree_id: SedimentreeId,
     ) -> Async::Future<'_, Result<(), Self::PutDisallowed>> {
-        Async::from_future(async move {
-            let requestor =
-                peer_identifier(requestor).map_err(PutDisallowedError::InvalidRequestorId)?;
-            let doc = sedimentree_identifier(sedimentree_id)
-                .map_err(PutDisallowedError::InvalidSedimentreeId)?;
-            let actual = effective_power(self.keyline.as_ref(), doc, requestor)
-                .await
-                .map_err(PutDisallowedError::Storage)?;
-            InsufficientPowerError::require(PUT_POWER, actual)?;
-            Ok(())
-        })
+        Async::from_future(authorize_put(
+            self.keyline.as_ref(),
+            requestor,
+            sedimentree_id,
+        ))
     }
 
     fn filter_authorized_fetch(
@@ -143,28 +130,89 @@ where
         peer: PeerId,
         ids: Vec<SedimentreeId>,
     ) -> Async::Future<'_, Vec<SedimentreeId>> {
-        Async::from_future(async move {
-            let Ok(peer) = peer_identifier(peer) else {
-                return Vec::new();
-            };
-
-            let mut authorized = Vec::with_capacity(ids.len());
-            for id in ids {
-                match fetch(self.keyline.as_ref(), peer, id).await {
-                    Ok(_) => authorized.push(id),
-                    Err(FetchDisallowedError::Storage(e)) => {
-                        tracing::warn!(sedimentree_id = %id, error = %e, "keyline store failed; denying fetch");
-                    }
-                    Err(
-                        FetchDisallowedError::InvalidPeerId(_)
-                        | FetchDisallowedError::InvalidSedimentreeId(_)
-                        | FetchDisallowedError::InsufficientPower(_),
-                    ) => {}
-                }
-            }
-            authorized
-        })
+        Async::from_future(filter_authorized_fetch(self.keyline.as_ref(), peer, ids))
     }
+}
+
+/// Authorize a connection: the peer ID must parse as an [`Identifier`].
+///
+/// # Errors
+///
+/// Returns [`ConnectionDisallowedError::InvalidPeerId`] otherwise.
+pub fn authorize_connect(peer: PeerId) -> Result<(), ConnectionDisallowedError> {
+    peer_identifier(peer).map_err(ConnectionDisallowedError::InvalidPeerId)?;
+    Ok(())
+}
+
+/// Authorize `peer` to fetch `sedimentree_id` against `keyline`: at least
+/// [`FETCH_POWER`] over the document.
+///
+/// For callers that hold a store but not a [`KeylinePolicy`], such as a
+/// `Keyhive` (`keyhive.keyline()`).
+///
+/// # Errors
+///
+/// Returns [`FetchDisallowedError`] for invalid IDs, too little power, or a
+/// store failure.
+pub async fn authorize_fetch<F: FutureForm, K: Keyline<F>>(
+    keyline: &K,
+    peer: PeerId,
+    sedimentree_id: SedimentreeId,
+) -> Result<(), FetchDisallowedError<K::Error>> {
+    let peer = peer_identifier(peer).map_err(FetchDisallowedError::InvalidPeerId)?;
+    fetch(keyline, peer, sedimentree_id).await?;
+    Ok(())
+}
+
+/// Authorize `requestor` to push into `sedimentree_id` against `keyline`: at
+/// least [`PUT_POWER`] over the document. The commit's author is not
+/// checked; see the [module documentation](self).
+///
+/// # Errors
+///
+/// Returns [`PutDisallowedError`] for invalid IDs, too little power, or a
+/// store failure.
+pub async fn authorize_put<F: FutureForm, K: Keyline<F>>(
+    keyline: &K,
+    requestor: PeerId,
+    sedimentree_id: SedimentreeId,
+) -> Result<(), PutDisallowedError<K::Error>> {
+    let requestor = peer_identifier(requestor).map_err(PutDisallowedError::InvalidRequestorId)?;
+    let doc =
+        sedimentree_identifier(sedimentree_id).map_err(PutDisallowedError::InvalidSedimentreeId)?;
+    let actual = effective_power(keyline, doc, requestor)
+        .await
+        .map_err(PutDisallowedError::Storage)?;
+    InsufficientPowerError::require(PUT_POWER, actual)?;
+    Ok(())
+}
+
+/// The subset of `ids` that `peer` may fetch, in order. A store failure
+/// denies that ID and is logged.
+pub async fn filter_authorized_fetch<F: FutureForm, K: Keyline<F>>(
+    keyline: &K,
+    peer: PeerId,
+    ids: Vec<SedimentreeId>,
+) -> Vec<SedimentreeId> {
+    let Ok(peer) = peer_identifier(peer) else {
+        return Vec::new();
+    };
+
+    let mut authorized = Vec::with_capacity(ids.len());
+    for id in ids {
+        match fetch(keyline, peer, id).await {
+            Ok(_) => authorized.push(id),
+            Err(FetchDisallowedError::Storage(e)) => {
+                tracing::warn!(sedimentree_id = %id, error = %e, "keyline store failed; denying fetch");
+            }
+            Err(
+                FetchDisallowedError::InvalidPeerId(_)
+                | FetchDisallowedError::InvalidSedimentreeId(_)
+                | FetchDisallowedError::InsufficientPower(_),
+            ) => {}
+        }
+    }
+    authorized
 }
 
 /// Parse a [`PeerId`] as a Keyline [`Identifier`].
@@ -257,7 +305,11 @@ impl InsufficientPowerError {
     }
 
     /// The granted power if `actual` is at least `required`.
-    fn require(required: Power, actual: Option<Power>) -> Result<Power, Self> {
+    ///
+    /// # Errors
+    ///
+    /// Returns the shortfall if `actual` is below `required` or `None`.
+    pub fn require(required: Power, actual: Option<Power>) -> Result<Power, Self> {
         actual
             .filter(|power| *power >= required)
             .ok_or(Self { required, actual })

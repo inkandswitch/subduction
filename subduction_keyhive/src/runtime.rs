@@ -12,9 +12,9 @@ use core::time::Duration;
 use async_lock::Mutex as AsyncMutex;
 use keyhive_core::{
     contact_card::ContactCard, keyhive::Keyhive, listener::no_listener::NoListener,
-    principal::identifier::Identifier, store::ciphertext::memory::MemoryCiphertextStore,
+    store::ciphertext::memory::MemoryCiphertextStore,
 };
-use keyhive_crypto::signer::memory::MemorySigner;
+use keyhive_crypto::{identifier::Identifier, signer::memory::MemorySigner};
 use rand::rngs::OsRng;
 use tokio::{
     sync::oneshot,
@@ -25,8 +25,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     KeyhivePeerId, KeyhiveProtocol,
+    change_id::ChangeId,
     connection::KeyhiveConnection,
-    handler::{KeyhiveCommand, run_actor},
+    handler::{KeyhiveCommand, RuntimeKeyline, run_actor},
     storage::KeyhiveStorage,
 };
 
@@ -34,22 +35,24 @@ use crate::{
 pub type LocalRuntimeKeyhive = Keyhive<
     future_form::Local,
     MemorySigner,
+    ChangeId,
     Vec<u8>,
-    Vec<u8>,
-    MemoryCiphertextStore<Vec<u8>, Vec<u8>>,
+    MemoryCiphertextStore<ChangeId, Vec<u8>>,
     NoListener,
     OsRng,
+    RuntimeKeyline,
 >;
 
 /// Concrete keyhive type for multi-threaded (`Send + Sync`) runtimes.
 pub type SendableRuntimeKeyhive = Keyhive<
     future_form::Sendable,
     MemorySigner,
+    ChangeId,
     Vec<u8>,
-    Vec<u8>,
-    MemoryCiphertextStore<Vec<u8>, Vec<u8>>,
+    MemoryCiphertextStore<ChangeId, Vec<u8>>,
     NoListener,
     OsRng,
+    RuntimeKeyline,
 >;
 
 /// Configuration for the keyhive runtime.
@@ -201,8 +204,9 @@ async fn run_local_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
 {
     let keyhive = match Keyhive::generate(
         signer,
-        MemoryCiphertextStore::<Vec<u8>, Vec<u8>>::new(),
+        MemoryCiphertextStore::<ChangeId, Vec<u8>>::new(),
         NoListener,
+        RuntimeKeyline::new(),
         OsRng,
     )
     .await
@@ -232,7 +236,7 @@ async fn run_local_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
     let shared = Arc::new(AsyncMutex::new(keyhive));
     let policy_keyhive = Arc::clone(&shared);
     let mut protocol =
-        KeyhiveProtocol::<_, Vec<u8>, Vec<u8>, _, _, _, Conn, Store, future_form::Local>::new(
+        KeyhiveProtocol::<_, ChangeId, Vec<u8>, _, _, _, _, Conn, Store, future_form::Local>::new(
             shared,
             storage,
             peer_id,
@@ -318,8 +322,9 @@ pub async fn init_sendable_keyhive(
 ) -> Result<(SendableRuntimeKeyhive, KeyhivePeerId, ContactCard), alloc::string::String> {
     let keyhive = Keyhive::generate(
         signer,
-        MemoryCiphertextStore::<Vec<u8>, Vec<u8>>::new(),
+        MemoryCiphertextStore::<ChangeId, Vec<u8>>::new(),
         NoListener,
+        RuntimeKeyline::new(),
         OsRng,
     )
     .await

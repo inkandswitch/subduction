@@ -8,16 +8,21 @@ use async_lock::Mutex;
 use future_form::Local;
 use futures::{FutureExt, future::LocalBoxFuture};
 use keyhive_core::{
-    access::Access, keyhive::Keyhive, listener::no_listener::NoListener,
+    content::heads::ContentHeads, keyhive::Keyhive, listener::no_listener::NoListener,
     principal::group::id::GroupId, store::ciphertext::memory::MemoryCiphertextStore,
 };
-use keyhive_crypto::signer::memory::MemorySigner;
+use keyhive_crypto::{identifier::Identifier, signer::memory::MemorySigner};
+use keyline::power::Power;
+use keyline_memory::MemoryKeyline;
 use rand::rngs::OsRng;
 
 use crate::{
     connection::KeyhiveConnection, peer_id::KeyhivePeerId, protocol::KeyhiveProtocol,
     signed_message::SignedMessage, storage::MemoryKeyhiveStorage,
 };
+
+/// The in-memory Keyline store used in tests.
+pub type TestKeyline = MemoryKeyline<ContentHeads<[u8; 32]>>;
 
 /// Type alias for the simple keyhive type used in tests.
 pub type SimpleKeyhive = Keyhive<
@@ -28,6 +33,7 @@ pub type SimpleKeyhive = Keyhive<
     MemoryCiphertextStore<[u8; 32], Vec<u8>>,
     NoListener,
     OsRng,
+    TestKeyline,
 >;
 
 /// An in-memory connection using async channels for testing.
@@ -111,14 +117,20 @@ impl KeyhiveConnection<Local> for ChannelConnection {
 pub async fn make_keyhive() -> SimpleKeyhive {
     let mut csprng = OsRng;
     let sk = MemorySigner::generate(&mut csprng);
-    Keyhive::generate(sk, MemoryCiphertextStore::new(), NoListener, csprng)
-        .await
-        .expect("failed to create keyhive")
+    Keyhive::generate(
+        sk,
+        MemoryCiphertextStore::new(),
+        NoListener,
+        TestKeyline::new(),
+        csprng,
+    )
+    .await
+    .expect("failed to create keyhive")
 }
 
 /// Get the peer ID for a keyhive instance.
 pub fn keyhive_peer_id(keyhive: &SimpleKeyhive) -> KeyhivePeerId {
-    let id: keyhive_core::principal::identifier::Identifier = keyhive.id().into();
+    let id: Identifier = keyhive.id().into();
     KeyhivePeerId::from_bytes(id.to_bytes())
 }
 
@@ -130,6 +142,7 @@ pub type TestProtocol = KeyhiveProtocol<
     MemoryCiphertextStore<[u8; 32], Vec<u8>>,
     NoListener,
     OsRng,
+    TestKeyline,
     ChannelConnection,
     MemoryKeyhiveStorage,
     Local,
@@ -342,7 +355,7 @@ pub async fn create_group_with_read_members(
     let group_id = kh.generate_group(vec![]).await.expect("generate_group");
     for member_id in member_ids {
         let identifier = member_id.to_identifier().expect("to_identifier");
-        kh.add_member(identifier, group_id, Access::Read, &[])
+        kh.add_member(identifier, group_id, Power::Read)
             .await
             .expect("add_member");
     }

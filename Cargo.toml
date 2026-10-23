@@ -97,14 +97,13 @@ iroh = "1.0"
 hyper = { version = "1.6", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
 js-sys = { version = "=0.3.98", default-features = false }
-keyhive_core = "0.7.0"
-keyhive_crypto = "0.2.1"
-# Keyline is unpublished; track the upstream branch until it is released.
-# Pin to a `rev` before merging. See `subduction_keyline/Cargo.toml` for the
-# matching git `keyhive_crypto`.
-keyhive_codec = { git = "https://github.com/inkandswitch/keyhive", branch = "split/11-keyline-in-core", default-features = false }
-keyline = { git = "https://github.com/inkandswitch/keyhive", branch = "split/11-keyline-in-core", default-features = false }
-keyline_memory = { git = "https://github.com/inkandswitch/keyhive", branch = "split/11-keyline-in-core", default-features = false }
+# Keyhive's Keyline branch (`split/11-keyline-in-core`), unpublished. Pinned to
+# a commit so builds are reproducible; bump `rev` to follow upstream.
+keyhive_codec = { git = "https://github.com/inkandswitch/keyhive", rev = "7b3339ed2c005bebfed9aa248bbf42d4f653af8f", default-features = false }
+keyhive_core = { git = "https://github.com/inkandswitch/keyhive", rev = "7b3339ed2c005bebfed9aa248bbf42d4f653af8f" }
+keyhive_crypto = { git = "https://github.com/inkandswitch/keyhive", rev = "7b3339ed2c005bebfed9aa248bbf42d4f653af8f", default-features = false }
+keyline = { git = "https://github.com/inkandswitch/keyhive", rev = "7b3339ed2c005bebfed9aa248bbf42d4f653af8f", default-features = false }
+keyline_memory = { git = "https://github.com/inkandswitch/keyhive", rev = "7b3339ed2c005bebfed9aa248bbf42d4f653af8f", default-features = false }
 metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
 metrics-process = "2.0"

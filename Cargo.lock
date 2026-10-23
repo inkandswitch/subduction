@@ -473,19 +473,18 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 [[package]]
 name = "beekem"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "556733f3f71101717862a384702a6ae6e320d9089d0f6a4aca07aeca3b6b512a"
+source = "git+https://github.com/inkandswitch/keyhive?rev=7b3339ed2c005bebfed9aa248bbf42d4f653af8f#7b3339ed2c005bebfed9aa248bbf42d4f653af8f"
 dependencies = [
  "blake3",
  "chacha20poly1305",
  "dupe",
  "ed25519-dalek 2.2.0",
  "future_form",
- "keyhive_crypto 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "keyhive_crypto",
  "nonempty",
  "rand 0.8.8",
  "serde",
- "thiserror 1.0.69",
+ "thiserror 2.0.20",
  "tracing",
 ]
 
@@ -1294,7 +1293,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 dependencies = [
  "generic-array",
- "rand_core 0.6.4",
  "typenum",
 ]
 
@@ -2988,7 +2986,7 @@ dependencies = [
 [[package]]
 name = "keyhive_codec"
 version = "0.1.0"
-source = "git+https://github.com/inkandswitch/keyhive?branch=split%2F11-keyline-in-core#7b3339ed2c005bebfed9aa248bbf42d4f653af8f"
+source = "git+https://github.com/inkandswitch/keyhive?rev=7b3339ed2c005bebfed9aa248bbf42d4f653af8f#7b3339ed2c005bebfed9aa248bbf42d4f653af8f"
 dependencies = [
  "bijoux",
  "serde",
@@ -2998,9 +2996,9 @@ dependencies = [
 [[package]]
 name = "keyhive_core"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ad72233ea8a7de1abc90854e7bae9e0c6169f66d0366a6cdb463fbb1d8154c4"
+source = "git+https://github.com/inkandswitch/keyhive?rev=7b3339ed2c005bebfed9aa248bbf42d4f653af8f#7b3339ed2c005bebfed9aa248bbf42d4f653af8f"
 dependencies = [
+ "async-lock",
  "beekem",
  "bincode",
  "blake3",
@@ -3012,12 +3010,14 @@ dependencies = [
  "ed25519-dalek 2.2.0",
  "future_form",
  "futures",
- "keyhive_crypto 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "keyhive_codec",
+ "keyhive_crypto",
+ "keyline",
  "nonempty",
  "rand 0.8.8",
  "serde",
  "signature 2.2.0",
- "thiserror 1.0.69",
+ "thiserror 2.0.20",
  "tracing",
  "x25519-dalek",
 ]
@@ -3025,29 +3025,7 @@ dependencies = [
 [[package]]
 name = "keyhive_crypto"
 version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af2feeaee7929bfabd6ac79a36d86ebbeb648cc137267e6c5b1465d2f657c313"
-dependencies = [
- "bincode",
- "blake3",
- "chacha20poly1305",
- "derive_more 1.0.0",
- "dupe",
- "ed25519-dalek 2.2.0",
- "future_form",
- "futures",
- "rand 0.8.8",
- "serde",
- "signature 2.2.0",
- "thiserror 1.0.69",
- "tracing",
- "x25519-dalek",
-]
-
-[[package]]
-name = "keyhive_crypto"
-version = "0.2.1"
-source = "git+https://github.com/inkandswitch/keyhive?branch=split%2F11-keyline-in-core#7b3339ed2c005bebfed9aa248bbf42d4f653af8f"
+source = "git+https://github.com/inkandswitch/keyhive?rev=7b3339ed2c005bebfed9aa248bbf42d4f653af8f#7b3339ed2c005bebfed9aa248bbf42d4f653af8f"
 dependencies = [
  "arbitrary",
  "bincode",
@@ -3070,7 +3048,7 @@ dependencies = [
 [[package]]
 name = "keyline"
 version = "0.1.0"
-source = "git+https://github.com/inkandswitch/keyhive?branch=split%2F11-keyline-in-core#7b3339ed2c005bebfed9aa248bbf42d4f653af8f"
+source = "git+https://github.com/inkandswitch/keyhive?rev=7b3339ed2c005bebfed9aa248bbf42d4f653af8f#7b3339ed2c005bebfed9aa248bbf42d4f653af8f"
 dependencies = [
  "arbitrary",
  "bijoux",
@@ -3078,7 +3056,7 @@ dependencies = [
  "ed25519-dalek 2.2.0",
  "future_form",
  "keyhive_codec",
- "keyhive_crypto 0.2.1 (git+https://github.com/inkandswitch/keyhive?branch=split%2F11-keyline-in-core)",
+ "keyhive_crypto",
  "serde",
  "sha2 0.10.9",
  "thiserror 2.0.20",
@@ -3088,13 +3066,13 @@ dependencies = [
 [[package]]
 name = "keyline_memory"
 version = "0.1.0"
-source = "git+https://github.com/inkandswitch/keyhive?branch=split%2F11-keyline-in-core#7b3339ed2c005bebfed9aa248bbf42d4f653af8f"
+source = "git+https://github.com/inkandswitch/keyhive?rev=7b3339ed2c005bebfed9aa248bbf42d4f653af8f#7b3339ed2c005bebfed9aa248bbf42d4f653af8f"
 dependencies = [
  "async-lock",
  "future_form",
  "futures",
  "keyhive_codec",
- "keyhive_crypto 0.2.1 (git+https://github.com/inkandswitch/keyhive?branch=split%2F11-keyline-in-core)",
+ "keyhive_crypto",
  "keyline",
  "once_cell",
  "tracing",
@@ -5544,7 +5522,7 @@ dependencies = [
  "hyper-util",
  "iroh",
  "keyhive_core",
- "keyhive_crypto 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "keyhive_crypto",
  "metrics",
  "metrics-exporter-prometheus",
  "metrics-process",
@@ -5745,8 +5723,11 @@ dependencies = [
  "ed25519-dalek 2.2.0",
  "future_form",
  "futures",
+ "keyhive_codec",
  "keyhive_core",
- "keyhive_crypto 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "keyhive_crypto",
+ "keyline",
+ "keyline_memory",
  "nonempty",
  "rand 0.8.8",
  "sedimentree_core",
@@ -5755,6 +5736,7 @@ dependencies = [
  "serde_json",
  "subduction_core",
  "subduction_crypto",
+ "subduction_keyline",
  "testresult",
  "thiserror 2.0.20",
  "tokio",
@@ -5773,7 +5755,7 @@ dependencies = [
  "future_form",
  "futures",
  "keyhive_codec",
- "keyhive_crypto 0.2.1 (git+https://github.com/inkandswitch/keyhive?branch=split%2F11-keyline-in-core)",
+ "keyhive_crypto",
  "keyline",
  "keyline_memory",
  "sedimentree_core",
