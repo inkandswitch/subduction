@@ -14,7 +14,7 @@ use crate::peer_id::KeyhivePeerId;
 use alloc::string::ToString;
 use keyhive_core::contact_card::ContactCard;
 #[cfg(all(feature = "serde", feature = "std"))]
-use keyhive_crypto::signed::Signed;
+use keyhive_crypto::signed::SerdeSigned;
 
 /// Error type for CBOR serialization/deserialization.
 #[derive(Debug, Clone)]
@@ -34,7 +34,7 @@ impl std::error::Error for CborError {}
 /// ```text
 /// CBOR map {
 ///   "contactCard": <text string>,   // JSON-encoded ContactCard, "" when absent
-///   "signed":      <byte string>,   // bincode-serialised Signed<Vec<u8>>
+///   "signed":      <byte string>,   // bincode-serialised SerdeSigned<Vec<u8>>
 /// }
 /// ```
 #[derive(Debug, Clone)]
@@ -48,7 +48,7 @@ pub struct SignedMessage {
     )]
     contact_card: Option<ContactCard>,
 
-    /// Bincode-serialized `Signed<Vec<u8>>`.
+    /// Bincode-serialized `SerdeSigned<Vec<u8>>`.
     #[cfg_attr(feature = "serde", serde(with = "serde_bytes"))]
     signed: Vec<u8>,
 }
@@ -123,7 +123,7 @@ impl SignedMessage {
 
     /// Verify the signature and sender identity, consuming the signed message.
     ///
-    /// Deserializes the inner `Signed<Vec<u8>>` (bincode), verifies the
+    /// Deserializes the inner `SerdeSigned<Vec<u8>>` (bincode), verifies the
     /// cryptographic signature, checks that the signer matches
     /// `expected_sender`, and returns a [`VerifiedMessage`] containing the
     /// raw payload bytes and optional contact card.
@@ -137,7 +137,7 @@ impl SignedMessage {
         self,
         expected_sender: &KeyhivePeerId,
     ) -> Result<VerifiedMessage, VerificationError> {
-        let signed: Signed<Vec<u8>> = bincode::deserialize(self.signed.as_slice())
+        let signed: SerdeSigned<Vec<u8>> = bincode::deserialize(self.signed.as_slice())
             .map_err(|e| VerificationError::Deserialization(e.to_string()))?;
 
         signed
@@ -254,10 +254,12 @@ mod tests {
                 MemoryCiphertextStore<[u8; 32], Vec<u8>>,
                 NoListener,
                 rand::rngs::OsRng,
+                crate::test_utils::TestKeyline,
             > = Keyhive::generate(
                 signer,
                 MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),
                 NoListener,
+                crate::test_utils::TestKeyline::new(),
                 rand::rngs::OsRng,
             )
             .await

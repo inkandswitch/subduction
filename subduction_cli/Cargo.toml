@@ -35,7 +35,7 @@ hyper = { workspace = true, features = ["http1", "server"] }
 hyper-util = { workspace = true, features = ["tokio", "http1", "server-auto"] }
 iroh = { workspace = true }
 keyhive_core = { workspace = true }
-keyhive_crypto = { workspace = true }
+keyhive_crypto = { workspace = true, features = ["std"] }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 metrics-process = { workspace = true, optional = true }

@@ -7,6 +7,7 @@ use std::sync::Arc;
 use async_lock::Mutex as AsyncMutex;
 use dupe::Dupe;
 use futures::{FutureExt, future::BoxFuture};
+use keyhive_crypto::identifier::InvalidIdentifier;
 use sedimentree_core::id::SedimentreeId;
 use subduction_core::{
     peer::id::PeerId,
@@ -14,13 +15,16 @@ use subduction_core::{
 };
 use subduction_crypto::verified_author::VerifiedAuthor;
 use subduction_keyhive::{
+    handler::RuntimeKeyline,
     policy::{
-        ConnectionDisallowedError, FetchDisallowedError, PutDisallowedError,
-        authorize_connect_with, authorize_fetch_with, authorize_put_with,
-        filter_authorized_fetch_with,
+        AccessError, FetchDisallowedError, PutDisallowedError, authorize_connect_with,
+        authorize_fetch_with, authorize_put_with, filter_authorized_fetch_with,
     },
     runtime::SendableRuntimeKeyhive,
 };
+
+/// What a Keyhive membership query fails with in the CLI runtime.
+type CliAccessError = AccessError<future_form::Sendable, RuntimeKeyline>;
 
 fn is_legacy(id: &SedimentreeId) -> bool {
     id.as_bytes()[16..].iter().all(|&b| b == 0)
@@ -44,7 +48,7 @@ impl CliKeyhivePolicyHandle {
 }
 
 impl ConnectionPolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
-    type ConnectionDisallowed = ConnectionDisallowedError;
+    type ConnectionDisallowed = InvalidIdentifier;
 
     fn authorize_connect(
         &self,
@@ -63,8 +67,8 @@ impl ConnectionPolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
 }
 
 impl StoragePolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
-    type FetchDisallowed = FetchDisallowedError;
-    type PutDisallowed = PutDisallowedError;
+    type FetchDisallowed = FetchDisallowedError<CliAccessError>;
+    type PutDisallowed = PutDisallowedError<CliAccessError>;
 
     fn authorize_fetch(
         &self,

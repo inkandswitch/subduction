@@ -34,6 +34,8 @@ pub mod all_agent_events;
 #[cfg(feature = "serde")]
 mod cache;
 #[cfg(feature = "serde")]
+pub mod change_id;
+#[cfg(feature = "serde")]
 pub mod protocol;
 #[cfg(feature = "serde")]
 mod serde_compat;

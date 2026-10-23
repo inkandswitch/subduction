@@ -15,12 +15,13 @@ use alloc::{
 
 use dupe::Dupe;
 use keyhive_core::{
+    content::heads::ContentHeads,
     keyhive::Keyhive,
     listener::membership::MembershipListener,
-    principal::public::Public,
     store::ciphertext::{CiphertextStore, CiphertextStoreExt},
 };
 use keyhive_crypto::{content::reference::ContentRef, signer::async_signer::AsyncSigner};
+use keyline::contract::Keyline;
 
 use crate::{
     KeyhivePeerId, KeyhiveProtocol, ProtocolError,
@@ -151,6 +152,7 @@ impl PeriodicEventCache {
         CipherStore,
         Listener,
         Rng,
+        KeylineStore,
         Conn,
         Store,
         Async,
@@ -163,6 +165,7 @@ impl PeriodicEventCache {
             CipherStore,
             Listener,
             Rng,
+            KeylineStore,
             Conn,
             Store,
             Async,
@@ -175,14 +178,17 @@ impl PeriodicEventCache {
         CipherStore: CiphertextStore<Async, CRef, Plaintext>
             + CiphertextStoreExt<Async, CRef, Plaintext>
             + Clone,
-        Listener: MembershipListener<Async, Signer, CRef>,
+        Listener: MembershipListener<Async, CRef>,
         Rng: rand::CryptoRng + rand::RngCore,
+        KeylineStore: Keyline<Async, RetentionWatermark = ContentHeads<CRef>>,
+        KeylineStore::Error: Send + Sync + 'static,
+        CRef: keyhive_codec::traits::Encode + keyhive_codec::traits::StreamDecode,
         Conn: KeyhiveConnection<Async>,
         Conn::SendError: 'static,
         Conn::DisconnectError: 'static,
         Store: KeyhiveStorage<Async>,
         Async: future_form::FutureForm,
-        Keyhive<Async, Signer, CRef, Plaintext, CipherStore, Listener, Rng>: Dupe,
+        Keyhive<Async, Signer, CRef, Plaintext, CipherStore, Listener, Rng, KeylineStore>: Dupe,
     {
         let total = protocol.total_ops().await;
         if self.last_total_ops == Some(total) {
@@ -196,14 +202,10 @@ impl PeriodicEventCache {
             self.event_data.entry(h).or_insert(data);
         }
 
-        // The public set is unioned unconditionally into every pair
-        // query, so it lives in its own field.
-        let mut new_agent_hashes = all_agent_events.agent_hashes;
-        let public_peer = KeyhivePeerId::from_identifier(&Public.id());
-        let new_public = new_agent_hashes.remove(&public_peer).unwrap_or_default();
-
-        self.agent_hashes = new_agent_hashes;
-        self.public_hashes = new_public;
+        // Keyline has no public agent, so the public set stays empty.
+        // FIXME: remove the public set once the retrofit settles.
+        self.agent_hashes = all_agent_events.agent_hashes;
+        self.public_hashes = BTreeSet::new();
         // Materialize the public set once per refresh so per-request serving
         // can share it by `Arc` instead of rebuilding it.
         self.public_map = Arc::new(self.build_public_map());
