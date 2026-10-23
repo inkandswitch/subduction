@@ -40,7 +40,7 @@ use core::ops::Deref;
 
 use crate::{
     collections::Set,
-    crypto::fingerprint::Fingerprint,
+    crypto::fingerprint::{Fingerprint, FingerprintSeed},
     depth::DepthMetric,
     fragment::Fragment,
     loose_commit::{LooseCommit, id::CommitId},
@@ -200,13 +200,20 @@ impl MinimizedSedimentree {
 
     /// Diff the minimal tree against a requestor's summary, as
     /// [`Sedimentree::diff_remote_fingerprints`], but echo back only the
-    /// fingerprints of items this tree does not hold.
+    /// fingerprints of items this tree does not hold, and don't offer loose
+    /// commits that a fragment the requestor listed carries.
     ///
     /// The minimal tree is what we offer; what we hold also includes the
     /// items minimization dropped. Echoing one of those (e.g. a loose commit
     /// a kept fragment covers) would ask the requestor to upload data we
     /// already have. Items held only inside a fragment's blob, never as a
     /// loose commit, cannot be recognized and are still echoed.
+    ///
+    /// A summary carries no fragment boundaries, so what a requestor's
+    /// fragment carries is otherwise only known for fragments we hold too.
+    /// But a requestor fragment we lack, whose head we hold as a loose
+    /// commit, carries that head's range, and we don't offer the commits
+    /// that belong to no other range.
     pub fn responder_diff<M: DepthMetric>(
         &mut self,
         depth_metric: &M,
@@ -214,6 +221,19 @@ impl MinimizedSedimentree {
     ) -> FingerprintDiff<'_> {
         self.ensure_minimized(depth_metric);
         let mut diff = self.tree.diff_remote_fingerprints(remote);
+        let seed = remote.seed();
+        if !diff.local_only_commits.is_empty() && !diff.remote_only_fragment_fingerprints.is_empty()
+        {
+            let carried = carried_by_requestor_fragments(
+                &self.tree,
+                depth_metric,
+                seed,
+                &diff.remote_only_fragment_fingerprints,
+            );
+            diff.local_only_commits
+                .retain(|(id, _)| !carried.contains(*id));
+        }
+
         let mut unknown_commits: BTreeSet<Fingerprint<CommitId>> = diff
             .remote_only_commit_fingerprints
             .iter()
@@ -232,7 +252,6 @@ impl MinimizedSedimentree {
         // the (usually few) unknown fingerprints, rather than collecting a
         // set of everything held. Fragment heads count as held commits: a
         // fragment's blob carries its head.
-        let seed = remote.seed();
         if !unknown_commits.is_empty() {
             for id in &self.held_commits {
                 unknown_commits.remove(&Fingerprint::new(seed, id));
@@ -255,6 +274,76 @@ impl MinimizedSedimentree {
     pub fn into_tree(self) -> Sedimentree {
         self.tree
     }
+}
+
+/// The loose commits of `tree` that the requestor's fragments we lack
+/// (`fragment_fingerprints`) are known to carry.
+///
+/// This is the round in which a writer that first synced a new fragment's
+/// commits loose, head included, sends the fragment itself: its own tree has
+/// dropped the commits the fragment covers, but ours still holds them loose
+/// until we ingest the fragment. Offering them would send back what the
+/// fragment already carries.
+///
+/// A fragment covers the range its head starts, as in [`Sedimentree::minimize`]:
+/// the head and its ancestors down to the next boundary commit. A commit can
+/// belong to several ranges, though, and is only known to be carried if
+/// every range it belongs to is headed by such a fragment. A commit also
+/// reachable from another range's head (a boundary we did not match, or a
+/// tip) may lie outside the fragment: Automerge's fragments exclude the
+/// ancestors of their boundary, and a concurrent branch reaches those
+/// without crossing a boundary commit.
+///
+/// This trusts the requestor's list. A requestor holding a fragment that
+/// does not carry its head's range (a forged one) is not offered that range
+/// while we hold it loose; see the Batch Sync design doc.
+fn carried_by_requestor_fragments<M: DepthMetric>(
+    tree: &Sedimentree,
+    depth_metric: &M,
+    seed: &FingerprintSeed,
+    fragment_fingerprints: &[Fingerprint<CommitId>],
+) -> Set<CommitId> {
+    let requestor_heads: BTreeSet<&Fingerprint<CommitId>> = fragment_fingerprints.iter().collect();
+    let is_boundary = |id: &CommitId| depth_metric.to_depth(*id).is_boundary();
+    let (matched, unmatched): (Vec<CommitId>, Vec<CommitId>) = tree
+        .commits
+        .keys()
+        .copied()
+        .filter(is_boundary)
+        .partition(|id| requestor_heads.contains(&Fingerprint::new(seed, id)));
+    if matched.is_empty() {
+        return Set::new();
+    }
+
+    // Commits reachable from `heads` without crossing a boundary commit.
+    let ranges = |heads: Vec<CommitId>| {
+        let mut members: Set<CommitId> = Set::new();
+        let mut stack = heads;
+        while let Some(id) = stack.pop() {
+            if !members.insert(id) {
+                continue;
+            }
+            if let Some(commit) = tree.commits.get(&id) {
+                stack.extend(commit.parents().iter().filter(|p| !is_boundary(p)));
+            }
+        }
+        members
+    };
+
+    let has_child: Set<CommitId> = tree
+        .commits
+        .values()
+        .flat_map(|commit| commit.parents().iter().copied())
+        .collect();
+    let tips = tree
+        .commits
+        .keys()
+        .filter(|id| !has_child.contains(*id) && !is_boundary(id))
+        .copied();
+    let elsewhere = ranges(unmatched.into_iter().chain(tips).collect());
+    let mut carried = ranges(matched);
+    carried.retain(|id| !elsewhere.contains(id));
+    carried
 }
 
 impl Deref for MinimizedSedimentree {
@@ -282,7 +371,7 @@ mod tests {
         fragment::Fragment,
         id::SedimentreeId,
         loose_commit::{LooseCommit, id::CommitId},
-        sedimentree::Sedimentree,
+        sedimentree::{FingerprintSummary, Sedimentree},
         test_utils::{commit_id_with_depth, make_fragment_at_depth},
     };
 
@@ -488,6 +577,94 @@ mod tests {
         let diff = m.responder_diff(&CountLeadingZeroBytes, &remote);
         assert!(diff.remote_only_commit_fingerprints.is_empty());
         assert!(diff.remote_only_fragment_fingerprints.is_empty());
+    }
+
+    /// The commits each requestor diff offers.
+    fn offered(diff: &crate::sedimentree::FingerprintDiff<'_>) -> BTreeSet<CommitId> {
+        diff.local_only_commits.iter().map(|(id, _)| **id).collect()
+    }
+
+    /// Loose commits in sedimentree `[5; 32]` with the given parents.
+    fn commits(edges: &[(CommitId, &[CommitId])]) -> Vec<LooseCommit> {
+        let meta = BlobMeta::new(&Blob::new(vec![5]));
+        edges
+            .iter()
+            .map(|(id, parents)| {
+                LooseCommit::new(
+                    SedimentreeId::new([5; 32]),
+                    *id,
+                    parents.iter().copied().collect(),
+                    meta,
+                )
+            })
+            .collect()
+    }
+
+    /// A summary listing only a fragment headed by `head` with `boundary`.
+    fn requestor_fragment(head: CommitId, boundary: CommitId) -> FingerprintSummary {
+        let fragment = Fragment::new(
+            SedimentreeId::new([5; 32]),
+            head,
+            BTreeSet::from([boundary]),
+            &[],
+            BlobMeta::new(&Blob::new(vec![5])),
+        );
+        Sedimentree::new(vec![fragment], vec![]).fingerprint_summarize(&FingerprintSeed::new(3, 4))
+    }
+
+    /// A requestor sending a fragment we lack, headed by a commit we hold
+    /// loose, is not offered the loose commits of that commit's range, only
+    /// what lies below the range's boundary.
+    #[test]
+    fn diff_does_not_offer_the_range_of_a_requestor_fragment() {
+        let below = commit_id_with_depth(1, 50);
+        let x1 = CommitId::new([0x51; 32]);
+        let x2 = CommitId::new([0x52; 32]);
+        let head = commit_id_with_depth(1, 53);
+        let full = Sedimentree::new(
+            vec![],
+            commits(&[(below, &[]), (x1, &[below]), (x2, &[x1]), (head, &[x2])]),
+        );
+        let remote = requestor_fragment(head, below);
+        assert_eq!(
+            offered(&full.diff_remote_fingerprints(&remote)),
+            BTreeSet::from([below, x1, x2]),
+            "precondition: the plain diff offers the fragment's range"
+        );
+
+        let mut m = MinimizedSedimentree::new(full);
+        let diff = m.responder_diff(&CountLeadingZeroBytes, &remote);
+        assert_eq!(offered(&diff), BTreeSet::from([below]));
+    }
+
+    /// Automerge's fragment headed `head` with boundary `boundary` carries
+    /// `head`, `merge` and `branch`, but not the boundary's ancestors `y`
+    /// and `root`, which the concurrent `branch` reaches without crossing
+    /// the boundary. A requestor holding only that fragment lacks them, so
+    /// they are still offered: they also belong to the boundary's range,
+    /// which no requestor fragment heads.
+    #[test]
+    fn diff_offers_what_a_concurrent_branch_reaches_below_the_boundary() {
+        let root = CommitId::new([0x40; 32]);
+        let y = CommitId::new([0x41; 32]);
+        let boundary = commit_id_with_depth(1, 60);
+        let branch = CommitId::new([0x42; 32]);
+        let merge = CommitId::new([0x43; 32]);
+        let head = commit_id_with_depth(1, 61);
+        let full = Sedimentree::new(
+            vec![],
+            commits(&[
+                (root, &[]),
+                (y, &[root]),
+                (boundary, &[y]),
+                (branch, &[y]),
+                (merge, &[boundary, branch]),
+                (head, &[merge]),
+            ]),
+        );
+        let mut tree = MinimizedSedimentree::new(full);
+        let diff = tree.responder_diff(&CountLeadingZeroBytes, &requestor_fragment(head, boundary));
+        assert_eq!(offered(&diff), BTreeSet::from([root, y, boundary]));
     }
 
     #[test]

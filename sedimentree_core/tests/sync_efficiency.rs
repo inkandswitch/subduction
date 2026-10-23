@@ -32,7 +32,9 @@
 //! The same histories in [`Layout::Full`] (head also stored loose) take the
 //! working path, and those tests guard it, over both a linear history and
 //! a branchy one (merges inside fragments, a depth-2 fragment with
-//! checkpoints, and the depth-1 fragments it supports).
+//! checkpoints, and the depth-1 fragments it supports). A writer that syncs
+//! a new fragment's head loose before the fragment produces that layout;
+//! the targets stay for history already stored without loose heads.
 //!
 //! # Known bug ORDER: minimizing as items arrive depends on their order
 //!

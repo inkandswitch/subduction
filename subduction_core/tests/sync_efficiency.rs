@@ -27,7 +27,10 @@
 //!   peers cost `O(change)`.
 //! * **C2**: coverage pruning is broken for automerge-repo's layout
 //!   (fragment heads never stored loose), so trees never minimize, and the
-//!   commit before each fragment head shows up as a spurious head.
+//!   commit before each fragment head shows up as a spurious head. A writer
+//!   that syncs a new fragment's head loose before the fragment produces
+//!   [`Layout::Full`] instead, which prunes; the targets stay for history
+//!   already stored in the old layout.
 //! * **C13**: `BatchSyncRequest`/`Response` (and `RemoveSubscriptions`)
 //!   item counts are `u16` and wrap at 65,536.
 //! * **INGEST** (fixed, guarded): newness of a received commit was judged
@@ -39,6 +42,10 @@
 //!   commit it already holds inside a fragment, because the set it diffed
 //!   against was its minimized tree (loose commits + fragment heads only).
 //!   It now echoes back only fingerprints of items it does not hold.
+//! * **OFFER** (fixed, guarded): in the round that delivers a new fragment
+//!   whose loose commits (head included) the responder already holds, the
+//!   responder offered all of them back, because it knows a fragment's
+//!   boundary only once it holds the fragment.
 //!
 //! Waiting: after each operation the tests wait for the wire to go quiet
 //! (no new frame for [`QUIET_FOR`]). That bounds settling only; nothing
@@ -1232,6 +1239,90 @@ async fn duplicate_push_is_not_rebroadcast() {
         recorded.breakdown()
     );
     assert_eq!(bob.heads().await, server.heads().await);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Scenario: a writer uploads each fragment after the loose commits it covers
+// ════════════════════════════════════════════════════════════════════════
+
+/// The upload order that lets a server prune automerge-repo's ranges: for
+/// each fragment in the order it formed, alice syncs the commits up to its
+/// head loose, head included, then stores the fragment (her own tree drops
+/// the commits it covers) and syncs again. Returns the loose commits the
+/// server sent alice in the rounds that delivered fragments, a breakdown of
+/// those rounds, and the server's loose commits at the end.
+async fn fragments_after_their_commits(history: &History) -> (usize, String, BTreeSet<CommitId>) {
+    let wire = Wire::default();
+    let server = Peer::new("server", 1);
+    let alice = Peer::new("alice", 2);
+    alice.connect(&server, &wire).await;
+    let index: BTreeMap<CommitId, usize> = history
+        .commits
+        .iter()
+        .enumerate()
+        .map(|(i, (c, _))| (c.head(), i))
+        .collect();
+    let (mut uploaded, mut sent, mut breakdown) = (0, 0, String::new());
+    for (fragment, blob) in &history.fragments {
+        let head = index[&fragment.head()];
+        alice
+            .node
+            .store_built_batch(SID, history.commits[uploaded..=head].to_vec(), Vec::new())
+            .await
+            .expect("store loose commits");
+        uploaded = head + 1;
+        alice.sync_with(&server, &wire).await;
+        drop(wire.take());
+
+        alice
+            .node
+            .store_built_batch(SID, Vec::new(), vec![(fragment.clone(), blob.clone())])
+            .await
+            .expect("store fragment");
+        alice.sync_with(&server, &wire).await;
+        let recorded = wire.take();
+        sent += recorded
+            .responses_on("server->alice")
+            .map(|r| r.response_commits.len())
+            .sum::<usize>();
+        breakdown.push_str(&recorded.breakdown());
+    }
+    alice
+        .node
+        .store_built_batch(SID, history.commits[uploaded..].to_vec(), Vec::new())
+        .await
+        .expect("store the tail");
+    alice.sync_with(&server, &wire).await;
+    assert_eq!(
+        server.fragment_heads().await,
+        alice.fragment_heads().await,
+        "the server holds alice's fragments"
+    );
+    (sent, breakdown, server.loose_ids().await)
+}
+
+/// Ideal: the server drops the loose commits each new fragment covers, and
+/// the round that delivers the fragment sends none of them back. alice no
+/// longer lists them, and the server only learns the fragment's boundary
+/// once it has the fragment, so it used to offer the whole range (OFFER);
+/// it now takes a requester fragment whose head it holds loose to carry
+/// that head's range. Guard.
+#[tokio::test]
+async fn fragment_after_its_commits_sends_nothing_back() {
+    for history in [History::linear(N), History::branchy(BRANCHY_N)] {
+        let (sent, breakdown, server_loose) = fragments_after_their_commits(&history).await;
+        assert_eq!(
+            sent, 0,
+            "{:?}: the server sent alice {sent} loose commit(s) her new fragments carry:\n{breakdown}",
+            history.shape,
+        );
+        assert_eq!(
+            server_loose,
+            history.tail(),
+            "{:?}: the server pruned every range",
+            history.shape
+        );
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════
