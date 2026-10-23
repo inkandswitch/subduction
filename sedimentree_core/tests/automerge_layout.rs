@@ -10,6 +10,18 @@
 //! therefore reach commits the fragment does not carry, and these tests
 //! replay random DAGs with forks and merges through an emulation of that
 //! layout to check that no such walk hides data.
+//!
+//! # Known bug UNCARRIED: `minimize` can drop commits no kept fragment carries
+//!
+//! `minimize` drops a loose commit when every range it belongs to is
+//! covered by a kept fragment. A fragment formed on top of others (its
+//! boundary) does not carry the ancestors of that boundary a concurrent
+//! branch reaches, but those commits are in its range all the same. As long
+//! as the fragments it was formed on are held too, one of them carries
+//! them. A node holding the fragment without them, which arrival out of
+//! formation order produces until they arrive, drops those commits from
+//! what it offers, and its readers cannot get them from it. They stay in
+//! storage and held.
 
 #![allow(
     clippy::cast_possible_truncation,
@@ -30,6 +42,7 @@ use sedimentree_core::{
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
     sedimentree::{Sedimentree, minimized::MinimizedSedimentree},
+    test_utils::sync_budget::known_bug,
 };
 
 /// Random histories per test, alternating 300 and 800 commits.
@@ -212,6 +225,18 @@ fn dependency_closed<'a>(rng: &mut SmallRng, fragments: &'a [AmFragment]) -> Vec
     subset
 }
 
+/// The fragments formed first, up to a random point.
+fn formed_first<'a>(rng: &mut SmallRng, fragments: &'a [AmFragment]) -> Vec<&'a AmFragment> {
+    let k = rng.gen_range(0..=fragments.len());
+    fragments.iter().take(k).collect()
+}
+
+/// A random subset of `fragments`, regardless of what each was formed on.
+fn any_subset<'a>(rng: &mut SmallRng, fragments: &'a [AmFragment]) -> Vec<&'a AmFragment> {
+    let p: f64 = rng.gen_range(0.0..1.0);
+    fragments.iter().filter(|_| rng.gen_bool(p)).collect()
+}
+
 fn tree(dag: &Dag, fragments: &[&AmFragment], loose: &BTreeSet<usize>) -> Sedimentree {
     Sedimentree::new(
         fragments.iter().map(|f| f.to_fragment(dag)).collect(),
@@ -306,4 +331,82 @@ fn withheld_commits_are_ones_the_requestor_has() {
     }
     eprintln!("withheld {withheld_total} commits over {SEEDS} seeds");
     assert!(withheld_total > 0, "the scenario never withheld anything");
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Minimizing: a node drops only what a fragment it keeps carries
+// ════════════════════════════════════════════════════════════════════════
+
+/// Over random histories, the loose commits `minimize` drops that no
+/// fragment it keeps carries, and the number of seeds with any. The node
+/// holds the fragments `pick` chooses, every fragment head loose, and a
+/// random share of the other commits loose.
+fn uncarried_drops(
+    pick: impl for<'a> Fn(&mut SmallRng, &'a [AmFragment]) -> Vec<&'a AmFragment>,
+) -> (usize, u64) {
+    let (mut dropped, mut seeds) = (0, 0);
+    for seed in 0..SEEDS {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let dag = Dag::random(&mut rng, if seed % 2 == 0 { 300 } else { 800 });
+        let fragments = am_fragments(&dag);
+        let loose_share: f64 = rng.gen_range(0.3..1.0);
+        let mut loose: BTreeSet<usize> = (0..dag.len())
+            .filter(|i| dag.depth[*i] == 0 && rng.gen_bool(loose_share))
+            .collect();
+        loose.extend(fragments.iter().map(|f| f.head));
+        let held = pick(&mut rng, &fragments);
+
+        let minimal = tree(&dag, &held, &loose).minimize(&CountLeadingZeroBytes);
+        let kept: BTreeSet<CommitId> = minimal.loose_commits().map(LooseCommit::head).collect();
+        let kept_fragments: BTreeSet<CommitId> = minimal.fragments().map(Fragment::head).collect();
+        let carried: BTreeSet<CommitId> = held
+            .iter()
+            .filter(|f| kept_fragments.contains(&dag.id(f.head)))
+            .flat_map(|f| dag.ids(&f.members))
+            .collect();
+        let uncarried = dag
+            .ids(&loose)
+            .into_iter()
+            .filter(|c| !kept.contains(c) && !carried.contains(c))
+            .count();
+        dropped += uncarried;
+        seeds += u64::from(uncarried > 0);
+    }
+    (dropped, seeds)
+}
+
+/// A node that holds each fragment together with the fragments it was
+/// formed on (every fragment, a dependency-closed subset, or those formed
+/// first) drops nothing a kept fragment does not carry. Guard.
+#[test]
+fn minimize_with_dependency_closed_fragments_drops_only_carried_commits() {
+    for (name, (dropped, seeds)) in [
+        (
+            "all",
+            uncarried_drops(|_, fragments| fragments.iter().collect()),
+        ),
+        ("dependency-closed", uncarried_drops(dependency_closed)),
+        ("formed first", uncarried_drops(formed_first)),
+    ] {
+        assert_eq!(
+            dropped, 0,
+            "{name}: minimize dropped {dropped} commit(s) no kept fragment carries, in {seeds} of {SEEDS} seeds"
+        );
+    }
+}
+
+/// Ideal: whatever fragments a node holds, `minimize` drops nothing a kept
+/// fragment does not carry. Fails for nodes holding a fragment without the
+/// fragments it was formed on (UNCARRIED).
+#[test]
+#[should_panic(expected = "KNOWN BUG UNCARRIED:")]
+fn minimize_drops_only_carried_commits() {
+    let (dropped, seeds) = uncarried_drops(any_subset);
+    known_bug(
+        "UNCARRIED",
+        dropped == 0,
+        &format!(
+            "minimize dropped {dropped} commit(s) no kept fragment carries, in {seeds} of {SEEDS} seeds"
+        ),
+    );
 }

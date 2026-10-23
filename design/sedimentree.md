@@ -235,6 +235,19 @@ In the round that delivers that fragment, a responder applies the same rule
 to the requester's fragments it does not hold yet, so as not to send the range
 back (see [Batch Sync](sync/batch.md#diffing-algorithm)).
 
+Coverage takes a fragment to carry every commit of its head's range. That
+holds for fragments built by sedimentree's own decomposition, but not quite
+for Automerge's: a fragment formed on top of others leaves out the ancestors
+of its boundary, including those a concurrent branch reaches without crossing
+a boundary commit, which are in its range all the same. While a node also
+holds the fragments it was formed on, one of those carries them. A node that
+holds such a fragment without them (as arrival out of formation order leaves
+it, until they arrive) drops those commits from what it offers, though no
+fragment it keeps carries them, and its readers cannot get them from it. They
+stay in storage and held. This is a known bug (UNCARRIED, pinned in
+`sedimentree_core/tests/automerge_layout.rs`), and see
+[T9](security/threats.md#t9-coverage-poisoning) for its adversarial form.
+
 A node keeps its trees in minimal form, and remembers the heads of the
 commits and fragments minimization dropped (`MinimizedSedimentree`). It still
 holds them, so receiving one again is not new and it is not re-added.

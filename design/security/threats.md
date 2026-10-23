@@ -99,3 +99,35 @@
 - Content-addressed storage reveals nothing about plaintext
 
 **Residual risk:** Metadata analysis (size, timing) may reveal information. Consider padding for high-security applications.
+
+## T9: Coverage Poisoning
+
+**Threat:** A peer allowed to write a document makes relays stop offering
+some of its commits to readers.
+
+**Attack vectors:**
+- A fragment whose head or checkpoints name a range of loose commits its blob
+  does not carry. Minimization trusts fragment metadata (see
+  [Coverage](../sedimentree.md#coverage)), so the range is no longer offered.
+- A fragment with the same head as an honest one but a lower digest, which
+  replaces it under the equivocation tiebreak.
+- Either kind of fragment held by a *reader*. Fragments are matched by head,
+  so a relay holding any fragment with that head does not send the reader
+  the honest one, and a relay holding the head's range loose does not offer
+  the range (see [Batch Sync](../sync/batch.md#diffing-algorithm)). A reader
+  cannot upload the fragment, so no relay replaces it; it gets one from a
+  relay that accepted it, and relay-to-relay sync passes it on.
+
+**Mitigation:**
+- Nothing is deleted: dropped items stay in storage and held, so a relay that
+  later holds a fragment carrying them offers them again.
+
+**Residual risk:** Nothing checks that a fragment's blob carries what its
+metadata claims. Any writer of the document can deny commits to readers of a
+relay that accepts its fragment, and to readers that hold the fragment, from
+every relay. Cleaning up the relay does not heal readers that already hold it.
+
+An honest Automerge fragment held without the fragments it was formed on
+(arrival out of formation order) also leaves commits covered that no kept
+fragment carries, until those fragments arrive. That needs no attacker; see
+UNCARRIED under [Coverage](../sedimentree.md#coverage).
