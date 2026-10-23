@@ -8,19 +8,34 @@
 //! Access is Keyhive's Keyline membership: the effective [`Power`] a peer
 //! holds over a document ([`Keyhive::access_for_doc`]).
 //!
-//! | Check   | Rule                                              |
-//! |---------|---------------------------------------------------|
-//! | Connect | The peer ID is a valid identifier                 |
-//! | Fetch   | The peer has at least [`FETCH_POWER`] (`Relay`)   |
+//! A sedimentree's ID is the document's [`Identifier`], and a peer's ID is
+//! the member's.
+//!
+//! | Check   | Rule                                                 |
+//! |---------|------------------------------------------------------|
+//! | Connect | The peer ID is a valid identifier                    |
+//! | Fetch   | The peer has at least [`FETCH_POWER`] (`Relay`)      |
 //! | Put     | The _requestor_ has at least [`PUT_POWER`] (`Relay`) |
 //!
-//! Put checks the connected peer, not the commit's author. Whether an
-//! author's write counts, including after a revocation, is the
-//! materializer's decision. Checking the author against current state would
-//! make acceptance depend on arrival order, and replicas would diverge. See
-//! [`subduction_keyline::policy`] for the full argument.
-//!
 //! There is no public access: Keyline has no public agent.
+//!
+//! # Why put checks the requestor, not the author
+//!
+//! Checking the author against the current membership makes acceptance
+//! depend on arrival order. A replica that hears of a revocation first would
+//! reject a commit that another replica already accepted, and sedimentree
+//! only grows, so they would never converge. Checking the connected peer
+//! instead only ever _delays_ a commit: any other authorized holder can push
+//! it later.
+//!
+//! Whether an author's write counts (including revocation retention
+//! watermarks) is the materializer's decision, made at read time from the
+//! commits and certificates. Both only grow, so every replica renders the
+//! same result from the same sets.
+//!
+//! Connect is permissive beyond a well-formed ID: a fresh peer has to be
+//! able to connect before it can learn the certificates that grant it
+//! anything.
 
 extern crate alloc;
 
@@ -41,7 +56,9 @@ use keyhive_core::{
     store::ciphertext::{CiphertextStore, CiphertextStoreExt},
 };
 use keyhive_crypto::{
-    content::reference::ContentRef, identifier::Identifier, signer::async_signer::AsyncSigner,
+    content::reference::ContentRef,
+    identifier::{Identifier, InvalidIdentifier},
+    signer::async_signer::AsyncSigner,
 };
 use keyline::{contract::Keyline, power::Power};
 use sedimentree_core::id::SedimentreeId;
@@ -51,11 +68,15 @@ use subduction_core::{
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
 };
 use subduction_crypto::verified_author::VerifiedAuthor;
-pub use subduction_keyline::policy::{
-    ConnectionDisallowedError, FETCH_POWER, FetchDisallowedError, InsufficientPowerError,
-    PUT_POWER, PutDisallowedError,
-};
-use subduction_keyline::policy::{peer_identifier, sedimentree_identifier};
+
+/// The least power a peer needs over a document to fetch it.
+pub const FETCH_POWER: Power = Power::Relay;
+
+/// The least power a requestor needs over a document to push data into it.
+///
+/// `Relay` rather than `Edit`: servers push content they did not write, and
+/// readers push CGKA operations.
+pub const PUT_POWER: Power = Power::Relay;
 
 /// The error a Keyhive membership query fails with, for store `K`.
 pub type AccessError<F, K> = KeylineStorageError<<K as Keyline<F>>::Error>;
@@ -139,7 +160,7 @@ impl<
     K: Keyline<Sendable, RetentionWatermark = ContentHeads<T>> + Send + Sync,
 > ConnectionPolicy<Sendable> for SubductionKeyhive<Sendable, S, T, P, C, L, R, K>
 {
-    type ConnectionDisallowed = ConnectionDisallowedError;
+    type ConnectionDisallowed = InvalidIdentifier;
 
     fn authorize_connect(
         &self,
@@ -205,7 +226,7 @@ impl<
     K: Keyline<Local, RetentionWatermark = ContentHeads<T>>,
 > ConnectionPolicy<Local> for SubductionKeyhive<Local, S, T, P, C, L, R, K>
 {
-    type ConnectionDisallowed = ConnectionDisallowedError;
+    type ConnectionDisallowed = InvalidIdentifier;
 
     fn authorize_connect(
         &self,
@@ -265,13 +286,13 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`ConnectionDisallowedError::InvalidPeerId`] if `peer_id` is not
+/// Returns [`InvalidIdentifier`] if `peer_id` is not
 /// a valid identifier.
 #[allow(clippy::unused_async)]
 pub async fn authorize_connect_with<F, S, T, P, C, L, R, K>(
     _keyhive: &Keyhive<F, S, T, P, C, L, R, K>,
     peer_id: PeerId,
-) -> Result<(), ConnectionDisallowedError>
+) -> Result<(), InvalidIdentifier>
 where
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
@@ -282,7 +303,7 @@ where
     R: rand::CryptoRng + rand::RngCore,
     K: Keyline<F, RetentionWatermark = ContentHeads<T>>,
 {
-    subduction_keyline::policy::authorize_connect(peer_id)
+    peer_identifier(peer_id).map(|_| ())
 }
 
 /// Authorize a fetch of `sedimentree_id` by `peer`: at least
@@ -408,6 +429,26 @@ where
     keyhive.access_for_doc(who, DocumentId::from(doc)).await
 }
 
+/// Parse a [`PeerId`] as an [`Identifier`].
+///
+/// # Errors
+///
+/// Returns [`InvalidIdentifier`] if the bytes are not a canonical Ed25519
+/// point of large order. Such a key can never appear in Keyline.
+pub fn peer_identifier(peer: PeerId) -> Result<Identifier, InvalidIdentifier> {
+    Identifier::from_bytes(*peer.as_bytes())
+}
+
+/// Parse a [`SedimentreeId`] as the [`Identifier`] of its document.
+///
+/// # Errors
+///
+/// Returns [`InvalidIdentifier`] if the bytes are not a canonical Ed25519
+/// point of large order.
+pub fn sedimentree_identifier(id: SedimentreeId) -> Result<Identifier, InvalidIdentifier> {
+    Identifier::from_bytes(*id.as_bytes())
+}
+
 /// Try to convert a [`PeerId`] to an [`Identifier`].
 ///
 /// Fails if the bytes are not a canonical Ed25519 point of large order.
@@ -434,8 +475,90 @@ pub fn try_sedimentree_id_to_document_id(sedimentree_id: SedimentreeId) -> Optio
         .map(DocumentId::from)
 }
 
+/// Why a fetch was denied.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum FetchDisallowedError<E> {
+    /// The peer ID is not a valid identifier.
+    #[error("peer ID is not a valid identifier")]
+    InvalidPeerId(#[source] InvalidIdentifier),
+
+    /// The sedimentree ID is not a valid identifier.
+    #[error("sedimentree ID is not a valid identifier")]
+    InvalidSedimentreeId(#[source] InvalidIdentifier),
+
+    /// The peer's power over the document is too low.
+    #[error(transparent)]
+    InsufficientPower(#[from] InsufficientPowerError),
+
+    /// The membership query failed.
+    #[error("keyhive membership query failed")]
+    Storage(#[source] E),
+}
+
+/// Why a put was denied.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PutDisallowedError<E> {
+    /// The requestor's peer ID is not a valid identifier.
+    #[error("requestor ID is not a valid identifier")]
+    InvalidRequestorId(#[source] InvalidIdentifier),
+
+    /// The sedimentree ID is not a valid identifier.
+    #[error("sedimentree ID is not a valid identifier")]
+    InvalidSedimentreeId(#[source] InvalidIdentifier),
+
+    /// The requestor's power over the document is too low.
+    #[error(transparent)]
+    InsufficientPower(#[from] InsufficientPowerError),
+
+    /// The membership query failed.
+    #[error("keyhive membership query failed")]
+    Storage(#[source] E),
+}
+
+/// A peer's power over a document is below what the operation requires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("requires at least {required}, has {}", describe(*actual))]
+pub struct InsufficientPowerError {
+    required: Power,
+    actual: Option<Power>,
+}
+
+impl InsufficientPowerError {
+    /// The power the operation requires.
+    #[must_use]
+    pub const fn required(&self) -> Power {
+        self.required
+    }
+
+    /// The peer's effective power, or `None` for no access.
+    #[must_use]
+    pub const fn actual(&self) -> Option<Power> {
+        self.actual
+    }
+
+    /// The granted power if `actual` is at least `required`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the shortfall if `actual` is below `required` or `None`.
+    pub fn require(required: Power, actual: Option<Power>) -> Result<Power, Self> {
+        actual
+            .filter(|power| *power >= required)
+            .ok_or(Self { required, actual })
+    }
+}
+
+const fn describe(power: Option<Power>) -> &'static str {
+    match power {
+        None => "no access",
+        Some(Power::Relay) => "Relay",
+        Some(Power::Read) => "Read",
+        Some(Power::Edit) => "Edit",
+        Some(Power::Admin) => "Admin",
+    }
+}
+
 #[cfg(test)]
-#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
@@ -481,5 +604,207 @@ mod tests {
             try_peer_id_to_identifier(valid_peer_id(1)),
             try_peer_id_to_identifier(valid_peer_id(2))
         );
+    }
+
+    /// The authorization rules, against a real [`Keyhive`].
+    #[cfg(feature = "serde")]
+    mod with_keyhive {
+        use super::*;
+
+        use alloc::{collections::BTreeSet, vec};
+
+        use future_form::Local;
+        use keyhive_core::principal::group::id::GroupId;
+        use nonempty::nonempty;
+        use sedimentree_core::{
+            blob::{Blob, BlobMeta},
+            loose_commit::{LooseCommit, id::CommitId},
+        };
+        use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
+        use testresult::TestResult;
+
+        use crate::test_utils::{SimpleKeyhive, exchange_all_contact_cards, make_keyhive};
+
+        fn identifier(kh: &SimpleKeyhive) -> Identifier {
+            kh.id().into()
+        }
+
+        fn peer(kh: &SimpleKeyhive) -> PeerId {
+            PeerId::new(identifier(kh).to_bytes())
+        }
+
+        fn tree(doc: DocumentId) -> SedimentreeId {
+            SedimentreeId::new(Identifier::from(doc).to_bytes())
+        }
+
+        /// Some verified author. Put never checks who.
+        async fn author(seed: u8) -> VerifiedAuthor {
+            let signer = MemorySigner::from_bytes(&[seed; 32]);
+            let commit = LooseCommit::new(
+                SedimentreeId::new([seed; 32]),
+                CommitId::new([seed; 32]),
+                BTreeSet::new(),
+                BlobMeta::new(&Blob::new(vec![seed])),
+            );
+            Signed::seal::<Local, _>(&signer, commit)
+                .await
+                .verified_author()
+        }
+
+        /// An owner with a fresh document, and `others` who know the
+        /// owner (and so can be added as members).
+        async fn setup(
+            others: usize,
+        ) -> TestResult<(SimpleKeyhive, DocumentId, Vec<SimpleKeyhive>)> {
+            let owner = make_keyhive().await;
+            let mut peers = Vec::with_capacity(others);
+            for _ in 0..others {
+                let peer = make_keyhive().await;
+                exchange_all_contact_cards(&[&owner, &peer]).await;
+                peers.push(peer);
+            }
+            let doc = owner.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+            Ok((owner, doc, peers))
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn fetch_needs_relay() -> TestResult {
+            let (owner, doc, peers) = setup(2).await?;
+            let [relay, stranger] = peers.as_slice() else {
+                return Err("two peers".into());
+            };
+            owner
+                .add_member(identifier(relay), doc, Power::Relay)
+                .await?;
+
+            authorize_fetch_with(&owner, peer(relay), tree(doc)).await?;
+            let denied = authorize_fetch_with(&owner, peer(stranger), tree(doc)).await;
+            assert!(matches!(
+                denied,
+                Err(FetchDisallowedError::InsufficientPower(e)) if e.actual().is_none()
+            ));
+            Ok(())
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn put_checks_the_requestor_not_the_author() -> TestResult {
+            let (owner, doc, peers) = setup(2).await?;
+            let [relay, stranger] = peers.as_slice() else {
+                return Err("two peers".into());
+            };
+            owner
+                .add_member(identifier(relay), doc, Power::Relay)
+                .await?;
+
+            // An authorized relay may push anyone's commit.
+            authorize_put_with(&owner, peer(relay), author(7).await, tree(doc)).await?;
+
+            // A stranger may push no one's.
+            let denied =
+                authorize_put_with(&owner, peer(stranger), author(8).await, tree(doc)).await;
+            assert!(matches!(
+                denied,
+                Err(PutDisallowedError::InsufficientPower(_))
+            ));
+            Ok(())
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn revocation_removes_access() -> TestResult {
+            let (owner, doc, peers) = setup(1).await?;
+            let [reader] = peers.as_slice() else {
+                return Err("one peer".into());
+            };
+            owner
+                .add_member(identifier(reader), doc, Power::Read)
+                .await?;
+            authorize_fetch_with(&owner, peer(reader), tree(doc)).await?;
+
+            owner.revoke_member(identifier(reader), true, doc).await?;
+            assert!(matches!(
+                authorize_fetch_with(&owner, peer(reader), tree(doc)).await,
+                Err(FetchDisallowedError::InsufficientPower(_))
+            ));
+            Ok(())
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn access_flows_through_a_group() -> TestResult {
+            let (owner, doc, peers) = setup(1).await?;
+            let [member] = peers.as_slice() else {
+                return Err("one peer".into());
+            };
+            let group: GroupId = owner.generate_group(vec![]).await?;
+            owner
+                .add_member(identifier(member), group, Power::Read)
+                .await?;
+            assert!(
+                authorize_fetch_with(&owner, peer(member), tree(doc))
+                    .await
+                    .is_err()
+            );
+
+            owner
+                .add_member(Identifier::from(group), doc, Power::Read)
+                .await?;
+            authorize_fetch_with(&owner, peer(member), tree(doc)).await?;
+            Ok(())
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn filter_keeps_authorized_ids_in_order() -> TestResult {
+            let (owner, shared, peers) = setup(1).await?;
+            let [relay] = peers.as_slice() else {
+                return Err("one peer".into());
+            };
+            let private = owner.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+            owner
+                .add_member(identifier(relay), shared, Power::Relay)
+                .await?;
+
+            let ids = vec![
+                tree(private),
+                tree(shared),
+                SedimentreeId::new(SMALL_ORDER),
+                tree(private),
+                tree(shared),
+            ];
+            assert_eq!(
+                filter_authorized_fetch_with(&owner, peer(relay), ids).await,
+                vec![tree(shared), tree(shared)]
+            );
+            Ok(())
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn invalid_identifiers_are_refused() -> TestResult {
+            let (owner, doc, _) = setup(0).await?;
+            let bad_peer = PeerId::new(SMALL_ORDER);
+            let bad_tree = SedimentreeId::new(SMALL_ORDER);
+
+            assert_eq!(
+                authorize_connect_with(&owner, bad_peer).await,
+                Err(InvalidIdentifier::SmallOrder)
+            );
+            authorize_connect_with(&owner, peer(&owner)).await?;
+
+            assert!(matches!(
+                authorize_fetch_with(&owner, bad_peer, tree(doc)).await,
+                Err(FetchDisallowedError::InvalidPeerId(_))
+            ));
+            assert!(matches!(
+                authorize_fetch_with(&owner, peer(&owner), bad_tree).await,
+                Err(FetchDisallowedError::InvalidSedimentreeId(_))
+            ));
+            assert!(matches!(
+                authorize_put_with(&owner, bad_peer, author(1).await, tree(doc)).await,
+                Err(PutDisallowedError::InvalidRequestorId(_))
+            ));
+            assert!(matches!(
+                authorize_put_with(&owner, peer(&owner), author(1).await, bad_tree).await,
+                Err(PutDisallowedError::InvalidSedimentreeId(_))
+            ));
+            Ok(())
+        }
     }
 }

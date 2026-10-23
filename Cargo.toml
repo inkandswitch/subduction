@@ -14,7 +14,6 @@ members = [
   "subduction_hyper",
   "subduction_iroh",
   "subduction_keyhive",
-  "subduction_keyline",
   "subduction_redb_storage",
   "subduction_tokio",
   "subduction_wasm",
