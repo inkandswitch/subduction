@@ -223,6 +223,13 @@ holds them, so receiving one again is not new and it is not re-added.
 Re-added, a covered commit would have no loose path left to the fragment that
 covers it, and could never be pruned again.
 
+That makes the minimal form independent of re-sends, but not yet of arrival
+order. A commit that first arrives after a child of it was pruned has the same
+problem, and stays loose until the tree is next rebuilt from storage, which
+minimizes the full history at once. Commits that arrive before the fragment
+covering them, as a writer uploads them, are pruned as if they had all arrived
+together.
+
 ### Minimal Hash
 
 Produce a deterministic fingerprint:

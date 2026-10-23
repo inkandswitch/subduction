@@ -33,6 +33,14 @@
 //! working path, and those tests guard it, over both a linear history and
 //! a branchy one (merges inside fragments, a depth-2 fragment with
 //! checkpoints, and the depth-1 fragments it supports).
+//!
+//! # Known bug ORDER: minimizing as items arrive depends on their order
+//!
+//! A node minimizes after every batch it takes in. A commit that first
+//! arrives after a child of it was already pruned as covered has no loose
+//! path left to its fragment's head, so it stays as a stray loose commit
+//! until the tree is rebuilt from storage. Causal arrival (commits before
+//! the fragment covering them) is guarded; arbitrary arrival is the target.
 
 #![allow(
     clippy::expect_used,
@@ -708,4 +716,126 @@ fn minimal_tree_ignores_resends() {
             }
         }
     }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// first deliveries: minimizing as items arrive vs. all at once
+// ════════════════════════════════════════════════════════════════════════
+
+/// Commits oldest first, each fragment at a random point after its head:
+/// the order a node sees when every commit is uploaded before the fragment
+/// that covers it.
+fn causal_order<'a>(
+    history: &History,
+    all: &'a [CommitOrFragment],
+    rng: &mut SmallRng,
+) -> Vec<&'a CommitOrFragment> {
+    let position: std::collections::BTreeMap<CommitId, usize> = history
+        .commits
+        .iter()
+        .enumerate()
+        .map(|(i, (c, _))| (c.head(), i))
+        .collect();
+    let mut keyed: Vec<(usize, &CommitOrFragment)> = all
+        .iter()
+        .map(|item| match item {
+            CommitOrFragment::Commit(c) => (2 * position[&c.head()], item),
+            CommitOrFragment::Fragment(f) => {
+                (2 * (position[&f.head()] + rng.gen_range(0..300)) + 1, item)
+            }
+        })
+        .collect();
+    keyed.sort_by_key(|(k, _)| *k);
+    keyed.into_iter().map(|(_, item)| item).collect()
+}
+
+/// Deliver each item of `order` once, in random batches, minimizing after
+/// each batch. Returns how many loose commits the result keeps beyond
+/// `minimize` over everything at once (0 is ideal), after checking the
+/// fragments agree.
+fn strays_after_delivering(
+    history: &History,
+    order: &[&CommitOrFragment],
+    rng: &mut SmallRng,
+) -> usize {
+    let expected = minimized(history, Layout::Full);
+    let mut resident = MinimizedSedimentree::default();
+    let mut rest = order;
+    while !rest.is_empty() {
+        let (chunk, tail) = rest.split_at(rng.gen_range(1..=50).min(rest.len()));
+        rest = tail;
+        let batch: Vec<CommitOrFragment> = chunk.iter().map(|i| (*i).clone()).collect();
+        deliver(&mut resident, &batch);
+    }
+    let kept = loose_ids(resident.tree());
+    let ideal = loose_ids(&expected);
+    assert!(
+        ideal.is_subset(&kept),
+        "{}: minimizing as items arrived dropped a commit minimize(all) keeps",
+        label(history)
+    );
+    let fragments = |tree: &Sedimentree| -> BTreeSet<CommitId> {
+        tree.fragments().map(Fragment::head).collect()
+    };
+    assert_eq!(
+        fragments(resident.tree()),
+        fragments(&expected),
+        "{}: minimizing as items arrived kept different fragments",
+        label(history)
+    );
+    kept.len() - ideal.len()
+}
+
+/// Ideal: minimizing items as they first arrive gives the tree minimizing
+/// them all at once would, i.e. `minimize(minimize(a) ∪ b) ==
+/// minimize(a ∪ b)`. Holds when every commit arrives before the fragment
+/// that covers it, as a writer uploads them: pruning then only drops whole
+/// runs whose commits have all arrived. Guard.
+#[test]
+fn causal_first_deliveries_minimize_like_all_at_once() {
+    for history in [History::linear(N), History::branchy(BRANCHY_N)] {
+        let all = items(&history, Layout::Full);
+        for seed in 0..8 {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let order = causal_order(&history, &all, &mut rng);
+            let strays = strays_after_delivering(&history, &order, &mut rng);
+            assert_eq!(
+                strays,
+                0,
+                "{} seed {seed}: stray loose commits",
+                label(&history)
+            );
+        }
+    }
+}
+
+/// Ideal: the same for any arrival order. Today (ORDER) a commit that first
+/// arrives after a child of it was already pruned as covered has no loose
+/// path left to its fragment's head, so it stays as a stray loose commit
+/// until the node rebuilds the tree from storage (on eviction or restart,
+/// the full history is minimized at once). Re-sends no longer do this
+/// (`minimal_tree_ignores_resends`); only first deliveries out of causal
+/// order, e.g. a commit a responder held only inside a fragment, echoed
+/// and then uploaded by a stale peer.
+#[test]
+#[should_panic(expected = "KNOWN BUG ORDER:")]
+fn any_order_first_deliveries_minimize_like_all_at_once() {
+    let mut strays = Vec::new();
+    for history in [History::linear(N), History::branchy(BRANCHY_N)] {
+        let mut all = items(&history, Layout::Full);
+        for seed in 0..8 {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            all.shuffle(&mut rng);
+            let order: Vec<&CommitOrFragment> = all.iter().collect();
+            strays.push(strays_after_delivering(&history, &order, &mut rng));
+        }
+    }
+    known_bug(
+        "ORDER",
+        strays.iter().all(|s| *s == 0),
+        &format!(
+            "stray loose commits after random-order delivery, per seed (linear n={N} x8, \
+             branchy n={BRANCHY_N} x8): {strays:?}"
+        ),
+    );
 }
