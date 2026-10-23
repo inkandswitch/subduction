@@ -19,11 +19,8 @@ async-lock = { workspace = true }
 blake3 = { workspace = true }
 future_form = { workspace = true }
 futures = { workspace = true }
-# The git `keyhive_crypto` that `keyline` uses. Declared here instead of the
-# workspace table, because `subduction_keyhive` still uses the crates.io
-# package with the same name and version.
-keyhive_crypto = { git = "https://github.com/inkandswitch/keyhive", branch = "split/11-keyline-in-core", default-features = false }
 keyhive_codec = { workspace = true }
+keyhive_crypto = { workspace = true }
 keyline = { workspace = true }
 sedimentree_core = { workspace = true }
 subduction_core = { workspace = true }

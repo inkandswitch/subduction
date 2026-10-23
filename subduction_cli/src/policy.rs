@@ -14,13 +14,17 @@ use subduction_core::{
 };
 use subduction_crypto::verified_author::VerifiedAuthor;
 use subduction_keyhive::{
+    handler::RuntimeKeyline,
     policy::{
-        ConnectionDisallowedError, FetchDisallowedError, PutDisallowedError,
+        AccessError, ConnectionDisallowedError, FetchDisallowedError, PutDisallowedError,
         authorize_connect_with, authorize_fetch_with, authorize_put_with,
         filter_authorized_fetch_with,
     },
     runtime::SendableRuntimeKeyhive,
 };
+
+/// What a Keyhive membership query fails with in the CLI runtime.
+type CliAccessError = AccessError<future_form::Sendable, RuntimeKeyline>;
 
 fn is_legacy(id: &SedimentreeId) -> bool {
     id.as_bytes()[16..].iter().all(|&b| b == 0)
@@ -63,8 +67,8 @@ impl ConnectionPolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
 }
 
 impl StoragePolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
-    type FetchDisallowed = FetchDisallowedError;
-    type PutDisallowed = PutDisallowedError;
+    type FetchDisallowed = FetchDisallowedError<CliAccessError>;
+    type PutDisallowed = PutDisallowedError<CliAccessError>;
 
     fn authorize_fetch(
         &self,

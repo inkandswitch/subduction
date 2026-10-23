@@ -25,9 +25,13 @@ futures = { workspace = true }
 future_form = { workspace = true }
 subduction_core = { workspace = true }
 subduction_crypto = { workspace = true, optional = true }
+subduction_keyline = { workspace = true, optional = true, features = ["std"] }
 dhat = { workspace = true, optional = true }
 keyhive_core = { workspace = true }
-keyhive_crypto = { workspace = true }
+keyhive_crypto = { workspace = true, features = ["std"] }
+keyhive_codec = { workspace = true, features = ["std"] }
+keyline = { workspace = true, features = ["std"] }
+keyline_memory = { workspace = true, optional = true, features = ["std"] }
 sedimentree_core = { workspace = true }
 rand = "0.8.5"
 tokio = { workspace = true, optional = true, features = ["rt", "sync", "time"] }
@@ -41,11 +45,17 @@ tracing = { workspace = true, features = ["attributes"] }
 [features]
 default = []
 bolero = ["dep:bolero"]
-handler = ["dep:async-channel", "dep:subduction_crypto", "std"]
+handler = [
+  "dep:async-channel",
+  "dep:keyline_memory",
+  "dep:subduction_crypto",
+  "dep:subduction_keyline",
+  "std",
+]
 runtime = ["handler", "serde", "dep:tokio", "dep:tokio-util"]
 serde = ["dep:serde", "dep:serde_bytes", "dep:serde_json", "dep:dupe", "std"]
 std = ["thiserror/std"]
-test-utils = ["dep:async-channel", "serde"]
+test-utils = ["dep:async-channel", "dep:keyline_memory", "serde"]
 # In-crate heap-profiling harness (the periodic-cache serving/refresh membench
 # in cache/membench.rs). Installs dhat as the global allocator. Run with:
 #   cargo test -p subduction_keyhive --release --features test-utils,dhat-heap \

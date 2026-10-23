@@ -8,12 +8,14 @@ use alloc::{string::ToString, sync::Arc, vec::Vec};
 use future_form::FutureForm;
 use keyhive_core::{
     archive::Archive,
+    content::heads::ContentHeads,
     event::static_event::StaticEvent,
     keyhive::Keyhive,
     listener::membership::MembershipListener,
     store::ciphertext::{CiphertextStore, CiphertextStoreExt},
 };
 use keyhive_crypto::{content::reference::ContentRef, signer::async_signer::AsyncSigner};
+use keyline::contract::Keyline;
 
 use crate::{
     collections::{Map, Set},
@@ -225,8 +227,8 @@ where
 /// # Errors
 ///
 /// Returns [`StorageError`] if loading, deserialization, or archive ingestion fails.
-pub async fn ingest_from_storage<Async, Signer, T, P, C, L, R, S>(
-    keyhive: &Keyhive<Async, Signer, T, P, C, L, R>,
+pub async fn ingest_from_storage<Async, Signer, T, P, C, L, R, K, S>(
+    keyhive: &Keyhive<Async, Signer, T, P, C, L, R, K>,
     storage: &S,
 ) -> Result<Vec<Arc<StaticEvent<T>>>, StorageError>
 where
@@ -234,8 +236,11 @@ where
     T: ContentRef + serde::de::DeserializeOwned,
     P: for<'de> serde::Deserialize<'de>,
     C: CiphertextStore<Async, T, P> + CiphertextStoreExt<Async, T, P> + Clone,
-    L: MembershipListener<Async, Signer, T>,
+    L: MembershipListener<Async, T>,
     R: rand::CryptoRng + rand::RngCore,
+    K: Keyline<Async, RetentionWatermark = ContentHeads<T>>,
+    K::Error: Send + Sync + 'static,
+    T: keyhive_codec::traits::Encode + keyhive_codec::traits::StreamDecode,
     S: KeyhiveStorage<Async>,
     Async: FutureForm,
 {
@@ -282,8 +287,8 @@ where
 ///
 /// Returns [`StorageError`] if any storage operation, serialization, or
 /// deserialization fails.
-pub async fn compact<Async, Signer, T, P, C, L, R, S>(
-    keyhive: &Keyhive<Async, Signer, T, P, C, L, R>,
+pub async fn compact<Async, Signer, T, P, C, L, R, K, S>(
+    keyhive: &Keyhive<Async, Signer, T, P, C, L, R, K>,
     storage: &S,
     storage_id: StorageHash,
 ) -> Result<(), StorageError>
@@ -292,8 +297,11 @@ where
     T: ContentRef + serde::de::DeserializeOwned,
     P: for<'de> serde::Deserialize<'de>,
     C: CiphertextStore<Async, T, P> + CiphertextStoreExt<Async, T, P> + Clone,
-    L: MembershipListener<Async, Signer, T>,
+    L: MembershipListener<Async, T>,
     R: rand::CryptoRng + rand::RngCore,
+    K: Keyline<Async, RetentionWatermark = ContentHeads<T>>,
+    K::Error: Send + Sync + 'static,
+    T: keyhive_codec::traits::Encode + keyhive_codec::traits::StreamDecode,
     S: KeyhiveStorage<Async>,
     Async: FutureForm,
 {
@@ -355,7 +363,10 @@ where
         .collect();
 
     // Save the new consolidated archive
-    let archive = keyhive.into_archive().await;
+    let archive = keyhive
+        .into_archive()
+        .await
+        .map_err(|e| StorageError::Save(alloc::format!("archive export failed: {e}")))?;
     save_keyhive_archive(storage, storage_id, &archive).await?;
 
     let mut deleted_archive_count = 0;
@@ -409,7 +420,7 @@ mod tests {
         let storage = MemoryKeyhiveStorage::new();
         let storage_id = StorageHash::new([1u8; 32]);
 
-        let archive = keyhive.into_archive().await;
+        let archive = keyhive.into_archive().await.expect("memory keyline");
         save_keyhive_archive::<_, _, Local>(&storage, storage_id, &archive)
             .await
             .unwrap();
@@ -434,13 +445,13 @@ mod tests {
 
         // Save two separate archives (simulating multiple save points)
         let id1 = StorageHash::new([1u8; 32]);
-        let archive1 = alice.into_archive().await;
+        let archive1 = alice.into_archive().await.expect("memory keyline");
         save_keyhive_archive::<_, _, Local>(&storage, id1, &archive1)
             .await
             .unwrap();
 
         let id2 = StorageHash::new([2u8; 32]);
-        let archive2 = alice.into_archive().await;
+        let archive2 = alice.into_archive().await.expect("memory keyline");
         save_keyhive_archive::<_, _, Local>(&storage, id2, &archive2)
             .await
             .unwrap();
@@ -448,11 +459,7 @@ mod tests {
         // Save alice's real events to storage
         let alice_peer_id = keyhive_peer_id(&alice);
         let alice_id = alice_peer_id.to_identifier().unwrap();
-        assert!(
-            alice.get_agent(alice_id).await.is_some(),
-            "alice should have herself as agent"
-        );
-        let events = alice.static_events_for_agent(alice_id).await;
+        let events = alice.static_events_for_agent(alice_id).await.unwrap();
         assert!(
             !events.is_empty(),
             "contact card exchange should produce events"
@@ -474,7 +481,7 @@ mod tests {
 
         // Compact
         let consolidated_id = StorageHash::new([10u8; 32]);
-        compact::<Local, _, _, _, _, _, _, _>(&alice, &storage, consolidated_id)
+        compact::<Local, _, _, _, _, _, _, _, _>(&alice, &storage, consolidated_id)
             .await
             .unwrap();
 
