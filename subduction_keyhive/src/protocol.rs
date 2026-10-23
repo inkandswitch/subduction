@@ -3156,7 +3156,7 @@ mod tests {
     /// A → server (with B syncing) → fresh C. Verifies C has the document
     /// and no pending events after the revocation chain.
     #[tokio::test(flavor = "current_thread")]
-    async fn fresh_client_gets_complete_deps_after_revocation_chain() {
+    async fn fresh_client_gets_complete_deps_after_revocation_chain() -> testresult::TestResult {
         use keyhive_crypto::identifier::Identifier;
         use keyline::power::Power;
 
@@ -3180,15 +3180,11 @@ mod tests {
         let c_identifier: Identifier = kh_c.id().into();
         let server_identifier: Identifier = kh_server.id().into();
 
-        let doc_id = kh_a
-            .generate_doc(vec![], nonempty![[0u8; 32]])
-            .await
-            .unwrap();
+        let doc_id = kh_a.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         // A relay holds no document and serves no CGKA ops, so a server
         // that C can get the document from must be a reader.
         kh_a.add_member(server_identifier, doc_id, Power::Read)
-            .await
-            .unwrap();
+            .await?;
 
         let (a_proto, a_kh, _) = make_protocol_with_shared_keyhive(kh_a).await;
         let (b_proto, _b_kh, _) = make_protocol_with_shared_keyhive(kh_b).await;
@@ -3246,11 +3242,11 @@ mod tests {
             (c_identifier, true),
         ] {
             {
-                let a = a_kh.lock().await;
+                let a = a_kh.lock().await.dupe();
                 if add {
-                    a.add_member(who, doc_id, Power::Edit).await.unwrap();
+                    a.add_member(who, doc_id, Power::Edit).await?;
                 } else {
-                    a.revoke_member(who, true, doc_id).await.unwrap();
+                    a.revoke_member(who, true, doc_id).await?;
                 }
             }
             sync_a_server!();
@@ -3286,12 +3282,13 @@ mod tests {
             .await;
         }
 
-        let c = c_kh.lock().await;
+        let c = c_kh.lock().await.dupe();
         assert!(c.has_document(doc_id).await, "C should have the doc");
         assert!(
             c.pending_event_hashes().await.is_empty(),
             "C should have nothing pending after the revocation chain"
         );
+        Ok(())
     }
 }
 

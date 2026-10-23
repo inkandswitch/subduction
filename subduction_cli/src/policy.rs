@@ -7,6 +7,7 @@ use std::sync::Arc;
 use async_lock::Mutex as AsyncMutex;
 use dupe::Dupe;
 use futures::{FutureExt, future::BoxFuture};
+use keyhive_crypto::identifier::InvalidIdentifier;
 use sedimentree_core::id::SedimentreeId;
 use subduction_core::{
     peer::id::PeerId,
@@ -16,9 +17,8 @@ use subduction_crypto::verified_author::VerifiedAuthor;
 use subduction_keyhive::{
     handler::RuntimeKeyline,
     policy::{
-        AccessError, ConnectionDisallowedError, FetchDisallowedError, PutDisallowedError,
-        authorize_connect_with, authorize_fetch_with, authorize_put_with,
-        filter_authorized_fetch_with,
+        AccessError, FetchDisallowedError, PutDisallowedError, authorize_connect_with,
+        authorize_fetch_with, authorize_put_with, filter_authorized_fetch_with,
     },
     runtime::SendableRuntimeKeyhive,
 };
@@ -48,7 +48,7 @@ impl CliKeyhivePolicyHandle {
 }
 
 impl ConnectionPolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
-    type ConnectionDisallowed = ConnectionDisallowedError;
+    type ConnectionDisallowed = InvalidIdentifier;
 
     fn authorize_connect(
         &self,

@@ -77,32 +77,35 @@ impl StreamDecode for ChangeId {
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 
     use alloc::vec;
 
+    use testresult::TestResult;
+
     #[test]
-    fn serde_is_transparent_over_the_bytes() {
+    fn serde_is_transparent_over_the_bytes() -> TestResult {
         let bytes = vec![1, 2, 3];
         assert_eq!(
-            bincode::serialize(&ChangeId::new(bytes.clone())).unwrap(),
-            bincode::serialize(&bytes).unwrap()
+            bincode::serialize(&ChangeId::new(bytes.clone()))?,
+            bincode::serialize(&bytes)?
         );
+        Ok(())
     }
 
     #[test]
-    fn codec_is_self_delimiting_and_round_trips() {
+    fn codec_is_self_delimiting_and_round_trips() -> TestResult {
         let ids = [ChangeId::new(vec![]), ChangeId::new(vec![7; 300])];
         let mut packed = Vec::new();
         for id in &ids {
             id.encode_into(&mut packed);
         }
 
-        let (first, rest) = ChangeId::decode_next(&packed).unwrap();
-        let (second, rest) = ChangeId::decode_next(rest).unwrap();
+        let (first, rest) = ChangeId::decode_next(&packed)?;
+        let (second, rest) = ChangeId::decode_next(rest)?;
         assert_eq!([first, second], ids);
         assert!(rest.is_empty());
+        Ok(())
     }
 }

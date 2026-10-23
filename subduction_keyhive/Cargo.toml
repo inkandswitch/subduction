@@ -25,7 +25,6 @@ futures = { workspace = true }
 future_form = { workspace = true }
 subduction_core = { workspace = true }
 subduction_crypto = { workspace = true, optional = true }
-subduction_keyline = { workspace = true, optional = true, features = ["std"] }
 dhat = { workspace = true, optional = true }
 keyhive_core = { workspace = true }
 keyhive_crypto = { workspace = true, features = ["std"] }
@@ -49,7 +48,6 @@ handler = [
   "dep:async-channel",
   "dep:keyline_memory",
   "dep:subduction_crypto",
-  "dep:subduction_keyline",
   "std",
 ]
 runtime = ["handler", "serde", "dep:tokio", "dep:tokio-util"]
