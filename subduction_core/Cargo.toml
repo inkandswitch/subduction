@@ -72,6 +72,9 @@ default = []
 arbitrary = ["dep:arbitrary", "sedimentree_core/arbitrary", "subduction_crypto/arbitrary"]
 bolero = ["dep:bolero", "arbitrary", "sedimentree_core/bolero", "subduction_crypto/bolero"]
 metrics = ["dep:metrics", "std"]
+# `ResumeToken` / `Authenticated::resume`: carry a handshake's result across
+# process lifetimes (e.g. Durable Object WebSocket hibernation). Off by default.
+resume = []
 serde = ["dep:serde", "ed25519-dalek/serde", "subduction_crypto/serde"]
 serde-std = ["serde/std"]
 std = [

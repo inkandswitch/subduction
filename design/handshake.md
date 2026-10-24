@@ -468,6 +468,7 @@ The `Authenticated<C, K>` wrapper is a _witness type_ proving the inner value co
 pub struct Authenticated<C, K: FutureForm> {
     inner: C,
     peer_id: PeerId,
+    direction: Direction, // Dialed (initiate) or Accepted (respond)
     _marker: PhantomData<fn() -> K>,
 }
 ```
@@ -478,8 +479,56 @@ Key properties:
 
 | Property | Guarantee |
 |----------|-----------|
-| **Construction** | Only via `handshake::initiate` or `handshake::respond` |
+| **Construction** | Via `handshake::initiate` or `handshake::respond`, or (with the `resume` feature) `Authenticated::resume` from a token this node signed after one of those |
 | **`peer_id()`** | Delegates to inner connection; ID was set from verified signature |
 | **`inner`** | The wrapped connection, accessible via `inner()` |
 
 This ensures that any code receiving an `Authenticated<C, K>` can trust that the peer identity was verified through the handshake protocol — there's no way to construct it with an arbitrary `PeerId`.
+
+## Resuming Across Process Lifetimes
+
+> Behind the `subduction_core/resume` feature. Off by default.
+
+Some hosts keep a transport open longer than the process that authenticated it. The motivating case is Cloudflare Durable Object WebSocket hibernation: the runtime holds the socket while the engine is evicted from memory, and the next inbound frame wakes a fresh engine that never saw the handshake. The peer still considers the connection established, so the handshake cannot simply be run again.
+
+A `ResumeToken` carries the handshake's result across that gap without weakening the witness property above.
+
+```text
+ handshake::respond ──► Authenticated ──► ResumeToken::issue(&auth, our_signer, expires_at)
+                                                │
+                                                ▼
+                                 Signed<ResumeToken>  ── persisted next to the socket
+                                                │       (e.g. serializeAttachment)
+               ··· process evicted, socket stays open ···
+                                                │
+                                                ▼
+ Authenticated ◄── Authenticated::resume(transport, &token, our_verifying_key, now)
+```
+
+### Token
+
+Schema `SUA\x00`, signed by the node's own identity key:
+
+| Field        | Size     | Notes                                         |
+|--------------|----------|-----------------------------------------------|
+| Schema       | 4 bytes  | `SUA\x00`                                     |
+| Issuer       | 32 bytes | This node's verifying key                     |
+| `peer_id`    | 32 bytes | Identity verified by the original handshake   |
+| `direction`  | 1 byte   | `0` = Dialed, `1` = Accepted                  |
+| `expires_at` | 8 bytes  | Unix seconds, big-endian                      |
+| Signature    | 64 bytes | Ed25519 over everything above                 |
+
+Total: 141 bytes.
+
+### Why it preserves the witness
+
+- **Minting needs a witness.** `ResumeToken::issue` takes an `&Authenticated`, so a token can only describe a peer this node verified (directly, or via an earlier resume).
+- **Redeeming needs our signature.** `resume` rejects a token unless it verifies and its issuer is the caller-supplied key. Writing to the host's storage is not enough to forge a peer; you also need the node's signing key.
+- **Tokens expire.** `resume` rejects `now >= expires_at`. Long-lived connections re-issue on each resume.
+- **Domain separation.** The token has its own schema, so a token signature can never be replayed as a handshake `Response` (or vice versa), even though the same key signs both.
+
+### What it does not do
+
+- **It is not a bearer credential for peers.** Tokens never go on the wire. A token only lets this node re-attach an identity to a transport the host already associates with it; binding the token to the right transport is the host's job (a per-socket attachment does this naturally).
+- **It does not skip policy.** `Subduction::add_connection` still runs `ConnectionPolicy::authorize_connect`, so a peer revoked since the token was issued is turned away.
+- **It does not restore other in-memory state.** Subscriptions, nonce caches and send counters are the host's to persist or rebuild (see `PeerCounter::with_seed` for counters).
