@@ -24,7 +24,10 @@ use sedimentree_core::{
     blob::Blob, depth::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
 };
 use subduction_core::{
-    authenticated::{Authenticated, resume::ResumeToken},
+    authenticated::{
+        Authenticated,
+        resume::{ResumeError, ResumeToken},
+    },
     connection::test_utils::{ChannelClosed, ChannelTransport, InstantTimeout, TokioSpawn},
     handler::sync::SyncHandler,
     handshake::{self, Handshake, audience::Audience},
@@ -59,6 +62,7 @@ type TestSubduction = Arc<
 
 const NOW: TimestampSeconds = TimestampSeconds::new(1_000_000);
 const TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(2_000);
+const MAX_AGE: Duration = Duration::from_secs(3_600);
 
 /// A running node plus the tasks that drive it, so it can be "evicted".
 struct Node {
@@ -201,13 +205,9 @@ async fn connection_resumes_on_a_fresh_engine_without_rehandshake() -> TestResul
     server1.sd.add_connection(server_auth.clone()).await?;
 
     // What a host would store next to the socket (e.g. serializeAttachment).
-    let persisted: Vec<u8> = ResumeToken::issue(
-        &server_auth,
-        &server_signer,
-        TimestampSeconds::new(NOW.as_secs() + 3_600),
-    )
-    .await
-    .into_bytes();
+    let persisted: Vec<u8> = ResumeToken::issue(&server_auth, &server_signer, NOW)
+        .await
+        .into_bytes();
 
     add(&client.sd, doc(1), 1).await?;
     client
@@ -234,6 +234,7 @@ async fn connection_resumes_on_a_fresh_engine_without_rehandshake() -> TestResul
         &token,
         &server_signer.verifying_key(),
         TimestampSeconds::new(NOW.as_secs() + 60),
+        MAX_AGE,
     )?;
     assert_eq!(resumed.peer_id(), client_peer);
     assert!(server2.sd.add_connection(resumed).await?, "new connection");
@@ -292,7 +293,7 @@ async fn resume_rejects_token_issued_by_a_different_node() -> TestResult {
     )
     .await?;
     let (auth, ()) = responder.await??;
-    let token = ResumeToken::issue(&auth, &impostor_signer, TimestampSeconds::new(u64::MAX)).await;
+    let token = ResumeToken::issue(&auth, &impostor_signer, NOW).await;
 
     let (conn, _) = ChannelTransport::pair();
     let result = Authenticated::<Conn, Sendable>::resume(
@@ -300,7 +301,11 @@ async fn resume_rejects_token_issued_by_a_different_node() -> TestResult {
         &token,
         &server_signer.verifying_key(),
         NOW,
+        MAX_AGE,
     );
-    assert!(result.is_err(), "a token from another key must not resume");
+    assert!(
+        matches!(result, Err(ResumeError::WrongIssuer)),
+        "a token from another key must not resume"
+    );
     Ok(())
 }

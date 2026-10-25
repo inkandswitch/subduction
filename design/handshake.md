@@ -494,7 +494,7 @@ Some hosts keep a transport open longer than the process that authenticated it. 
 A `ResumeToken` carries the handshake's result across that gap without weakening the witness property above.
 
 ```text
- handshake::respond ──► Authenticated ──► ResumeToken::issue(&auth, our_signer, expires_at)
+ handshake::respond ──► Authenticated ──► ResumeToken::issue(&auth, our_signer, now)
                                                 │
                                                 ▼
                                  Signed<ResumeToken>  ── persisted next to the socket
@@ -502,7 +502,7 @@ A `ResumeToken` carries the handshake's result across that gap without weakening
                ··· process evicted, socket stays open ···
                                                 │
                                                 ▼
- Authenticated ◄── Authenticated::resume(transport, &token, our_verifying_key, now)
+ Authenticated ◄── Authenticated::resume(transport, &token, our_verifying_key, now, max_age)
 ```
 
 ### Token
@@ -515,7 +515,7 @@ Schema `SUA\x00`, signed by the node's own identity key:
 | Issuer       | 32 bytes | This node's verifying key                     |
 | `peer_id`    | 32 bytes | Identity verified by the original handshake   |
 | `direction`  | 1 byte   | `0` = Dialed, `1` = Accepted                  |
-| `expires_at` | 8 bytes  | Unix seconds, big-endian                      |
+| `issued_at`  | 8 bytes  | Unix seconds, big-endian                      |
 | Signature    | 64 bytes | Ed25519 over everything above                 |
 
 Total: 141 bytes.
@@ -524,7 +524,8 @@ Total: 141 bytes.
 
 - **Minting needs a witness.** `ResumeToken::issue` takes an `&Authenticated`, so a token can only describe a peer this node verified (directly, or via an earlier resume).
 - **Redeeming needs our signature.** `resume` rejects a token unless it verifies and its issuer is the caller-supplied key. Writing to the host's storage is not enough to forge a peer; you also need the node's signing key.
-- **Tokens expire.** `resume` rejects `now >= expires_at`. Long-lived connections re-issue on each resume.
+- **Tokens expire, on the redeemer's terms.** The token records `issued_at`; `resume` takes a `max_age` and rejects anything older. This mirrors the handshake, where a `Challenge` carries its timestamp and the verifier supplies `max_drift`. Because the limit lives with the redeemer, lowering `max_age` applies to every outstanding token immediately, without rotating the node's key. Long-lived connections re-issue after each resume.
+- **Future timestamps are bounded.** The issuer and redeemer are the same node, so an `issued_at` ahead of `now` can only be clock skew. `resume` accepts up to `MAX_FUTURE_SKEW` (60 s) of it and rejects anything further.
 - **Domain separation.** The token has its own schema, so a token signature can never be replayed as a handshake `Response` (or vice versa), even though the same key signs both.
 
 ### What it does not do
