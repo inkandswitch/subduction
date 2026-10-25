@@ -13,7 +13,6 @@
 //! traffic; the client never notices. The new engine attaches to the same
 //! socket using only the persisted token bytes, without a new handshake.
 
-#![cfg(feature = "resume")]
 #![allow(clippy::expect_used)]
 
 use std::{collections::BTreeSet, sync::Arc, time::Duration};

@@ -487,8 +487,6 @@ This ensures that any code receiving an `Authenticated<C, K>` can trust that the
 
 ## Resuming Across Process Lifetimes
 
-> Behind the `subduction_core/resume` feature. Off by default.
-
 Some hosts keep a transport open longer than the process that authenticated it. The motivating case is Cloudflare Durable Object WebSocket hibernation: the runtime holds the socket while the engine is evicted from memory, and the next inbound frame wakes a fresh engine that never saw the handshake. The peer still considers the connection established, so the handshake cannot simply be run again.
 
 A `ResumeToken` carries the handshake's result across that gap without weakening the witness property above.
