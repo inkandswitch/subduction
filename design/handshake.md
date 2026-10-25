@@ -479,7 +479,7 @@ Key properties:
 
 | Property | Guarantee |
 |----------|-----------|
-| **Construction** | Via `handshake::initiate` or `handshake::respond`, or (with the `resume` feature) `Authenticated::resume` from a token this node signed after one of those |
+| **Construction** | Only via `handshake::initiate`, `handshake::respond`, or `Authenticated::resume` |
 | **`peer_id()`** | Delegates to inner connection; ID was set from verified signature |
 | **`inner`** | The wrapped connection, accessible via `inner()` |
 
