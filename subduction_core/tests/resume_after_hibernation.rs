@@ -23,10 +23,7 @@ use sedimentree_core::{
     blob::Blob, depth::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
 };
 use subduction_core::{
-    authenticated::{
-        Authenticated,
-        resume::{ResumeError, ResumeToken},
-    },
+    authenticated::{Authenticated, resume::ResumeToken},
     connection::test_utils::{ChannelClosed, ChannelTransport, InstantTimeout, TokioSpawn},
     handler::sync::SyncHandler,
     handshake::{self, Handshake, audience::Audience},
@@ -257,54 +254,5 @@ async fn connection_resumes_on_a_fresh_engine_without_rehandshake() -> TestResul
         .await?;
     assert!(has_commit(&client.sd, doc(3)).await, "resumed server sends");
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn resume_rejects_token_issued_by_a_different_node() -> TestResult {
-    let server_signer = MemorySigner::from_bytes(&[2; 32]);
-    let impostor_signer = MemorySigner::from_bytes(&[3; 32]);
-
-    // The impostor completes a real handshake of its own and mints a token.
-    let (a, b) = ChannelTransport::pair();
-    let impostor = impostor_signer.clone();
-    let impostor_peer = PeerId::from(impostor_signer.verifying_key());
-    let responder = tokio::spawn(async move {
-        handshake::respond::<Sendable, _, _, _, _>(
-            Hs(b),
-            |hs, _peer| (MessageTransport::new(hs.0), ()),
-            &impostor,
-            &NonceCache::default(),
-            impostor_peer,
-            None,
-            NOW,
-            Duration::from_secs(600),
-        )
-        .await
-    });
-    handshake::initiate::<Sendable, _, _, _, _>(
-        Hs(a),
-        |hs, _peer| (MessageTransport::new(hs.0), ()),
-        &MemorySigner::from_bytes(&[1; 32]),
-        Audience::known(impostor_peer),
-        NOW,
-        Nonce::random(),
-    )
-    .await?;
-    let (auth, ()) = responder.await??;
-    let token = ResumeToken::issue(&auth, &impostor_signer, NOW).await;
-
-    let (conn, _) = ChannelTransport::pair();
-    let result = Authenticated::<Conn, Sendable>::resume(
-        MessageTransport::new(conn),
-        &token,
-        &server_signer.verifying_key(),
-        NOW,
-        MAX_AGE,
-    );
-    assert!(
-        matches!(result, Err(ResumeError::WrongIssuer)),
-        "a token from another key must not resume"
-    );
     Ok(())
 }

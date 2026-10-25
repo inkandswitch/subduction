@@ -352,7 +352,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn max_age_is_inclusive() {
+    async fn max_age_is_inclusive_and_set_by_the_redeemer() {
         let node = signer(1);
         let token = issue(&handshaken(9, Direction::Accepted), &node).await;
         let limit = ISSUED_AT + MAX_AGE.as_secs();
@@ -360,17 +360,10 @@ mod tests {
         assert!(resume_at(&token, &node, limit, MAX_AGE).is_ok());
         let err = resume_at(&token, &node, limit + 1, MAX_AGE).expect_err("one second too old");
         assert!(matches!(err, ResumeError::Expired { .. }));
-    }
 
-    #[tokio::test]
-    async fn lowering_max_age_applies_to_outstanding_tokens() {
-        let node = signer(1);
-        let token = issue(&handshaken(9, Direction::Accepted), &node).await;
-        let now = ISSUED_AT + 600;
-
-        // The same token, unchanged, under a tightened policy.
-        assert!(resume_at(&token, &node, now, MAX_AGE).is_ok());
-        let err = resume_at(&token, &node, now, Duration::from_secs(300))
+        // The same, already-issued token is rejected once the caller tightens
+        // `max_age`; the lifetime is not baked into the token.
+        let err = resume_at(&token, &node, ISSUED_AT + 600, Duration::from_secs(300))
             .expect_err("tightened max_age must reject an existing token");
         assert!(matches!(err, ResumeError::Expired { .. }));
     }
