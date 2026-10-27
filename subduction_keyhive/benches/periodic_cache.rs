@@ -39,6 +39,7 @@ use keyline::power::Power;
 use nonempty::nonempty;
 use subduction_keyhive::{
     AllAgentEvents,
+    protocol::is_known_agent,
     test_utils::{
         SimpleKeyhive, TestProtocol, create_channel_pair, keyhive_peer_id, make_keyhive,
         make_protocol_with_shared_keyhive, sync_pair_rounds,
@@ -118,7 +119,7 @@ async fn build(n: usize, shape: Shape) -> (TestProtocol, Sizes) {
                         continue;
                     }
                     let id: Identifier = peers[j].id().into();
-                    if server.has_individual(id.into()).await {
+                    if is_known_agent(&server, id).await.expect("membership query") {
                         server
                             .add_member(id, doc_id, Power::Read)
                             .await

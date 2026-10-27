@@ -61,14 +61,14 @@ fn env_usize(key: &str, default: usize) -> usize {
 fn serving_membench() {
     use alloc::vec::Vec;
 
-    use keyhive_core::{
-        access::Access,
-        principal::{identifier::Identifier, individual::op::KeyOp, public::Public},
-    };
+    use keyhive_core::principal::individual::op::KeyOp;
+    use keyhive_crypto::identifier::Identifier;
+    use keyline::power::Power;
     use nonempty::nonempty;
 
     use crate::{
         message::Message,
+        protocol::is_known_agent,
         test_utils::{keyhive_peer_id, make_keyhive, make_protocol_with_shared_keyhive},
     };
 
@@ -93,7 +93,8 @@ fn serving_membench() {
 
     futures::executor::block_on(async move {
         // Build a dense server keyhive: N peer agents known (contact
-        // card + prekey rotations), N public docs each with K peer readers.
+        // card + prekey rotations), N docs each with K peer readers. (Keyline
+        // has no public access, so there is no public reader.)
         let server = make_keyhive().await;
         let mut peers = Vec::with_capacity(n);
         for _ in 0..n {
@@ -128,19 +129,15 @@ fn serving_membench() {
                 .generate_doc(vec![], nonempty![[fill; 32]])
                 .await
                 .expect("generate_doc");
-            server
-                .add_member(Public.id(), doc_id, Access::Read, &[])
-                .await
-                .expect("add public");
             for step in 1..=k.min(n.saturating_sub(1)) {
                 let j = (i + step) % n;
                 if j == i {
                     continue;
                 }
                 let id: Identifier = peers[j].id().into();
-                if server.get_agent(id).await.is_some() {
+                if is_known_agent(&server, id).await.expect("membership query") {
                     server
-                        .add_member(id, doc_id, Access::Read, &[])
+                        .add_member(id, doc_id, Power::Read)
                         .await
                         .expect("add member");
                 }
@@ -255,8 +252,8 @@ fn serving_membench() {
 
 /// In-crate heap membench isolating the **keyhive-on BASELINE**: the
 /// retained footprint of the server's keyhive op-graph after ingesting N
-/// peers (contact cards + prekey rotations) and N public docs (public + K
-/// readers), with NO cache and NO serving. It reports retained heap at each
+/// peers (contact cards + prekey rotations) and N docs (K readers each; Keyline
+/// has no public access), with NO cache and NO serving. It reports retained heap at each
 /// build stage so the baseline can be attributed to ingest vs prekeys vs
 /// docs vs membership and scaled vs N, then drops the client keyhives (which
 /// do not exist on the real server) before the final reading so the number
@@ -273,13 +270,15 @@ fn serving_membench() {
 fn keyhive_baseline_membench() {
     use alloc::vec::Vec;
 
-    use keyhive_core::{
-        access::Access,
-        principal::{identifier::Identifier, individual::op::KeyOp, public::Public},
-    };
+    use keyhive_core::principal::individual::op::KeyOp;
+    use keyhive_crypto::identifier::Identifier;
+    use keyline::power::Power;
     use nonempty::nonempty;
 
-    use crate::test_utils::{keyhive_peer_id, make_keyhive};
+    use crate::{
+        protocol::is_known_agent,
+        test_utils::{keyhive_peer_id, make_keyhive},
+    };
 
     let n = env_usize("MEMBENCH_N", 100);
     let k = env_usize("MEMBENCH_K", 5);
@@ -347,13 +346,9 @@ fn keyhive_baseline_membench() {
                 .generate_doc(vec![], nonempty![[fill; 32]])
                 .await
                 .expect("generate_doc");
-            server
-                .add_member(Public.id(), doc_id, Access::Read, &[])
-                .await
-                .expect("add public");
             docs.push(doc_id);
         }
-        stage!("+ N public docs");
+        stage!("+ N docs");
 
         for (i, doc_id) in docs.iter().enumerate() {
             for step in 1..=k.min(n.saturating_sub(1)) {
@@ -362,9 +357,9 @@ fn keyhive_baseline_membench() {
                     continue;
                 }
                 let id: Identifier = peers[j].id().into();
-                if server.get_agent(id).await.is_some() {
+                if is_known_agent(&server, id).await.expect("membership query") {
                     server
-                        .add_member(id, *doc_id, Access::Read, &[])
+                        .add_member(id, *doc_id, Power::Read)
                         .await
                         .expect("add member");
                 }
