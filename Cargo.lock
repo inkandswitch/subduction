@@ -477,8 +477,9 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "beekem"
-version = "0.5.0"
-source = "git+https://github.com/inkandswitch/keyhive?rev=a3fda224e0c6617195ca981399c22cc960a8d5b9#a3fda224e0c6617195ca981399c22cc960a8d5b9"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82d9d00087f75911e71259c5ab09f3fa17077a10f210031eba2c21c0e4f61914"
 dependencies = [
  "blake3",
  "chacha20poly1305",
@@ -2908,7 +2909,8 @@ dependencies = [
 [[package]]
 name = "keyhive_codec"
 version = "0.1.0"
-source = "git+https://github.com/inkandswitch/keyhive?rev=a3fda224e0c6617195ca981399c22cc960a8d5b9#a3fda224e0c6617195ca981399c22cc960a8d5b9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "88bb801be05f13783d02b1814e4b3ec6e72daf7a8b8fd8dd71c26f646acd4403"
 dependencies = [
  "bijoux",
  "thiserror 2.0.20",
@@ -2916,8 +2918,9 @@ dependencies = [
 
 [[package]]
 name = "keyhive_core"
-version = "0.7.0"
-source = "git+https://github.com/inkandswitch/keyhive?rev=a3fda224e0c6617195ca981399c22cc960a8d5b9#a3fda224e0c6617195ca981399c22cc960a8d5b9"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c7027518a24dba9fccadc6c4c57756dee7ac109dbd631dc38b7c3456583c522"
 dependencies = [
  "async-lock",
  "beekem",
@@ -2944,8 +2947,9 @@ dependencies = [
 
 [[package]]
 name = "keyhive_crypto"
-version = "0.2.1"
-source = "git+https://github.com/inkandswitch/keyhive?rev=a3fda224e0c6617195ca981399c22cc960a8d5b9#a3fda224e0c6617195ca981399c22cc960a8d5b9"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "907032d96817217c7af6f826f8bf6360357898cb41eebf442af749d9a94727b4"
 dependencies = [
  "blake3",
  "chacha20poly1305",
@@ -2965,7 +2969,8 @@ dependencies = [
 [[package]]
 name = "keyline"
 version = "0.1.0"
-source = "git+https://github.com/inkandswitch/keyhive?rev=a3fda224e0c6617195ca981399c22cc960a8d5b9#a3fda224e0c6617195ca981399c22cc960a8d5b9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "89892ef93de8797416739864941e8d94fde4f94c48b8450f3963949c7e39901f"
 dependencies = [
  "bijoux",
  "ed25519-dalek 2.2.0",
@@ -2979,7 +2984,8 @@ dependencies = [
 [[package]]
 name = "keyline_memory"
 version = "0.1.0"
-source = "git+https://github.com/inkandswitch/keyhive?rev=a3fda224e0c6617195ca981399c22cc960a8d5b9#a3fda224e0c6617195ca981399c22cc960a8d5b9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb43eae165d6bb36847dea103a45497deefbc8c7fd0d9a2dc5f0c91692172e29"
 dependencies = [
  "async-lock",
  "future_form",
