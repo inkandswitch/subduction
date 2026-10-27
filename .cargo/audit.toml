@@ -25,8 +25,9 @@ ignore = [
 
     # ─── Unmaintained warnings (transitive, no fix on our side) ────
 
-    # paste 1.0.15, pulled in by netlink-* family via iroh's portmapper.
-    # Revisit when netlink-* migrates off paste.
+    # paste 1.0.15, pulled in by netlink-packet-core 0.8 via iroh's netwatch
+    # and portmapper (still true of iroh 1.4.1). Revisit when netwatch moves
+    # to a netlink-* release without paste.
     "RUSTSEC-2024-0436",
     # derivative 2.2.0, pulled in by keyhive_core. Revisit when
     # keyhive_core upstream replaces derivative with derive_more.
