@@ -1295,7 +1295,24 @@ where
 
 /// Whether `id` is an agent this keyhive knows: itself, a known individual, a
 /// document, or a group.
-async fn is_known_agent<Async, Signer, CRef, Plaintext, CipherStore, Listener, Rng, KeylineStore>(
+///
+/// The Keyline-era replacement for the removed `Keyhive::get_agent(id).is_some()`,
+/// which covered the same four cases.
+///
+/// # Errors
+///
+/// Returns [`KeylineStorageError`] if the group lookup fails in the Keyline
+/// store.
+pub async fn is_known_agent<
+    Async,
+    Signer,
+    CRef,
+    Plaintext,
+    CipherStore,
+    Listener,
+    Rng,
+    KeylineStore,
+>(
     keyhive: &Keyhive<Async, Signer, CRef, Plaintext, CipherStore, Listener, Rng, KeylineStore>,
     id: Identifier,
 ) -> Result<bool, KeylineStorageError<KeylineStore::Error>>
