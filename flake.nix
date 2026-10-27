@@ -86,13 +86,6 @@
         workspaceCargoLock = {
           lockFile = ./Cargo.lock;
           outputHashes = {
-            # One entry covers every crate from the same git commit; nixpkgs
-            # keys these by commit. This is the keyhive repo at the `rev` in
-            # `Cargo.toml`: update it whenever that `rev` changes, with
-            #   nix run nixpkgs#nix-prefetch-git -- --quiet \
-            #     --url https://github.com/inkandswitch/keyhive --rev <rev>
-            # and take its "hash".
-            "beekem-0.5.0" = "sha256-TogfXERRK5Kjnv445gB4Vbmvcb6DUT0dysdrbo+y2Rg=";
             "wasm-tracing-3.0.0-alpha.0" = "sha256-b5XSxRM601ID/uT2aLMb0WrP3lSGALrh0bPB+7Va/6s=";
           };
         };
