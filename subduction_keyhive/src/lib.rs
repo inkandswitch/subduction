@@ -33,7 +33,6 @@ pub mod wire;
 pub mod all_agent_events;
 #[cfg(feature = "serde")]
 mod cache;
-#[cfg(feature = "serde")]
 pub mod change_id;
 #[cfg(feature = "serde")]
 pub mod protocol;

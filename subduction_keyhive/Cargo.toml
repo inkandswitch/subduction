@@ -15,7 +15,6 @@ repository.workspace = true
 async-channel = { workspace = true, optional = true }
 async-lock = { workspace = true }
 base64 = { workspace = true }
-bincode = { workspace = true }
 blake3 = { workspace = true }
 bolero = { workspace = true, optional = true, features = ["arbitrary"] }
 ciborium = { workspace = true }
@@ -37,7 +36,6 @@ tokio = { workspace = true, optional = true, features = ["rt", "sync", "time"] }
 tokio-util = { workspace = true, optional = true }
 serde = { workspace = true, optional = true, features = ["derive"] }
 serde_bytes = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tracing = { workspace = true, features = ["attributes"] }
 
@@ -51,7 +49,7 @@ handler = [
   "std",
 ]
 runtime = ["handler", "serde", "dep:tokio", "dep:tokio-util"]
-serde = ["dep:serde", "dep:serde_bytes", "dep:serde_json", "dep:dupe", "std"]
+serde = ["dep:serde", "dep:serde_bytes", "dep:dupe", "std"]
 std = ["thiserror/std"]
 test-utils = ["dep:async-channel", "dep:keyline_memory", "serde"]
 # In-crate heap-profiling harness (the periodic-cache serving/refresh membench

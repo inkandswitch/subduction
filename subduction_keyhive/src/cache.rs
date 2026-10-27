@@ -173,8 +173,8 @@ impl PeriodicEventCache {
     ) -> Result<bool, ProtocolError<Conn::SendError>>
     where
         Signer: AsyncSigner<Async> + Clone,
-        CRef: ContentRef + serde::de::DeserializeOwned,
-        Plaintext: for<'de> serde::Deserialize<'de>,
+        CRef: ContentRef,
+        Plaintext: keyhive_codec::traits::Decode,
         CipherStore: CiphertextStore<Async, CRef, Plaintext>
             + CiphertextStoreExt<Async, CRef, Plaintext>
             + Clone,
@@ -182,7 +182,6 @@ impl PeriodicEventCache {
         Rng: rand::CryptoRng + rand::RngCore,
         KeylineStore: Keyline<Async, RetentionWatermark = ContentHeads<CRef>>,
         KeylineStore::Error: Send + Sync + 'static,
-        CRef: keyhive_codec::traits::Encode + keyhive_codec::traits::StreamDecode,
         Conn: KeyhiveConnection<Async>,
         Conn::SendError: 'static,
         Conn::DisconnectError: 'static,

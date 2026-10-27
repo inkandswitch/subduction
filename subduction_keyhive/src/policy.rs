@@ -46,7 +46,7 @@ use futures::{
     FutureExt,
     future::{BoxFuture, LocalBoxFuture},
 };
-use keyhive_codec::traits::{Encode, StreamDecode};
+use keyhive_codec::traits::Decode;
 use keyhive_core::{
     certificate::KeylineStorageError,
     content::heads::ContentHeads,
@@ -62,7 +62,7 @@ use keyhive_crypto::{
 };
 use keyline::{contract::Keyline, power::Power};
 use sedimentree_core::id::SedimentreeId;
-use serde::Deserialize;
+
 use subduction_core::{
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
@@ -87,7 +87,7 @@ pub struct SubductionKeyhive<
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
     T: ContentRef,
-    P: for<'de> Deserialize<'de>,
+    P: Decode,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
     R: rand::CryptoRng + rand::RngCore,
@@ -98,7 +98,7 @@ impl<
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
     T: ContentRef,
-    P: for<'de> Deserialize<'de>,
+    P: Decode,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
     R: rand::CryptoRng + rand::RngCore,
@@ -122,7 +122,7 @@ impl<
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
     T: ContentRef,
-    P: for<'de> Deserialize<'de>,
+    P: Decode,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
     R: rand::CryptoRng + rand::RngCore,
@@ -138,7 +138,7 @@ impl<
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
     T: ContentRef,
-    P: for<'de> Deserialize<'de>,
+    P: Decode,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
     R: rand::CryptoRng + rand::RngCore,
@@ -152,8 +152,8 @@ impl<
 
 impl<
     S: AsyncSigner<Sendable> + Clone + Send + Sync,
-    T: ContentRef + Encode + StreamDecode + Send + Sync,
-    P: for<'de> Deserialize<'de> + Send + Sync,
+    T: ContentRef + Send + Sync,
+    P: Decode + Send + Sync,
     C: CiphertextStore<Sendable, T, P> + CiphertextStoreExt<Sendable, T, P> + Clone + Send + Sync,
     L: MembershipListener<Sendable, T> + Send + Sync,
     R: rand::CryptoRng + rand::RngCore + Send + Sync,
@@ -172,8 +172,8 @@ impl<
 
 impl<
     S: AsyncSigner<Sendable> + Clone + Send + Sync,
-    T: ContentRef + Encode + StreamDecode + Send + Sync,
-    P: for<'de> Deserialize<'de> + Send + Sync,
+    T: ContentRef + Send + Sync,
+    P: Decode + Send + Sync,
     C: CiphertextStore<Sendable, T, P> + CiphertextStoreExt<Sendable, T, P> + Clone + Send + Sync,
     L: MembershipListener<Sendable, T> + Send + Sync,
     R: rand::CryptoRng + rand::RngCore + Send + Sync,
@@ -218,8 +218,8 @@ where
 
 impl<
     S: AsyncSigner<Local> + Clone,
-    T: ContentRef + Encode + StreamDecode,
-    P: for<'de> Deserialize<'de>,
+    T: ContentRef,
+    P: Decode,
     C: CiphertextStore<Local, T, P> + CiphertextStoreExt<Local, T, P> + Clone,
     L: MembershipListener<Local, T>,
     R: rand::CryptoRng + rand::RngCore,
@@ -238,8 +238,8 @@ impl<
 
 impl<
     S: AsyncSigner<Local> + Clone,
-    T: ContentRef + Encode + StreamDecode,
-    P: for<'de> Deserialize<'de>,
+    T: ContentRef,
+    P: Decode,
     C: CiphertextStore<Local, T, P> + CiphertextStoreExt<Local, T, P> + Clone,
     L: MembershipListener<Local, T>,
     R: rand::CryptoRng + rand::RngCore,
@@ -297,7 +297,7 @@ where
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
     T: ContentRef,
-    P: for<'de> Deserialize<'de>,
+    P: Decode,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
     R: rand::CryptoRng + rand::RngCore,
@@ -321,8 +321,8 @@ pub async fn authorize_fetch_with<F, S, T, P, C, L, R, K>(
 where
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
-    T: ContentRef + Encode + StreamDecode,
-    P: for<'de> Deserialize<'de>,
+    T: ContentRef,
+    P: Decode,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
     R: rand::CryptoRng + rand::RngCore,
@@ -356,8 +356,8 @@ pub async fn authorize_put_with<F, S, T, P, C, L, R, K>(
 where
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
-    T: ContentRef + Encode + StreamDecode,
-    P: for<'de> Deserialize<'de>,
+    T: ContentRef,
+    P: Decode,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
     R: rand::CryptoRng + rand::RngCore,
@@ -384,8 +384,8 @@ pub async fn filter_authorized_fetch_with<F, S, T, P, C, L, R, K>(
 where
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
-    T: ContentRef + Encode + StreamDecode,
-    P: for<'de> Deserialize<'de>,
+    T: ContentRef,
+    P: Decode,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
     R: rand::CryptoRng + rand::RngCore,
@@ -418,8 +418,8 @@ async fn access<F, S, T, P, C, L, R, K>(
 where
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
-    T: ContentRef + Encode + StreamDecode,
-    P: for<'de> Deserialize<'de>,
+    T: ContentRef,
+    P: Decode,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
     R: rand::CryptoRng + rand::RngCore,

@@ -12,9 +12,11 @@ use crate::error::VerificationError;
 use crate::peer_id::KeyhivePeerId;
 #[cfg(all(feature = "serde", feature = "std"))]
 use alloc::string::ToString;
+#[cfg(all(feature = "serde", feature = "std"))]
+use keyhive_codec::traits::Decode;
 use keyhive_core::contact_card::ContactCard;
 #[cfg(all(feature = "serde", feature = "std"))]
-use keyhive_crypto::signed::SerdeSigned;
+use keyhive_crypto::{bytes::Bytes, verified::Signed};
 
 /// Error type for CBOR serialization/deserialization.
 #[derive(Debug, Clone)]
@@ -33,10 +35,14 @@ impl std::error::Error for CborError {}
 ///
 /// ```text
 /// CBOR map {
-///   "contactCard": <text string>,   // JSON-encoded ContactCard, "" when absent
-///   "signed":      <byte string>,   // bincode-serialised SerdeSigned<Vec<u8>>
+///   "contactCard": <byte string>,   // the card's KH frame, empty when absent
+///   "signed":      <byte string>,   // the KH frame of a Signed<Bytes>
 /// }
 /// ```
+///
+/// Both byte strings are what `keyhive_wasm` hands to JS: `contactCard` is
+/// `ContactCard.toBytes()`, and `signed` is `SignedBytes.toBytes()` from
+/// `Keyhive.trySign`.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SignedMessage {
@@ -48,40 +54,39 @@ pub struct SignedMessage {
     )]
     contact_card: Option<ContactCard>,
 
-    /// Bincode-serialized `SerdeSigned<Vec<u8>>`.
+    /// The `KH` frame of a `Signed<Bytes>`.
     #[cfg_attr(feature = "serde", serde(with = "serde_bytes"))]
     signed: Vec<u8>,
 }
 
 #[cfg(all(feature = "serde", feature = "std"))]
 mod contact_card_serde {
-    //! Maps `Option<ContactCard>` to a JSON text string in CBOR (`""` for `None`).
-    use alloc::string::{String, ToString};
+    //! Maps `Option<ContactCard>` to a CBOR byte string: the card's `KH`
+    //! frame, or empty for `None`.
+    use alloc::{string::ToString, vec::Vec};
     use keyhive_core::contact_card::ContactCard;
-    use serde::{Deserialize, Deserializer, Serializer, ser::Error as _};
+    use serde::{Deserializer, Serializer};
 
     #[allow(clippy::ref_option)]
     pub(super) fn serialize<S: Serializer>(
         value: &Option<ContactCard>,
         ser: S,
     ) -> Result<S::Ok, S::Error> {
-        match value {
-            Some(cc) => {
-                let json = serde_json::to_string(cc).map_err(S::Error::custom)?;
-                ser.serialize_str(&json)
-            }
-            None => ser.serialize_str(""),
-        }
+        let bytes = value
+            .as_ref()
+            .map(ContactCard::to_bytes)
+            .unwrap_or_default();
+        ser.serialize_bytes(&bytes)
     }
 
     pub(super) fn deserialize<'de, D: Deserializer<'de>>(
         de: D,
     ) -> Result<Option<ContactCard>, D::Error> {
-        let s = String::deserialize(de)?;
-        if s.is_empty() {
+        let bytes: Vec<u8> = serde_bytes::deserialize(de)?;
+        if bytes.is_empty() {
             Ok(None)
         } else {
-            serde_json::from_str(&s)
+            ContactCard::from_bytes(&bytes)
                 .map(Some)
                 .map_err(|e| serde::de::Error::custom(e.to_string()))
         }
@@ -123,10 +128,10 @@ impl SignedMessage {
 
     /// Verify the signature and sender identity, consuming the signed message.
     ///
-    /// Deserializes the inner `SerdeSigned<Vec<u8>>` (bincode), verifies the
-    /// cryptographic signature, checks that the signer matches
-    /// `expected_sender`, and returns a [`VerifiedMessage`] containing the
-    /// raw payload bytes and optional contact card.
+    /// Decodes the inner `Signed<Bytes>` frame, verifies the cryptographic
+    /// signature, checks that the signer matches `expected_sender`, and
+    /// returns a [`VerifiedMessage`] containing the raw payload bytes and
+    /// optional contact card.
     ///
     /// # Errors
     ///
@@ -137,12 +142,8 @@ impl SignedMessage {
         self,
         expected_sender: &KeyhivePeerId,
     ) -> Result<VerifiedMessage, VerificationError> {
-        let signed: SerdeSigned<Vec<u8>> = bincode::deserialize(self.signed.as_slice())
+        let signed = Signed::<Bytes>::decode(&self.signed)
             .map_err(|e| VerificationError::Deserialization(e.to_string()))?;
-
-        signed
-            .try_verify()
-            .map_err(|_| VerificationError::InvalidSignature)?;
 
         let sender_id = KeyhivePeerId::from_bytes(*signed.issuer().as_bytes());
         if !sender_id.same_identity(expected_sender) {
@@ -152,9 +153,13 @@ impl SignedMessage {
             });
         }
 
+        let verified = signed
+            .verify()
+            .map_err(|_| VerificationError::InvalidSignature)?;
+
         Ok(VerifiedMessage::new(
             sender_id,
-            signed.payload().clone(),
+            verified.payload().as_slice().to_vec(),
             self.contact_card,
         ))
     }
@@ -270,36 +275,33 @@ mod tests {
 
     #[cfg(all(feature = "serde", feature = "std"))]
     #[test]
-    fn cbor_roundtrip_preserves_contact_card_via_json_sentinel() {
+    fn cbor_roundtrip_preserves_contact_card_as_its_frame() {
         let cc = fake_contact_card();
         let msg = SignedMessage::with_contact_card(vec![1, 2, 3, 4], cc.clone());
         let cbor = msg.to_cbor().expect("serialize");
         let decoded = SignedMessage::from_cbor(&cbor).expect("deserialize");
 
-        assert!(decoded.has_contact_card());
-        let original_json = serde_json::to_string(&cc).expect("serialize original");
-        let recovered_cc = decoded.contact_card.as_ref().expect("contact card present");
-        let recovered_json = serde_json::to_string(recovered_cc).expect("serialize recovered");
-        assert_eq!(original_json, recovered_json);
+        let recovered = decoded.contact_card.as_ref().expect("contact card present");
+        assert_eq!(recovered.to_bytes(), cc.to_bytes());
     }
 
     #[cfg(all(feature = "serde", feature = "std"))]
     #[test]
-    fn cbor_roundtrip_with_no_contact_card_uses_empty_string_sentinel() {
+    fn cbor_roundtrip_with_no_contact_card_uses_empty_bytes() {
         let msg = SignedMessage::new(vec![1, 2, 3]);
         assert!(!msg.has_contact_card());
 
         let cbor = msg.to_cbor().expect("serialize");
 
         // Decode with raw ciborium to verify the wire shape: the
-        // contactCard key must be present with an empty STRING value.
+        // contactCard key must be present with an empty BYTE STRING value.
         let raw: ciborium::Value = ciborium::de::from_reader(cbor.as_slice()).expect("raw decode");
         let map = raw.as_map().expect("map");
         let cc_field = map
             .iter()
             .find(|(k, _)| k.as_text() == Some("contactCard"))
             .expect("contactCard key present");
-        assert_eq!(cc_field.1.as_text(), Some(""));
+        assert_eq!(cc_field.1.as_bytes(), Some(&Vec::new()));
 
         let decoded = SignedMessage::from_cbor(&cbor).expect("deserialize");
         assert!(!decoded.has_contact_card());
