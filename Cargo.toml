@@ -43,7 +43,7 @@ subduction_ephemeral = { version = "0.10.0", path = "subduction_ephemeral", defa
 subduction_http_longpoll = { version = "0.13.0", path = "subduction_http_longpoll", default-features = false }
 subduction_hyper = { version = "0.3.0", path = "subduction_hyper", default-features = false }
 subduction_iroh = { version = "0.12.0", path = "subduction_iroh" }
-subduction_keyhive = { version = "0.12.0", path = "subduction_keyhive" }
+subduction_keyhive = { version = "0.13.0", path = "subduction_keyhive" }
 subduction_redb_storage = { version = "0.4.0", path = "subduction_redb_storage" }
 subduction_wasm = { version = "0.26.0", path = "subduction_wasm" }
 subduction_wasm_bootstrap = { version = "0.4.0", path = "subduction_wasm_bootstrap" }
