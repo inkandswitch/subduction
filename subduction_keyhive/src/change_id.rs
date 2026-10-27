@@ -1,13 +1,9 @@
 //! [`ChangeId`]: the content reference the keyhive runtime uses.
 //!
-//! It must encode exactly like `keyhive_wasm`'s `JsChangeId`. Revocation
+//! It must encode exactly like `keyhive_wasm`'s `JsChangeId`: revocation
 //! retention watermarks (`ContentHeads<ChangeId>`) travel inside events, so
-//! the server and the browser client must agree on both encodings:
-//!
-//! | Encoding                  | Form                                       |
-//! |---------------------------|--------------------------------------------|
-//! | serde (bincode on the wire) | the bytes, as a newtype over `Vec<u8>`   |
-//! | `keyhive_codec`           | `bijou32(len) ‖ bytes`, self-delimiting    |
+//! the server and the browser client must agree on the encoding. Both use
+//! `keyhive_codec`'s `bijou32(len) ‖ bytes`, which is self-delimiting.
 
 use alloc::vec::Vec;
 
@@ -15,10 +11,9 @@ use keyhive_codec::{
     error::DecodeError,
     traits::{Decode, Encode, StreamDecode, decode_exact},
 };
-use serde::{Deserialize, Serialize};
 
 /// An opaque change identifier (for Automerge, a change hash).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ChangeId(Vec<u8>);
 
 impl ChangeId {
@@ -83,16 +78,6 @@ mod tests {
     use alloc::vec;
 
     use testresult::TestResult;
-
-    #[test]
-    fn serde_is_transparent_over_the_bytes() -> TestResult {
-        let bytes = vec![1, 2, 3];
-        assert_eq!(
-            bincode::serialize(&ChangeId::new(bytes.clone()))?,
-            bincode::serialize(&bytes)?
-        );
-        Ok(())
-    }
 
     #[test]
     fn codec_is_self_delimiting_and_round_trips() -> TestResult {

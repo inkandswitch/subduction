@@ -17,7 +17,7 @@ pub enum SigningError {
 
     /// The signing operation failed.
     #[error("signing failed")]
-    SigningFailed(#[source] keyhive_crypto::signed::SigningError),
+    SigningFailed(#[source] keyhive_crypto::verified::SignError),
 }
 
 /// Errors that can occur during message verification.

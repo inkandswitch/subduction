@@ -6,6 +6,7 @@
 use alloc::{string::ToString, sync::Arc, vec::Vec};
 
 use future_form::FutureForm;
+use keyhive_codec::traits::{Decode, Encode};
 use keyhive_core::{
     archive::Archive,
     content::heads::ContentHeads,
@@ -23,31 +24,36 @@ use crate::{
     storage::{KeyhiveStorage, StorageHash},
 };
 
-/// Serialize a value to CBOR bytes.
-fn cbor_serialize<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, StorageError> {
-    let mut buf = Vec::new();
-    ciborium::into_writer(value, &mut buf)
-        .map_err(|e| StorageError::Serialization(e.to_string()))?;
-    Ok(buf)
+// Events and archives use Keyhive's canonical codec. An event's bytes are its
+// statement's `KH` frame, the same bytes `keyhive_wasm` sends from JS.
+
+/// Encode a value with Keyhive's canonical codec.
+pub(crate) fn encode_value<T: Encode>(value: &T) -> Vec<u8> {
+    value.encode().into_bytes()
 }
 
-/// Deserialize a value from CBOR bytes.
-fn cbor_deserialize<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, StorageError> {
-    ciborium::from_reader(bytes).map_err(|e| StorageError::Deserialization(e.to_string()))
+/// Decode a value with Keyhive's canonical codec, accepting only its
+/// canonical encoding.
+pub(crate) fn decode_value<T: Decode>(bytes: &[u8]) -> Result<T, StorageError> {
+    T::decode(bytes).map_err(|e| StorageError::Deserialization(e.to_string()))
 }
 
-// `StaticEvent` payloads use bincode (matching keyhive-wasm). Archives
-// still use CBOR since they're server-internal.
-// TODO: This is temporary as bincode is unmaintained and we're planning to
-// move off of it once we've migrated keyhive.
-pub(crate) fn bincode_serialize<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, StorageError> {
-    bincode::serialize(value).map_err(|e| StorageError::Serialization(e.to_string()))
-}
-
-pub(crate) fn bincode_deserialize<T: serde::de::DeserializeOwned>(
-    bytes: &[u8],
-) -> Result<T, StorageError> {
-    bincode::deserialize(bytes).map_err(|e| StorageError::Deserialization(e.to_string()))
+/// Decode a stored entry, or log and skip it.
+///
+/// Entries written in an older format (before the canonical codec) or
+/// corrupted on disk would otherwise stop every later entry from loading.
+fn decode_stored<T: Decode>(hash: StorageHash, bytes: &[u8], what: &'static str) -> Option<T> {
+    match decode_value(bytes) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            tracing::warn!(
+                hash = %hash.to_hex(),
+                %error,
+                "skipping stored keyhive {what} that does not decode (older format or corrupt)"
+            );
+            None
+        }
+    }
 }
 
 /// Hash event bytes using BLAKE3 to produce a storage key.
@@ -59,7 +65,7 @@ pub fn hash_event_bytes(bytes: &[u8]) -> StorageHash {
 
 /// Serialize and save a keyhive archive to storage.
 ///
-/// The archive is serialized using CBOR and stored with the provided storage ID
+/// The archive is encoded with Keyhive's canonical codec and stored with the provided storage ID
 /// as the key. The storage ID should be a stable identifier derived from the peer ID.
 ///
 /// # Errors
@@ -75,7 +81,7 @@ where
     S: KeyhiveStorage<Async>,
     Async: FutureForm,
 {
-    let bytes = cbor_serialize(archive)?;
+    let bytes = encode_value(archive);
 
     tracing::debug!(
         hash = %storage_id.to_hex(),
@@ -91,13 +97,12 @@ where
 
 /// Serialize and save an event to storage.
 ///
-/// The event is serialized using bincode (matching keyhive-wasm) and
+/// The event is encoded as its statement's `KH` frame (matching `keyhive_wasm`) and
 /// stored with its BLAKE3 hash as the key.
 ///
 /// # Errors
 ///
-/// Returns [`StorageError`] if bincode serialization or the storage write
-/// fails.
+/// Returns [`StorageError`] if the storage write fails.
 pub async fn save_event<T, S, Async>(
     storage: &S,
     event: &StaticEvent<T>,
@@ -107,7 +112,7 @@ where
     S: KeyhiveStorage<Async>,
     Async: FutureForm,
 {
-    let bytes = bincode_serialize(event)?;
+    let bytes = encode_value(event);
     save_event_bytes(storage, bytes).await
 }
 
@@ -144,14 +149,16 @@ where
 
 /// Load and deserialize all archives from storage.
 ///
+/// Archives that do not decode are skipped with a warning.
+///
 /// # Errors
 ///
-/// Returns [`StorageError`] if the storage read or CBOR deserialization fails.
+/// Returns [`StorageError`] if the storage read fails.
 pub async fn load_archives<T, S, Async>(
     storage: &S,
 ) -> Result<Vec<(StorageHash, Archive<T>)>, StorageError>
 where
-    T: ContentRef + serde::de::DeserializeOwned,
+    T: ContentRef,
     S: KeyhiveStorage<Async>,
     Async: FutureForm,
 {
@@ -160,11 +167,10 @@ where
         .await
         .map_err(|e| StorageError::Load(e.to_string()))?;
 
-    let mut archives = Vec::with_capacity(raw_archives.len());
-    for (hash, bytes) in raw_archives {
-        let archive: Archive<T> = cbor_deserialize(&bytes)?;
-        archives.push((hash, archive));
-    }
+    let archives: Vec<(StorageHash, Archive<T>)> = raw_archives
+        .into_iter()
+        .filter_map(|(hash, bytes)| Some((hash, decode_stored(hash, &bytes, "archive")?)))
+        .collect();
 
     tracing::debug!(count = archives.len(), "loaded archives from storage");
     Ok(archives)
@@ -172,14 +178,16 @@ where
 
 /// Load and deserialize all events from storage.
 ///
+/// Events that do not decode are skipped with a warning.
+///
 /// # Errors
 ///
-/// Returns [`StorageError`] if the storage read or CBOR deserialization fails.
+/// Returns [`StorageError`] if the storage read fails.
 pub async fn load_events<T, S, Async>(
     storage: &S,
 ) -> Result<Vec<(StorageHash, StaticEvent<T>)>, StorageError>
 where
-    T: ContentRef + serde::de::DeserializeOwned,
+    T: ContentRef,
     S: KeyhiveStorage<Async>,
     Async: FutureForm,
 {
@@ -188,11 +196,10 @@ where
         .await
         .map_err(|e| StorageError::Load(e.to_string()))?;
 
-    let mut events = Vec::with_capacity(raw_events.len());
-    for (hash, bytes) in raw_events {
-        let event: StaticEvent<T> = bincode_deserialize(&bytes)?;
-        events.push((hash, event));
-    }
+    let events: Vec<(StorageHash, StaticEvent<T>)> = raw_events
+        .into_iter()
+        .filter_map(|(hash, bytes)| Some((hash, decode_stored(hash, &bytes, "event")?)))
+        .collect();
 
     tracing::debug!(count = events.len(), "loaded events from storage");
     Ok(events)
@@ -233,14 +240,13 @@ pub async fn ingest_from_storage<Async, Signer, T, P, C, L, R, K, S>(
 ) -> Result<Vec<Arc<StaticEvent<T>>>, StorageError>
 where
     Signer: AsyncSigner<Async> + Clone,
-    T: ContentRef + serde::de::DeserializeOwned,
-    P: for<'de> serde::Deserialize<'de>,
+    T: ContentRef,
+    P: keyhive_codec::traits::Decode,
     C: CiphertextStore<Async, T, P> + CiphertextStoreExt<Async, T, P> + Clone,
     L: MembershipListener<Async, T>,
     R: rand::CryptoRng + rand::RngCore,
     K: Keyline<Async, RetentionWatermark = ContentHeads<T>>,
     K::Error: Send + Sync + 'static,
-    T: keyhive_codec::traits::Encode + keyhive_codec::traits::StreamDecode,
     S: KeyhiveStorage<Async>,
     Async: FutureForm,
 {
@@ -283,10 +289,13 @@ where
 /// 4. Deletes old archives
 /// 5. Deletes events that have been processed (keeping only pending events)
 ///
+/// Entries that do not decode (an older format, or corruption) are skipped
+/// and left in storage, never deleted.
+///
 /// # Errors
 ///
-/// Returns [`StorageError`] if any storage operation, serialization, or
-/// deserialization fails.
+/// Returns [`StorageError`] if a storage operation or archive ingestion
+/// fails.
 pub async fn compact<Async, Signer, T, P, C, L, R, K, S>(
     keyhive: &Keyhive<Async, Signer, T, P, C, L, R, K>,
     storage: &S,
@@ -294,14 +303,13 @@ pub async fn compact<Async, Signer, T, P, C, L, R, K, S>(
 ) -> Result<(), StorageError>
 where
     Signer: AsyncSigner<Async> + Clone,
-    T: ContentRef + serde::de::DeserializeOwned,
-    P: for<'de> serde::Deserialize<'de>,
+    T: ContentRef,
+    P: keyhive_codec::traits::Decode,
     C: CiphertextStore<Async, T, P> + CiphertextStoreExt<Async, T, P> + Clone,
     L: MembershipListener<Async, T>,
     R: rand::CryptoRng + rand::RngCore,
     K: Keyline<Async, RetentionWatermark = ContentHeads<T>>,
     K::Error: Send + Sync + 'static,
-    T: keyhive_codec::traits::Encode + keyhive_codec::traits::StreamDecode,
     S: KeyhiveStorage<Async>,
     Async: FutureForm,
 {
@@ -326,9 +334,16 @@ where
         "starting compaction"
     );
 
+    // Entries that do not decode are skipped, and left in storage: this
+    // version cannot read them, but deleting them would rule out going back.
+    let mut unreadable: Set<StorageHash> = Set::new();
+
     // Deserialize and ingest archives
     for (hash, bytes) in &raw_archives {
-        let archive: Archive<T> = cbor_deserialize(bytes)?;
+        let Some(archive) = decode_stored::<Archive<T>>(*hash, bytes, "archive") else {
+            unreadable.insert(*hash);
+            continue;
+        };
         tracing::debug!(hash = %hash.to_hex(), "ingesting archive for compaction");
         keyhive
             .ingest_archive(archive)
@@ -346,20 +361,22 @@ where
         .collect();
 
     // Deserialize and ingest events
-    let events: Vec<StaticEvent<T>> = raw_events
-        .iter()
-        .map(|(_, bytes)| bincode_deserialize(bytes))
-        .collect::<Result<_, _>>()?;
+    let mut events: Vec<StaticEvent<T>> = Vec::with_capacity(raw_events.len());
+    for (hash, bytes) in &raw_events {
+        match decode_stored(*hash, bytes, "event") {
+            Some(event) => events.push(event),
+            None => {
+                unreadable.insert(*hash);
+            }
+        }
+    }
 
     let pending = keyhive.ingest_unsorted_static_events(events).await;
 
     // Get hashes of pending events
     let pending_hashes: Set<[u8; 32]> = pending
         .iter()
-        .filter_map(|e| {
-            let bytes = bincode_serialize(e.as_ref()).ok()?;
-            Some(*hash_event_bytes(&bytes).as_bytes())
-        })
+        .map(|e| *hash_event_bytes(&encode_value(e.as_ref())).as_bytes())
         .collect();
 
     // Save the new consolidated archive
@@ -374,7 +391,7 @@ where
 
     // Delete old archives
     for (hash, _) in &raw_archives {
-        if *hash != storage_id {
+        if *hash != storage_id && !unreadable.contains(hash) {
             storage
                 .delete_archive(*hash)
                 .await
@@ -385,7 +402,7 @@ where
 
     // Delete processed events (and keep pending ones)
     for (event_bytes_hash, storage_hash) in &event_hash_to_storage {
-        if !pending_hashes.contains(event_bytes_hash) {
+        if !pending_hashes.contains(event_bytes_hash) && !unreadable.contains(storage_hash) {
             storage
                 .delete_event(*storage_hash)
                 .await
@@ -398,6 +415,7 @@ where
         pending_events = pending.len(),
         deleted_archives = deleted_archive_count,
         deleted_events = deleted_event_count,
+        kept_unreadable = unreadable.len(),
         "compaction complete"
     );
 
@@ -508,5 +526,59 @@ mod tests {
         // The consolidated archive should be loadable and deserializable
         let reloaded = load_archives::<[u8; 32], _, Local>(&storage).await.unwrap();
         assert_eq!(reloaded.len(), 1);
+    }
+
+    /// Entries in an older format (or corrupt) are skipped on load, and
+    /// compaction leaves them in storage rather than deleting them.
+    #[tokio::test(flavor = "current_thread")]
+    async fn unreadable_entries_are_skipped_and_kept() -> testresult::TestResult {
+        let alice = make_keyhive().await;
+        let storage = MemoryKeyhiveStorage::new();
+
+        let readable_archive = StorageHash::new([1u8; 32]);
+        save_keyhive_archive::<_, _, Local>(
+            &storage,
+            readable_archive,
+            &alice.into_archive().await?,
+        )
+        .await?;
+        let stale_archive = StorageHash::new([2u8; 32]);
+        KeyhiveStorage::<Local>::save_archive(&storage, stale_archive, b"pre-codec bytes".to_vec())
+            .await?;
+        let stale_event =
+            save_event_bytes::<_, Local>(&storage, b"pre-codec event".to_vec()).await?;
+
+        let archives = load_archives::<[u8; 32], _, Local>(&storage).await?;
+        assert_eq!(
+            archives
+                .iter()
+                .map(|(hash, _)| *hash)
+                .collect::<alloc::vec::Vec<_>>(),
+            [readable_archive]
+        );
+        assert!(
+            load_events::<[u8; 32], _, Local>(&storage)
+                .await?
+                .is_empty()
+        );
+
+        let consolidated = StorageHash::new([10u8; 32]);
+        compact::<Local, _, _, _, _, _, _, _, _>(&alice, &storage, consolidated).await?;
+
+        let raw_archives: Set<StorageHash> = KeyhiveStorage::<Local>::load_archives(&storage)
+            .await?
+            .into_iter()
+            .map(|(hash, _)| hash)
+            .collect();
+        assert_eq!(raw_archives, Set::from([consolidated, stale_archive]));
+
+        let raw_events: alloc::vec::Vec<StorageHash> =
+            KeyhiveStorage::<Local>::load_events(&storage)
+                .await?
+                .into_iter()
+                .map(|(hash, _)| hash)
+                .collect();
+        assert_eq!(raw_events, [stale_event]);
+        Ok(())
     }
 }

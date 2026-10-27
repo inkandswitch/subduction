@@ -48,7 +48,7 @@ use keyhive_core::{
     store::ciphertext::{CiphertextStore, CiphertextStoreExt},
 };
 use keyhive_crypto::{
-    content::reference::ContentRef, digest::Digest, identifier::Identifier, signed::SerdeSigned,
+    content::reference::ContentRef, digest::Digest, identifier::Identifier,
     signer::async_signer::AsyncSigner,
 };
 use keyline::contract::Keyline;
@@ -63,7 +63,7 @@ use crate::{
     signed_message::SignedMessage,
     storage::{KeyhiveStorage, StorageHash},
     storage_ops,
-    storage_ops::{bincode_deserialize, bincode_serialize},
+    storage_ops::{decode_value, encode_value},
     syncpoints::SyncpointMap,
 };
 
@@ -113,7 +113,7 @@ pub struct KeyhiveProtocol<
 > where
     Signer: AsyncSigner<Async> + Clone,
     CRef: ContentRef,
-    Plaintext: for<'de> serde::Deserialize<'de>,
+    Plaintext: keyhive_codec::traits::Decode,
     CipherStore: CiphertextStore<Async, CRef, Plaintext>
         + CiphertextStoreExt<Async, CRef, Plaintext>
         + Clone,
@@ -121,7 +121,6 @@ pub struct KeyhiveProtocol<
     Rng: rand::CryptoRng + rand::RngCore,
     KeylineStore: Keyline<Async, RetentionWatermark = ContentHeads<CRef>>,
     KeylineStore::Error: Send + Sync + 'static,
-    CRef: keyhive_codec::traits::Encode + keyhive_codec::traits::StreamDecode,
     Conn: KeyhiveConnection<Async>,
     Store: KeyhiveStorage<Async>,
     Async: future_form::FutureForm,
@@ -160,7 +159,7 @@ impl<Signer, CRef, Plaintext, CipherStore, Listener, Rng, KeylineStore, Conn, St
 where
     Signer: AsyncSigner<Async> + Clone,
     CRef: ContentRef,
-    Plaintext: for<'de> serde::Deserialize<'de>,
+    Plaintext: keyhive_codec::traits::Decode,
     CipherStore: CiphertextStore<Async, CRef, Plaintext>
         + CiphertextStoreExt<Async, CRef, Plaintext>
         + Clone,
@@ -168,7 +167,6 @@ where
     Rng: rand::CryptoRng + rand::RngCore,
     KeylineStore: Keyline<Async, RetentionWatermark = ContentHeads<CRef>>,
     KeylineStore::Error: Send + Sync + 'static,
-    CRef: keyhive_codec::traits::Encode + keyhive_codec::traits::StreamDecode,
     Conn: KeyhiveConnection<Async>,
     Store: KeyhiveStorage<Async>,
     Async: future_form::FutureForm,
@@ -195,8 +193,8 @@ impl<Signer, CRef, Plaintext, CipherStore, Listener, Rng, KeylineStore, Conn, St
     >
 where
     Signer: AsyncSigner<Async> + Clone,
-    CRef: ContentRef + serde::de::DeserializeOwned,
-    Plaintext: for<'de> serde::Deserialize<'de>,
+    CRef: ContentRef,
+    Plaintext: keyhive_codec::traits::Decode,
     CipherStore: CiphertextStore<Async, CRef, Plaintext>
         + CiphertextStoreExt<Async, CRef, Plaintext>
         + Clone,
@@ -204,7 +202,6 @@ where
     Rng: rand::CryptoRng + rand::RngCore,
     KeylineStore: Keyline<Async, RetentionWatermark = ContentHeads<CRef>>,
     KeylineStore::Error: Send + Sync + 'static,
-    CRef: keyhive_codec::traits::Encode + keyhive_codec::traits::StreamDecode,
     Conn: KeyhiveConnection<Async>,
     Conn::SendError: 'static,
     Conn::DisconnectError: 'static,
@@ -321,7 +318,7 @@ where
                 .map_err(keyhive_error)?
         };
 
-        collect_serialized_events(events).map(Some)
+        Ok(Some(collect_serialized_events(events)))
     }
 
     /// Bulk snapshot of every agent's reachable events, deduplicated.
@@ -351,7 +348,7 @@ where
             if !skip_serialization.contains(&h)
                 && let Entry::Vacant(e) = event_data.entry(h)
             {
-                e.insert(serialize_event(&StaticEvent::from(event.clone()))?);
+                e.insert(serialize_event(&StaticEvent::from(event.clone())));
             }
         }
 
@@ -890,18 +887,17 @@ where
         let msg_bytes =
             cbor_serialize(&message).map_err(|e| SigningError::Serialization(e.to_string()))?;
 
-        let signed: SerdeSigned<Vec<u8>> = {
+        let signed = {
             let keyhive = { self.keyhive.lock().await.dupe() };
             keyhive
-                .try_sign(msg_bytes)
+                .sign_bytes(msg_bytes)
                 .await
                 .map_err(SigningError::SigningFailed)?
         };
 
-        // Wire format: bincode `SerdeSigned<Vec<u8>>` (matches `Signed.toBytes()`
-        // from keyhive-wasm; see `keyhive_wasm/src/js/signed.rs`).
-        let signed_bytes =
-            bincode::serialize(&signed).map_err(|e| SigningError::Serialization(e.to_string()))?;
+        // Wire format: the `KH` frame of a `Signed<Bytes>` (matches
+        // `SignedBytes.toBytes()` from keyhive_wasm's `Keyhive.trySign`).
+        let signed_bytes = storage_ops::encode_value(signed.signed().as_ref());
 
         Ok(if include_contact_card {
             SignedMessage::with_contact_card(signed_bytes, self.contact_card.clone())
@@ -974,7 +970,7 @@ where
             if their_events.contains_key(&digest) {
                 let h = digest_to_bytes(&digest);
                 if let Entry::Vacant(entry) = result.entry(h) {
-                    let pair = serialize_event(&event)?;
+                    let pair = serialize_event(&event);
                     entry.insert(pair);
                 }
             }
@@ -1034,7 +1030,7 @@ where
         let mut events: Vec<StaticEvent<CRef>> = Vec::with_capacity(event_bytes_list.len());
         for (idx, item) in event_bytes_list.iter().enumerate() {
             let bytes = item.as_ref();
-            match bincode_deserialize::<StaticEvent<CRef>>(bytes) {
+            match decode_value::<StaticEvent<CRef>>(bytes) {
                 Ok(ev) => events.push(ev),
                 Err(e) => {
                     let head_len = core::cmp::min(bytes.len(), 96);
@@ -1118,7 +1114,7 @@ where
 
         let events: Vec<StaticEvent<CRef>> = event_bytes_list
             .iter()
-            .filter_map(|bytes| match bincode_deserialize(bytes.as_ref()) {
+            .filter_map(|bytes| match decode_value(bytes.as_ref()) {
                 Ok(ev) => Some(ev),
                 Err(e) => {
                     tracing::warn!(error = %e, "storage recovery: failed to deserialize event");
@@ -1281,7 +1277,7 @@ where
     Async: future_form::FutureForm,
     Signer: AsyncSigner<Async> + Clone,
     CRef: ContentRef,
-    Plaintext: for<'de> serde::Deserialize<'de>,
+    Plaintext: keyhive_codec::traits::Decode,
     CipherStore: CiphertextStore<Async, CRef, Plaintext>
         + CiphertextStoreExt<Async, CRef, Plaintext>
         + Clone,
@@ -1289,7 +1285,6 @@ where
     Rng: rand::CryptoRng + rand::RngCore,
     KeylineStore: Keyline<Async, RetentionWatermark = ContentHeads<CRef>>,
     KeylineStore::Error: Send + Sync + 'static,
-    CRef: keyhive_codec::traits::Encode + keyhive_codec::traits::StreamDecode,
 {
     Ok(keyhive
         .static_events_for_agent(who)
@@ -1308,7 +1303,7 @@ where
     Async: future_form::FutureForm,
     Signer: AsyncSigner<Async> + Clone,
     CRef: ContentRef,
-    Plaintext: for<'de> serde::Deserialize<'de>,
+    Plaintext: keyhive_codec::traits::Decode,
     CipherStore: CiphertextStore<Async, CRef, Plaintext>
         + CiphertextStoreExt<Async, CRef, Plaintext>
         + Clone,
@@ -1316,7 +1311,6 @@ where
     Rng: rand::CryptoRng + rand::RngCore,
     KeylineStore: Keyline<Async, RetentionWatermark = ContentHeads<CRef>>,
     KeylineStore::Error: Send + Sync + 'static,
-    CRef: keyhive_codec::traits::Encode + keyhive_codec::traits::StreamDecode,
 {
     Ok(
         keyhive.id() == keyhive_core::principal::individual::id::IndividualId::from(id)
@@ -1327,27 +1321,21 @@ where
 }
 
 /// Serialize a map of digested events into a hash-keyed byte map.
-fn collect_serialized_events<CRef: ContentRef, E: core::error::Error + 'static>(
+fn collect_serialized_events<CRef: ContentRef>(
     events: Map<Digest<StaticEvent<CRef>>, StaticEvent<CRef>>,
-) -> Result<AgentHashMap, ProtocolError<E>> {
-    let mut out = AgentHashMap::new();
-    for (digest, event) in events {
-        let h = digest_to_bytes(&digest);
-        out.insert(h, serialize_event(&event)?);
-    }
-    Ok(out)
+) -> AgentHashMap {
+    events
+        .into_iter()
+        .map(|(digest, event)| (digest_to_bytes(&digest), serialize_event(&event)))
+        .collect()
 }
 
 /// Serialize a `StaticEvent` to bincode bytes, `Arc`-shared.
 ///
 /// The bytes are `Arc`-shared so the periodic cache and every served response
 /// reference one copy instead of each deep-copying the bytes.
-fn serialize_event<CRef: ContentRef, E: core::error::Error + 'static>(
-    event: &StaticEvent<CRef>,
-) -> Result<Arc<[u8]>, ProtocolError<E>> {
-    let bytes =
-        bincode_serialize(event).map_err(|e| ProtocolError::Serialization(e.to_string()))?;
-    Ok(Arc::from(bytes))
+fn serialize_event<CRef: ContentRef>(event: &StaticEvent<CRef>) -> Arc<[u8]> {
+    Arc::from(encode_value(event))
 }
 
 /// Serialize a value to CBOR bytes.
@@ -1364,7 +1352,7 @@ fn cbor_deserialize<V: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<V, S
 }
 
 /// Convert a `Digest` to a 32-byte array.
-const fn digest_to_bytes<U: serde::Serialize>(digest: &Digest<U>) -> [u8; 32] {
+const fn digest_to_bytes<U>(digest: &Digest<U>) -> [u8; 32] {
     *digest.raw.as_bytes()
 }
 
@@ -1497,11 +1485,11 @@ mod tests {
             target_id: alice_id.clone(),
         };
         let payload = cbor_serialize(&forged).expect("forged payload should serialize");
-        let signed: keyhive_crypto::signed::SerdeSigned<Vec<u8>> = {
-            let kh = alice.keyhive.lock().await;
-            kh.try_sign(payload).await.expect("alice signs")
+        let signed = {
+            let kh = alice.keyhive.lock().await.dupe();
+            kh.sign_bytes(payload).await.expect("alice signs")
         };
-        let signed_bytes = bincode::serialize(&signed).expect("bincode encode");
+        let signed_bytes = encode_value(signed.signed().as_ref());
         let signed_msg = SignedMessage::new(signed_bytes);
 
         let err = alice
@@ -2843,10 +2831,10 @@ mod tests {
             "alice's agent should have membership/cgka ops after the group was created"
         );
 
-        // Event bytes round-trip via bincode (matching keyhive-wasm).
+        // Event bytes are statement frames, decodable as events (matching
+        // keyhive_wasm).
         for event_bytes in alice_hashes.values() {
-            bincode_deserialize::<StaticEvent<[u8; 32]>>(event_bytes)
-                .expect("event_bytes round-trips");
+            decode_value::<StaticEvent<[u8; 32]>>(event_bytes).expect("event_bytes round-trips");
         }
 
         // Symmetric: querying for a peer keyhive doesn't know about returns None.
