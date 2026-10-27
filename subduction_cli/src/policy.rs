@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use async_lock::Mutex as AsyncMutex;
 use dupe::Dupe;
+use future_form::Sendable;
 use futures::{FutureExt, future::BoxFuture};
 use keyhive_crypto::identifier::InvalidIdentifier;
 use sedimentree_core::id::SedimentreeId;
@@ -24,7 +25,7 @@ use subduction_keyhive::{
 };
 
 /// What a Keyhive membership query fails with in the CLI runtime.
-type CliAccessError = AccessError<future_form::Sendable, RuntimeKeyline>;
+type CliAccessError = AccessError<Sendable, RuntimeKeyline>;
 
 fn is_legacy(id: &SedimentreeId) -> bool {
     id.as_bytes()[16..].iter().all(|&b| b == 0)
@@ -47,7 +48,7 @@ impl CliKeyhivePolicyHandle {
     }
 }
 
-impl ConnectionPolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
+impl ConnectionPolicy<Sendable> for CliKeyhivePolicyHandle {
     type ConnectionDisallowed = InvalidIdentifier;
 
     fn authorize_connect(
@@ -66,7 +67,7 @@ impl ConnectionPolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
     }
 }
 
-impl StoragePolicy<future_form::Sendable> for CliKeyhivePolicyHandle {
+impl StoragePolicy<Sendable> for CliKeyhivePolicyHandle {
     type FetchDisallowed = FetchDisallowedError<CliAccessError>;
     type PutDisallowed = PutDisallowedError<CliAccessError>;
 
