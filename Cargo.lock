@@ -5444,6 +5444,7 @@ dependencies = [
  "iroh",
  "keyhive_core",
  "keyhive_crypto",
+ "keyline",
  "metrics",
  "metrics-exporter-prometheus",
  "metrics-process",

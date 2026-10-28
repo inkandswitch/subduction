@@ -21,6 +21,9 @@ use crate::{
     signed_message::SignedMessage, storage::MemoryKeyhiveStorage,
 };
 
+#[cfg(all(feature = "runtime", feature = "test-utils"))]
+pub mod node;
+
 /// The in-memory Keyline store used in tests.
 pub type TestKeyline = MemoryKeyline<ContentHeads<[u8; 32]>>;
 
