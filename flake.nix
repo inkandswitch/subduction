@@ -86,6 +86,9 @@
         workspaceCargoLock = {
           lockFile = ./Cargo.lock;
           outputHashes = {
+            # TEMPORARY: keyhive `fix-ops-for-agent` (see `[patch.crates-io]` in
+            # Cargo.toml). One entry covers every crate from that git rev.
+            "beekem-0.6.0" = "sha256-GaLvnnqFuNrRQPnAsg4AupI73a2DTUDT0ab+OYK3Zog=";
             "wasm-tracing-3.0.0-alpha.0" = "sha256-b5XSxRM601ID/uT2aLMb0WrP3lSGALrh0bPB+7Va/6s=";
           };
         };
