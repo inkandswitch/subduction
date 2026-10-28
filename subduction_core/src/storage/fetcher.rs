@@ -46,6 +46,14 @@ impl<Async: FutureForm, Store: Storage<Async>> Fetcher<Async, Store> {
         self.sedimentree_id
     }
 
+    /// Whether this sedimentree is registered in storage, including an
+    /// explicitly registered empty tree. This is a single-key lookup, not
+    /// a hydration scan.
+    #[must_use]
+    pub fn contains_sedimentree_id(&self) -> Async::Future<'_, Result<bool, Store::Error>> {
+        self.storage.contains_sedimentree_id(self.sedimentree_id)
+    }
+
     // ==================== Commits ====================
 
     /// List all commit IDs for this sedimentree.
