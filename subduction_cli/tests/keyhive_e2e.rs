@@ -139,12 +139,10 @@ async fn the_server_enforces_membership_it_learns_over_suk() -> TestResult {
     alice.sync_keyhive().await?;
     // Bob learns the membership from the server, which relays it. His own
     // policy needs it to accept the document's commits from the server.
-    until(
+    until_synced(
+        bob,
         "bob learns the server relays the document",
         move || async move {
-            // Alice's grant may not have reached the server yet: ask again.
-            drop(bob.sync_keyhive().await);
-            tokio::time::sleep(Duration::from_millis(200)).await;
             bob.keyhive
                 .access_for_doc(server_id, doc)
                 .await
@@ -152,6 +150,22 @@ async fn the_server_enforces_membership_it_learns_over_suk() -> TestResult {
         },
     )
     .await?;
+
+    // The server relays CGKA ops too, so Bob can decrypt what Alice seals.
+    let sealed = alice
+        .keyhive
+        .try_encrypt_content(doc, &change(9), &[], b"for readers only")
+        .await?;
+    alice.sync_keyhive().await?;
+    let sealed = sealed.encrypted_content();
+    until_synced(bob, "bob decrypts through the server", move || async move {
+        bob.keyhive
+            .try_decrypt_content(doc, sealed)
+            .await
+            .is_ok_and(|plaintext| plaintext == b"for readers only")
+    })
+    .await?;
+
     until("bob receives alice's commit", move || async move {
         drop(sync_tree(bob, server_peer, id).await);
         commit_count(bob, id).await == 2
@@ -362,6 +376,24 @@ where
 {
     eventually(what, CONVERGENCE_TIMEOUT, check).await?;
     Ok(())
+}
+
+/// Poll `check` until it holds, running `node`'s keyhive sync before each
+/// try: what it waits for may not have reached the server yet.
+async fn until_synced<F, Fut>(node: &LpNode, what: &'static str, mut check: F) -> TestResult
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = bool>,
+{
+    until(what, || {
+        let checked = check();
+        async move {
+            drop(node.sync_keyhive().await);
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            checked.await
+        }
+    })
+    .await
 }
 
 async fn commit(node: &LpNode, id: SedimentreeId, seed: u8) -> TestResult {

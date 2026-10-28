@@ -39,6 +39,9 @@ type TestNode = Node<ChannelTransport>;
 
 const SYNC_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(5_000);
 
+/// How long to let a keyhive sync round settle before checking its effect.
+const SETTLE: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// Membership travels in `SUK` frames over the same connection as sync,
 /// contact cards included: nothing is handed over out of band.
 #[tokio::test]
@@ -181,23 +184,48 @@ async fn the_server_refuses_bob_once_alice_revokes_him() -> TestResult {
     Ok(())
 }
 
-/// A reader who only talks to a relay gets the document's CGKA state, and so
-/// can decrypt.
+/// A reader who only talks to a relay gets the document's CGKA state through
+/// it, and decrypts. The relay carries the ops but still can't decrypt.
 #[tokio::test]
-#[ignore = "relays hold no CGKA operations, so they can't serve them (FIXME.md)"]
 async fn readers_get_cgka_state_through_a_relay() -> TestResult {
+    const PLAINTEXT: &[u8] = b"for readers only";
+
     let scene = Scene::new().await?;
     scene.alice_publishes().await?;
     scene.alice_admits_bob().await?;
+    let Scene {
+        server, alice, bob, ..
+    } = &scene;
+    let doc = scene.doc;
 
-    let (bob, doc) = (&scene.bob, scene.doc);
-    eventually("bob holds the document", CONVERGENCE_TIMEOUT, move || {
+    // Encrypting may update the key; that op travels like the others.
+    let sealed = alice
+        .keyhive
+        .try_encrypt_content(doc, &change(9), &[], PLAINTEXT)
+        .await?;
+    alice.sync_keyhive().await?;
+
+    let sealed = sealed.encrypted_content();
+    eventually("bob decrypts", CONVERGENCE_TIMEOUT, move || {
         Box::pin(async move {
             drop(bob.sync_keyhive().await);
-            bob.keyhive.has_document(doc).await
+            tokio::time::sleep(SETTLE).await;
+            bob.keyhive
+                .try_decrypt_content(doc, sealed)
+                .await
+                .is_ok_and(|plaintext| plaintext == PLAINTEXT)
         }) as BoolFuture<'_>
     })
     .await?;
+
+    assert!(
+        server
+            .keyhive
+            .try_decrypt_content(doc, sealed)
+            .await
+            .is_err(),
+        "the relay can't decrypt"
+    );
     Ok(())
 }
 

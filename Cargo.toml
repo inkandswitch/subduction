@@ -141,6 +141,17 @@ wasm-tracing = { version = "3.0.0-alpha.0", git = "https://github.com/dsgallups/
 wasm_refgen = "0.2.0" # no_std by default
 windows-sys = "0.61.2"
 
+# TEMPORARY: keyhive `fix-ops-for-agent`, so relays receive, keep, and serve
+# CGKA ops. Versions are unchanged from the crates.io releases above. Once it
+# is released, delete this section, bump the versions above, and drop the
+# matching `outputHashes` entry in `flake.nix`.
+[patch.crates-io]
+keyhive_codec = { git = "https://github.com/inkandswitch/keyhive", rev = "947ac927c502aed4dec4199659d96d0bf0ef6768" }
+keyhive_core = { git = "https://github.com/inkandswitch/keyhive", rev = "947ac927c502aed4dec4199659d96d0bf0ef6768" }
+keyhive_crypto = { git = "https://github.com/inkandswitch/keyhive", rev = "947ac927c502aed4dec4199659d96d0bf0ef6768" }
+keyline = { git = "https://github.com/inkandswitch/keyhive", rev = "947ac927c502aed4dec4199659d96d0bf0ef6768" }
+keyline_memory = { git = "https://github.com/inkandswitch/keyhive", rev = "947ac927c502aed4dec4199659d96d0bf0ef6768" }
+
 [workspace.lints.rust]
 future_incompatible = { level = "warn", priority = -1 }
 let_underscore = { level = "warn", priority = -1 }
