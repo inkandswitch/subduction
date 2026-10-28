@@ -257,10 +257,8 @@ use crate::{
     KeyhivePeerId, change_id::ChangeId, connection::KeyhiveConnection, storage::KeyhiveStorage,
 };
 
-use keyhive_core::{
-    content::heads::ContentHeads, listener::no_listener::NoListener,
-    store::ciphertext::memory::MemoryCiphertextStore,
-};
+use keyhive_content::store::memory::MemoryCiphertextStore;
+use keyhive_core::{content::heads::ContentHeads, listener::no_listener::NoListener};
 use keyhive_crypto::signer::memory::MemorySigner;
 use keyline_memory::MemoryKeyline;
 

@@ -38,6 +38,10 @@ use alloc::{
 
 use async_lock::Mutex;
 use dupe::Dupe;
+use keyhive_content::{
+    reference::ContentRef,
+    store::{CiphertextStore, CiphertextStoreExt},
+};
 use keyhive_core::{
     certificate::KeylineStorageError,
     contact_card::ContactCard,
@@ -45,12 +49,8 @@ use keyhive_core::{
     event::{Event, static_event::StaticEvent},
     keyhive::Keyhive,
     listener::membership::MembershipListener,
-    store::ciphertext::{CiphertextStore, CiphertextStoreExt},
 };
-use keyhive_crypto::{
-    content::reference::ContentRef, digest::Digest, identifier::Identifier,
-    signer::async_signer::AsyncSigner,
-};
+use keyhive_crypto::{digest::Digest, identifier::Identifier, signer::async_signer::AsyncSigner};
 use keyline::contract::Keyline;
 
 use crate::{

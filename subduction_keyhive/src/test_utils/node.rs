@@ -111,10 +111,7 @@ pub type NodePolicy = SubductionKeyhive<
     keyhive_crypto::signer::memory::MemorySigner,
     crate::change_id::ChangeId,
     Vec<u8>,
-    keyhive_core::store::ciphertext::memory::MemoryCiphertextStore<
-        crate::change_id::ChangeId,
-        Vec<u8>,
-    >,
+    keyhive_content::store::memory::MemoryCiphertextStore<crate::change_id::ChangeId, Vec<u8>>,
     keyhive_core::listener::no_listener::NoListener,
     rand::rngs::OsRng,
     crate::handler::RuntimeKeyline,

@@ -162,7 +162,7 @@ async fn the_server_enforces_membership_it_learns_over_suk() -> TestResult {
         bob.keyhive
             .try_decrypt_content(doc, sealed)
             .await
-            .is_ok_and(|plaintext| plaintext == b"for readers only")
+            .is_ok_and(|opened| opened.plaintext == b"for readers only")
     })
     .await?;
 

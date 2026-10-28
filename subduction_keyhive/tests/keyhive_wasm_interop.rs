@@ -5,7 +5,7 @@
 //! produced (see `generate.cjs` there), so these tests catch the server drifting from
 //! the release clients run. In particular, the events include a revocation
 //! whose retained content heads hold `JsChangeId`s, which the server reads as
-//! [`ChangeId`]s.
+//! [`ChangeId`]s, and the CGKA operations a client sends a relay.
 
 use keyhive_codec::traits::{Decode, Encode};
 use keyhive_core::{
@@ -57,15 +57,18 @@ fn events_round_trip_byte_for_byte() -> TestResult {
     Ok(())
 }
 
-/// A server that ingests the events, and the client's contact card, sees the
-/// membership the client set up: Alice owns the document, the server relays
-/// it, and Bob was revoked.
+/// The relay the client synced to ingests the events, and the client's
+/// contact card, and sees the membership the client set up: Alice owns the
+/// document, the server relays it, and Bob was revoked. It keeps the
+/// document's CGKA operations to serve on, without being able to decrypt.
 #[tokio::test]
 async fn events_carry_the_membership() -> TestResult {
     let v = Vectors::parse()?;
+    // The relay's key in `generate.cjs`, so this server is that relay.
     let signer: keyhive_crypto::signer::memory::MemorySigner =
         ed25519_dalek::SigningKey::from_bytes(&[0x5e; 32]).into();
     let (server, _, _) = init_sendable_keyhive(signer).await?;
+    assert_eq!(Identifier::from(server.id()).to_bytes(), v.server);
 
     let alice = server
         .receive_contact_card(&ContactCard::from_bytes(&v.contact_card)?)
@@ -89,6 +92,13 @@ async fn events_carry_the_membership() -> TestResult {
     assert_eq!(access(v.alice).await?, Some(Power::Admin));
     assert_eq!(access(v.server).await?, Some(Power::Relay));
     assert_eq!(access(v.bob).await?, None);
+
+    let held = server
+        .cgka_ops_for_doc(&doc)
+        .await
+        .map_or(0, |ops| ops.len());
+    assert!(held > 0, "the relay keeps the CGKA operations");
+    assert!(!server.has_document(doc).await, "but never joins the tree");
     Ok(())
 }
 

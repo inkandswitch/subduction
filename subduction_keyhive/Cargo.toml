@@ -28,6 +28,7 @@ dhat = { workspace = true, optional = true }
 keyhive_core = { workspace = true }
 keyhive_crypto = { workspace = true, features = ["std"] }
 keyhive_codec = { workspace = true, features = ["std"] }
+keyhive_content = { workspace = true, features = ["std"] }
 keyline = { workspace = true, features = ["std"] }
 keyline_memory = { workspace = true, optional = true, features = ["std"] }
 sedimentree_core = { workspace = true }
