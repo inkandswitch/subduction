@@ -213,7 +213,7 @@ async fn readers_get_cgka_state_through_a_relay() -> TestResult {
             bob.keyhive
                 .try_decrypt_content(doc, sealed)
                 .await
-                .is_ok_and(|plaintext| plaintext == PLAINTEXT)
+                .is_ok_and(|opened| opened.plaintext == PLAINTEXT)
         }) as BoolFuture<'_>
     })
     .await?;

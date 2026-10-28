@@ -47,16 +47,18 @@ use futures::{
     future::{BoxFuture, LocalBoxFuture},
 };
 use keyhive_codec::traits::Decode;
+use keyhive_content::{
+    reference::ContentRef,
+    store::{CiphertextStore, CiphertextStoreExt},
+};
 use keyhive_core::{
     certificate::KeylineStorageError,
     content::heads::ContentHeads,
     keyhive::Keyhive,
     listener::membership::MembershipListener,
     principal::{document::id::DocumentId, individual::id::IndividualId},
-    store::ciphertext::{CiphertextStore, CiphertextStoreExt},
 };
 use keyhive_crypto::{
-    content::reference::ContentRef,
     identifier::{Identifier, InvalidIdentifier},
     signer::async_signer::AsyncSigner,
 };

@@ -478,8 +478,9 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "beekem"
-version = "0.6.0"
-source = "git+https://github.com/inkandswitch/keyhive?rev=947ac927c502aed4dec4199659d96d0bf0ef6768#947ac927c502aed4dec4199659d96d0bf0ef6768"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27213239630d3b0f825bdb7cec3a7542d5e486c9cf94d986439f509bf49654ff"
 dependencies = [
  "blake3",
  "chacha20poly1305",
@@ -2910,16 +2911,37 @@ dependencies = [
 [[package]]
 name = "keyhive_codec"
 version = "0.1.0"
-source = "git+https://github.com/inkandswitch/keyhive?rev=947ac927c502aed4dec4199659d96d0bf0ef6768#947ac927c502aed4dec4199659d96d0bf0ef6768"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "88bb801be05f13783d02b1814e4b3ec6e72daf7a8b8fd8dd71c26f646acd4403"
 dependencies = [
  "bijoux",
  "thiserror 2.0.20",
 ]
 
 [[package]]
+name = "keyhive_content"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdd2483838718a74d35e2cd378b2ba1fe26066b7e4255643940c1c400c546d0e"
+dependencies = [
+ "blake3",
+ "chacha20poly1305",
+ "derivative",
+ "derive-where",
+ "dupe",
+ "future_form",
+ "futures",
+ "keyhive_codec",
+ "keyhive_crypto",
+ "thiserror 2.0.20",
+ "tracing",
+]
+
+[[package]]
 name = "keyhive_core"
-version = "0.8.0"
-source = "git+https://github.com/inkandswitch/keyhive?rev=947ac927c502aed4dec4199659d96d0bf0ef6768#947ac927c502aed4dec4199659d96d0bf0ef6768"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33a5c70c1d0fee188405ddecdcc9026bdfb2df999147f41258322e452bdc45b6"
 dependencies = [
  "async-lock",
  "beekem",
@@ -2934,6 +2956,7 @@ dependencies = [
  "futures",
  "imbl",
  "keyhive_codec",
+ "keyhive_content",
  "keyhive_crypto",
  "keyline",
  "nonempty",
@@ -2946,8 +2969,9 @@ dependencies = [
 
 [[package]]
 name = "keyhive_crypto"
-version = "0.3.0"
-source = "git+https://github.com/inkandswitch/keyhive?rev=947ac927c502aed4dec4199659d96d0bf0ef6768#947ac927c502aed4dec4199659d96d0bf0ef6768"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5c43696feb4ef8c3a0ed42226ceb6ec97e68e9915945b9ab15788dcb2b563f2"
 dependencies = [
  "blake3",
  "chacha20poly1305",
@@ -2966,8 +2990,9 @@ dependencies = [
 
 [[package]]
 name = "keyline"
-version = "0.1.0"
-source = "git+https://github.com/inkandswitch/keyhive?rev=947ac927c502aed4dec4199659d96d0bf0ef6768#947ac927c502aed4dec4199659d96d0bf0ef6768"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6103486d35fc190f62d47f6ebeece62e847604b9ccd678f9807c6cdb853b89a4"
 dependencies = [
  "bijoux",
  "ed25519-dalek 2.2.0",
@@ -2980,8 +3005,9 @@ dependencies = [
 
 [[package]]
 name = "keyline_memory"
-version = "0.1.0"
-source = "git+https://github.com/inkandswitch/keyhive?rev=947ac927c502aed4dec4199659d96d0bf0ef6768#947ac927c502aed4dec4199659d96d0bf0ef6768"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f791bd46e6c806fc600eea8a884970df68adf849a3b8ec0c1eededc67f9aee5"
 dependencies = [
  "async-lock",
  "future_form",
@@ -5639,6 +5665,7 @@ dependencies = [
  "future_form",
  "futures",
  "keyhive_codec",
+ "keyhive_content",
  "keyhive_core",
  "keyhive_crypto",
  "keyline",

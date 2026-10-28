@@ -10,9 +10,9 @@ use alloc::{format, string::ToString, sync::Arc, vec::Vec};
 use core::time::Duration;
 
 use async_lock::Mutex as AsyncMutex;
+use keyhive_content::store::memory::MemoryCiphertextStore;
 use keyhive_core::{
     contact_card::ContactCard, keyhive::Keyhive, listener::no_listener::NoListener,
-    store::ciphertext::memory::MemoryCiphertextStore,
 };
 use keyhive_crypto::{identifier::Identifier, signer::memory::MemorySigner};
 use rand::rngs::OsRng;

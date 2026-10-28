@@ -240,10 +240,8 @@ mod tests {
     fn fake_contact_card() -> ContactCard {
         // Build a real ContactCard by spinning up a small keyhive in a
         // current-thread runtime so the test stays sync.
-        use keyhive_core::{
-            keyhive::Keyhive, listener::no_listener::NoListener,
-            store::ciphertext::memory::MemoryCiphertextStore,
-        };
+        use keyhive_content::store::memory::MemoryCiphertextStore;
+        use keyhive_core::{keyhive::Keyhive, listener::no_listener::NoListener};
         use keyhive_crypto::signer::memory::MemorySigner;
 
         let rt = tokio::runtime::Builder::new_current_thread()

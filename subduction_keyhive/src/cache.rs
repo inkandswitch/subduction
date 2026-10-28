@@ -14,13 +14,14 @@ use alloc::{
 };
 
 use dupe::Dupe;
-use keyhive_core::{
-    content::heads::ContentHeads,
-    keyhive::Keyhive,
-    listener::membership::MembershipListener,
-    store::ciphertext::{CiphertextStore, CiphertextStoreExt},
+use keyhive_content::{
+    reference::ContentRef,
+    store::{CiphertextStore, CiphertextStoreExt},
 };
-use keyhive_crypto::{content::reference::ContentRef, signer::async_signer::AsyncSigner};
+use keyhive_core::{
+    content::heads::ContentHeads, keyhive::Keyhive, listener::membership::MembershipListener,
+};
+use keyhive_crypto::signer::async_signer::AsyncSigner;
 use keyline::contract::Keyline;
 
 use crate::{

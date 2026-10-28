@@ -7,9 +7,10 @@ use async_channel::{Receiver, Sender};
 use async_lock::Mutex;
 use future_form::Local;
 use futures::{FutureExt, future::LocalBoxFuture};
+use keyhive_content::store::memory::MemoryCiphertextStore;
 use keyhive_core::{
     content::heads::ContentHeads, keyhive::Keyhive, listener::no_listener::NoListener,
-    principal::group::id::GroupId, store::ciphertext::memory::MemoryCiphertextStore,
+    principal::group::id::GroupId,
 };
 use keyhive_crypto::{identifier::Identifier, signer::memory::MemorySigner};
 use keyline::power::Power;
