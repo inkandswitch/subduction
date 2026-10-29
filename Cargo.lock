@@ -179,6 +179,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "archery"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33ca55ee147b1926dbea904f50fe4902494e97bc742205abbbf10c709e43815f"
+
+[[package]]
 name = "arrayvec"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -472,20 +478,20 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "beekem"
-version = "0.5.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "556733f3f71101717862a384702a6ae6e320d9089d0f6a4aca07aeca3b6b512a"
+checksum = "27213239630d3b0f825bdb7cec3a7542d5e486c9cf94d986439f509bf49654ff"
 dependencies = [
  "blake3",
  "chacha20poly1305",
  "dupe",
  "ed25519-dalek 2.2.0",
  "future_form",
+ "keyhive_codec",
  "keyhive_crypto",
  "nonempty",
  "rand 0.8.8",
- "serde",
- "thiserror 1.0.69",
+ "thiserror 2.0.20",
  "tracing",
 ]
 
@@ -496,15 +502,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e0df3f02c7ce18790c3c2f547305fa61c8c9a73425d681bae7f978ccbf5abbc4"
 dependencies = [
  "thiserror 2.0.20",
-]
-
-[[package]]
-name = "bincode"
-version = "1.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
-dependencies = [
- "serde",
 ]
 
 [[package]]
@@ -1201,7 +1198,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 dependencies = [
  "generic-array",
- "rand_core 0.6.4",
  "typenum",
 ]
 
@@ -1226,9 +1222,9 @@ dependencies = [
 
 [[package]]
 name = "ctutils"
-version = "0.4.2"
+version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d5515a3834141de9eafb9717ad39eea8247b5674e6066c404e8c4b365d2a29e"
+checksum = "fe3e9d21d39e6f39ff46e03d5b621424f88ee23d8a1672c6bfc9ccc7f2da4f6a"
 dependencies = [
  "cmov",
 ]
@@ -1245,7 +1241,6 @@ dependencies = [
  "digest 0.10.7",
  "fiat-crypto 0.2.9",
  "rustc_version",
- "serde",
  "subtle",
  "zeroize",
 ]
@@ -1302,7 +1297,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -2507,6 +2502,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "imbl"
+version = "7.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46bad832b9b463ed9398b8506488cc2e3b897a9d44f13af115f382aac71f4fec"
+dependencies = [
+ "archery",
+ "equivalent",
+ "imbl-sized-chunks",
+ "rand_core 0.9.5",
+ "rand_xoshiro",
+ "version_check",
+ "wide",
+]
+
+[[package]]
+name = "imbl-sized-chunks"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a0813be332553f857953298749fa19549e8b61b80589757c29b4e2a804fa9c6"
+
+[[package]]
 name = "indenter"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2893,13 +2909,42 @@ dependencies = [
 ]
 
 [[package]]
-name = "keyhive_core"
-version = "0.7.0"
+name = "keyhive_codec"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ad72233ea8a7de1abc90854e7bae9e0c6169f66d0366a6cdb463fbb1d8154c4"
+checksum = "88bb801be05f13783d02b1814e4b3ec6e72daf7a8b8fd8dd71c26f646acd4403"
 dependencies = [
+ "bijoux",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "keyhive_content"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdd2483838718a74d35e2cd378b2ba1fe26066b7e4255643940c1c400c546d0e"
+dependencies = [
+ "blake3",
+ "chacha20poly1305",
+ "derivative",
+ "derive-where",
+ "dupe",
+ "future_form",
+ "futures",
+ "keyhive_codec",
+ "keyhive_crypto",
+ "thiserror 2.0.20",
+ "tracing",
+]
+
+[[package]]
+name = "keyhive_core"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33a5c70c1d0fee188405ddecdcc9026bdfb2df999147f41258322e452bdc45b6"
+dependencies = [
+ "async-lock",
  "beekem",
- "bincode",
  "blake3",
  "chacha20poly1305",
  "derivative",
@@ -2909,23 +2954,25 @@ dependencies = [
  "ed25519-dalek 2.2.0",
  "future_form",
  "futures",
+ "imbl",
+ "keyhive_codec",
+ "keyhive_content",
  "keyhive_crypto",
+ "keyline",
  "nonempty",
  "rand 0.8.8",
- "serde",
  "signature 2.2.0",
- "thiserror 1.0.69",
+ "thiserror 2.0.20",
  "tracing",
  "x25519-dalek",
 ]
 
 [[package]]
 name = "keyhive_crypto"
-version = "0.2.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af2feeaee7929bfabd6ac79a36d86ebbeb648cc137267e6c5b1465d2f657c313"
+checksum = "a5c43696feb4ef8c3a0ed42226ceb6ec97e68e9915945b9ab15788dcb2b563f2"
 dependencies = [
- "bincode",
  "blake3",
  "chacha20poly1305",
  "derive_more 1.0.0",
@@ -2933,12 +2980,43 @@ dependencies = [
  "ed25519-dalek 2.2.0",
  "future_form",
  "futures",
+ "keyhive_codec",
  "rand 0.8.8",
- "serde",
  "signature 2.2.0",
- "thiserror 1.0.69",
+ "thiserror 2.0.20",
  "tracing",
  "x25519-dalek",
+]
+
+[[package]]
+name = "keyline"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6103486d35fc190f62d47f6ebeece62e847604b9ccd678f9807c6cdb853b89a4"
+dependencies = [
+ "bijoux",
+ "ed25519-dalek 2.2.0",
+ "future_form",
+ "keyhive_codec",
+ "keyhive_crypto",
+ "thiserror 2.0.20",
+ "tracing",
+]
+
+[[package]]
+name = "keyline_memory"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f791bd46e6c806fc600eea8a884970df68adf849a3b8ec0c1eededc67f9aee5"
+dependencies = [
+ "async-lock",
+ "future_form",
+ "futures",
+ "keyhive_codec",
+ "keyhive_crypto",
+ "keyline",
+ "once_cell",
+ "tracing",
 ]
 
 [[package]]
@@ -4864,6 +4942,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
+name = "safe_arch"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96b02de82ddbe1b636e6170c21be622223aea188ef2e139be0a5b219ec215323"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5352,7 +5439,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_cli"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "ahash",
  "async-channel",
@@ -5377,6 +5464,7 @@ dependencies = [
  "iroh",
  "keyhive_core",
  "keyhive_crypto",
+ "keyline",
  "metrics",
  "metrics-exporter-prometheus",
  "metrics-process",
@@ -5562,12 +5650,11 @@ dependencies = [
 
 [[package]]
 name = "subduction_keyhive"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "async-channel",
  "async-lock",
  "base64",
- "bincode",
  "blake3",
  "bolero",
  "ciborium",
@@ -5577,14 +5664,17 @@ dependencies = [
  "ed25519-dalek 2.2.0",
  "future_form",
  "futures",
+ "keyhive_codec",
+ "keyhive_content",
  "keyhive_core",
  "keyhive_crypto",
+ "keyline",
+ "keyline_memory",
  "nonempty",
  "rand 0.8.8",
  "sedimentree_core",
  "serde",
  "serde_bytes",
- "serde_json",
  "subduction_core",
  "subduction_crypto",
  "testresult",
@@ -5811,7 +5901,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -5946,9 +6036,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.53.1"
+version = "1.54.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
+checksum = "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
 dependencies = [
  "bytes",
  "libc",
@@ -6629,6 +6719,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c1c8e20c8a38fc7d65abfe74eb7280e4aa667e8eec8bc84996d2874810748d9"
 dependencies = [
  "rustls-pki-types",
+]
+
+[[package]]
+name = "wide"
+version = "0.7.33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ce5da8ecb62bcd8ec8b7ea19f69a51275e91299be594ea5cc6ef7819e16cd03"
+dependencies = [
+ "bytemuck",
+ "safe_arch",
 ]
 
 [[package]]
