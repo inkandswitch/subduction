@@ -17,8 +17,8 @@ use hyper::{
     Method, Response, StatusCode,
     body::Bytes,
     header::{
-        ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
-        ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_MAX_AGE, CACHE_CONTROL, CONTENT_TYPE, HeaderValue,
+        ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN,
+        ACCESS_CONTROL_MAX_AGE, CONTENT_TYPE, HeaderValue,
     },
 };
 use hyper_util::rt::TokioIo;
@@ -1202,9 +1202,6 @@ async fn handle_contact_card(
             };
             resp.headers_mut()
                 .insert(ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
-            // The card is generated at startup, so it changes when the server restarts.
-            resp.headers_mut()
-                .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
             Ok::<_, std::convert::Infallible>(resp)
         }
     });
