@@ -280,6 +280,12 @@ where
         self.peer_id.clone()
     }
 
+    /// The local peer's contact card.
+    #[must_use]
+    pub const fn contact_card(&self) -> &ContactCard {
+        &self.contact_card
+    }
+
     /// Whether the provided peer is registered.
     pub async fn has_peer(&self, peer_id: &KeyhivePeerId) -> bool {
         self.peers.lock().await.contains_key(peer_id)

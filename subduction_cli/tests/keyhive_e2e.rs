@@ -23,11 +23,16 @@ use std::{
     time::Duration,
 };
 
+use ed25519_dalek::SigningKey;
 use future_form::Sendable;
-use keyhive_core::principal::document::id::DocumentId;
+use keyhive_core::{
+    contact_card::ContactCard,
+    principal::{document::id::DocumentId, individual::id::IndividualId},
+};
 use keyhive_crypto::identifier::Identifier;
 use keyline::power::Power;
 use nonempty::nonempty;
+use reqwest::header::HeaderValue;
 use sedimentree_core::{
     blob::Blob, depth::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
 };
@@ -78,6 +83,7 @@ type OpenClient = Arc<
 >;
 
 const SERVICE_NAME: &str = "keyhive-e2e-test";
+const SERVER_KEY_SEED: [u8; 32] = [0x5e; 32];
 const SERVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const SYNC_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(10_000);
 
@@ -244,6 +250,24 @@ async fn legacy_documents_need_no_membership() -> TestResult {
     server.stop()
 }
 
+#[tokio::test]
+async fn the_server_serves_its_own_contact_card() -> TestResult {
+    let server = Server::spawn().await?;
+
+    let resp = reqwest::get(format!("{}/keyhive/contact-card", server.base_url))
+        .await?
+        .error_for_status()?;
+    let cors = resp.headers().get("access-control-allow-origin").cloned();
+    let card = ContactCard::from_bytes(&resp.bytes().await?)?;
+
+    assert_eq!(cors.as_ref().map(HeaderValue::as_bytes), Some(&b"*"[..]));
+    assert_eq!(
+        card.id(),
+        IndividualId::from(&SigningKey::from_bytes(&SERVER_KEY_SEED))
+    );
+    server.stop()
+}
+
 /// A `subduction_cli server` process with keyhive auth, killed on drop.
 struct Server {
     child: Child,
@@ -257,7 +281,7 @@ impl Server {
         let ready_file = data_dir.path().join("ready");
         let child = Command::new(cli_binary()?)
             .args(["server", "--socket", "127.0.0.1:0", "--key-seed"])
-            .arg("5e".repeat(32))
+            .arg(hex::encode(SERVER_KEY_SEED))
             .args(["--service-name", SERVICE_NAME, "--data-dir"])
             .arg(data_dir.path())
             .arg("--ready-file")
