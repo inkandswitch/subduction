@@ -30,6 +30,7 @@ fn close_ancestry(commits: &[LooseCommit]) -> Vec<LooseCommit> {
                 .filter(|p| ids.contains(p))
                 .collect();
             LooseCommit::new(c.sedimentree_id(), c.head(), pruned_parents, *c.blob_meta())
+                .expect("pruning preserves parent limit")
         })
         .collect()
 }

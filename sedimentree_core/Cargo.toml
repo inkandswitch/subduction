@@ -33,7 +33,9 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 arbitrary = { workspace = true, optional = false, features = ["derive"] }
+bincode = { workspace = true }
 bolero = { workspace = true, features = ["arbitrary"] }
+ciborium = { workspace = true }
 criterion = { workspace = true }
 criterion_pprof = { workspace = true }
 dhat = { workspace = true }
@@ -55,7 +57,7 @@ arbitrary = ["dep:arbitrary"]
 bolero = ["dep:bolero", "arbitrary", "std"]
 getrandom = ["dep:getrandom"]
 rayon = ["dep:rayon", "std"]
-serde = ["dep:serde"]
+serde = ["dep:serde", "serde/alloc"]
 std = [
   "async-lock/std",
   "blake3/std",

@@ -1,10 +1,10 @@
 //! Individual/"loose" commits.
 
-use alloc::{borrow::ToOwned, collections::BTreeSet, vec::Vec};
+use alloc::{borrow::ToOwned, collections::BTreeSet, string::ToString, vec::Vec};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     crypto::digest::Digest,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{InvalidLooseCommit, LooseCommit, id::CommitId},
 };
 use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;
@@ -24,15 +24,19 @@ pub struct WasmLooseCommit(LooseCommit);
 #[wasm_bindgen(js_class = LooseCommit)]
 impl WasmLooseCommit {
     /// Create a new `LooseCommit` from the given sedimentree ID, head, parents, and blob metadata.
+    ///
+    /// # Errors
+    ///
+    /// Throws `InvalidLooseCommit` if the deduplicated parent set exceeds the
+    /// core wire-format limit.
     #[wasm_bindgen(constructor)]
-    #[must_use]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices
     pub fn new(
         sedimentree_id: &WasmSedimentreeId,
         head: &WasmCommitId,
         parents: Vec<JsCommitId>,
         blob_meta: &WasmBlobMeta,
-    ) -> Self {
+    ) -> Result<Self, WasmInvalidLooseCommit> {
         let core_head = CommitId::from(head);
         let core_parents: BTreeSet<CommitId> = parents
             .iter()
@@ -44,9 +48,10 @@ impl WasmLooseCommit {
             core_head,
             core_parents,
             blob_meta.clone().into(),
-        );
+        )
+        .map_err(WasmInvalidLooseCommit)?;
 
-        Self(core_commit)
+        Ok(Self(core_commit))
     }
 
     /// Get the commit's head identifier.
@@ -79,6 +84,19 @@ impl WasmLooseCommit {
     #[wasm_bindgen(getter, js_name = blobMeta)]
     pub fn blob_meta(&self) -> WasmBlobMeta {
         self.0.blob_meta().to_owned().into()
+    }
+}
+
+/// Commit metadata exceeds a wire-format count limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error(transparent)]
+pub struct WasmInvalidLooseCommit(pub InvalidLooseCommit);
+
+impl From<WasmInvalidLooseCommit> for JsValue {
+    fn from(error: WasmInvalidLooseCommit) -> Self {
+        let error = js_sys::Error::new(&error.to_string());
+        error.set_name("InvalidLooseCommit");
+        error.into()
     }
 }
 

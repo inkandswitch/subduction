@@ -55,7 +55,8 @@ fn constructors_and_getters_preserve_core_value_and_encoding() {
                 .map(Into::into)
                 .collect(),
             &meta,
-        );
+        )
+        .unwrap();
         let prefixes = WasmFragment::from_checkpoint_prefixes(
             &tree,
             &head,

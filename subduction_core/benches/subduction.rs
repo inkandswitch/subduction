@@ -21,6 +21,7 @@
 //! - Async runtime overhead
 
 #![allow(missing_docs, unreachable_pub)]
+#![allow(clippy::expect_used, reason = "bounded benchmark fixtures")]
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use criterion_pprof::criterion::{Output, PProfProfiler};
@@ -88,7 +89,7 @@ mod generators {
         let parent = commit_id_from_seed(seed.wrapping_add(1));
         let blob = blob_from_seed(seed.wrapping_add(2), 64);
         let blob_meta = BlobMeta::new(&blob);
-        LooseCommit::new(id, head, BTreeSet::from([parent]), blob_meta)
+        LooseCommit::new(id, head, BTreeSet::from([parent]), blob_meta).expect("valid metadata")
     }
 
     /// Generate a fragment from a seed.
@@ -108,7 +109,7 @@ mod generators {
             .collect();
         let blob = blob_from_seed(seed.wrapping_add(300), 128);
         let blob_meta = BlobMeta::new(&blob);
-        Fragment::new(id, head, boundary, &checkpoints, blob_meta)
+        Fragment::new(id, head, boundary, &checkpoints, blob_meta).expect("valid metadata")
     }
 
     /// Generate a request ID from seeds.

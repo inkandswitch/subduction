@@ -59,7 +59,7 @@ fn commit_id(seed: u8) -> CommitId {
 fn loose(head: u8, parents: &[u8]) -> LooseCommit {
     let blob_meta = BlobMeta::new(&Blob::new(vec![head; 16]));
     let parent_set: BTreeSet<CommitId> = parents.iter().copied().map(commit_id).collect();
-    LooseCommit::new(sed_id(), commit_id(head), parent_set, blob_meta)
+    LooseCommit::new(sed_id(), commit_id(head), parent_set, blob_meta).expect("valid metadata")
 }
 
 fn fragment(head: u8, boundary: &[u8], checkpoints: &[u8], blob_bytes: u8) -> Fragment {
@@ -73,6 +73,7 @@ fn fragment(head: u8, boundary: &[u8], checkpoints: &[u8], blob_bytes: u8) -> Fr
         &checkpoint_vec,
         blob_meta,
     )
+    .expect("valid metadata")
 }
 
 fn seed() -> FingerprintSeed {

@@ -242,7 +242,8 @@ mod tests {
             CommitId::new([head; 32]),
             alloc::collections::BTreeSet::default(),
             BlobMeta::new(&blob),
-        );
+        )
+        .expect("valid metadata");
         let signed = futures::executor::block_on(Signed::seal::<Sendable, _>(
             &MemorySigner::from_bytes(&[7u8; 32]),
             commit,
