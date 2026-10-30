@@ -8,6 +8,8 @@
 // Test utilities are allowed to panic for clearer test failures
 #![allow(clippy::expect_used, clippy::panic, clippy::missing_panics_doc)]
 
+pub mod sync_budget;
+
 use alloc::{
     collections::BTreeSet,
     string::{String, ToString},
