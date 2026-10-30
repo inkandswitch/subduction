@@ -4297,4 +4297,293 @@ mod tests {
 
         Ok(())
     }
+
+    /// A `Subduction` over in-memory storage, with handles on its resident tree map and storage.
+    macro_rules! subduction_over_memory_storage {
+        () => {{
+            let sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree>> =
+                Arc::new(BoundedShardedMap::with_key(0, 0));
+            let connections = Arc::new(Mutex::new(Map::new()));
+            let subscriptions = Arc::new(Mutex::new(Map::new()));
+            let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
+            let handler = Arc::new(SyncHandler::new(
+                sedimentrees.clone(),
+                connections.clone(),
+                subscriptions.clone(),
+                storage.clone(),
+                CountLeadingZeroBytes,
+                TestSpawn,
+            ));
+            let (subduction, _listener_fut, _actor_fut) = Subduction::<
+                '_,
+                Sendable,
+                _,
+                FailingSendMockConnection,
+                _,
+                _,
+                _,
+                InstantTimeout,
+                _,
+            >::new(
+                handler,
+                None,
+                test_signer(),
+                sedimentrees.clone(),
+                connections,
+                subscriptions,
+                storage.clone(),
+                PeerCounter::default(),
+                NonceCache::default(),
+                InstantTimeout,
+                Duration::from_secs(30),
+                CountLeadingZeroBytes,
+                TestSpawn,
+            );
+            (subduction, sedimentrees, storage)
+        }};
+    }
+
+    /// One record of a test history, stored through the public persist-only API.
+    #[derive(Clone)]
+    enum Record {
+        Commit(CommitId, BTreeSet<CommitId>),
+        Fragment(CommitId, BTreeSet<CommitId>, Vec<CommitId>),
+    }
+
+    /// Commit id with exactly `depth` leading zero bytes, unique by `n`.
+    fn id_at_depth(n: u8, depth: usize) -> CommitId {
+        let mut bytes = [0u8; 32];
+        if let Some(slot) = bytes.get_mut(depth) {
+            *slot = n;
+        }
+        if let Some(slot) = bytes.last_mut() {
+            *slot = n;
+        }
+        CommitId::new(bytes)
+    }
+
+    fn set(ids: &[CommitId]) -> BTreeSet<CommitId> {
+        ids.iter().copied().collect()
+    }
+
+    /// Fragment-covered histories: a root fragment with loose commits on top and a
+    /// concurrent branch below its head; stacked fragments with a deeper one
+    /// dominating them; and a chain fully absorbed by one fragment.
+    #[allow(clippy::many_single_char_names)]
+    fn histories() -> Vec<Vec<Record>> {
+        let (r, a, h, x, y, b) = (
+            id_at_depth(1, 0),
+            id_at_depth(2, 0),
+            id_at_depth(3, 1),
+            id_at_depth(4, 0),
+            id_at_depth(5, 0),
+            id_at_depth(6, 0),
+        );
+        let root_fragment_with_tail = vec![
+            Record::Commit(r, set(&[])),
+            Record::Commit(a, set(&[r])),
+            Record::Commit(h, set(&[a])),
+            Record::Commit(x, set(&[h])),
+            Record::Commit(y, set(&[x])),
+            Record::Commit(b, set(&[a])),
+            Record::Fragment(h, set(&[]), vec![r, a]),
+        ];
+
+        let (r2, a2, h1, c2, d2, h2, e2) = (
+            id_at_depth(11, 0),
+            id_at_depth(12, 0),
+            id_at_depth(13, 1),
+            id_at_depth(14, 0),
+            id_at_depth(15, 0),
+            id_at_depth(16, 2),
+            id_at_depth(17, 0),
+        );
+        let stacked_fragments = vec![
+            Record::Commit(r2, set(&[])),
+            Record::Commit(a2, set(&[r2])),
+            Record::Commit(h1, set(&[a2])),
+            Record::Commit(c2, set(&[h1])),
+            Record::Commit(d2, set(&[c2])),
+            Record::Commit(h2, set(&[d2])),
+            Record::Commit(e2, set(&[h2])),
+            Record::Fragment(h1, set(&[]), vec![r2, a2]),
+            Record::Fragment(h2, set(&[h1]), vec![c2, d2]),
+        ];
+
+        let (p, q, s, t, u) = (
+            id_at_depth(21, 2),
+            id_at_depth(22, 0),
+            id_at_depth(23, 0),
+            id_at_depth(24, 0),
+            id_at_depth(25, 2),
+        );
+        let absorbed_chain = vec![
+            Record::Commit(p, set(&[])),
+            Record::Commit(q, set(&[p])),
+            Record::Commit(s, set(&[q])),
+            Record::Commit(t, set(&[s])),
+            Record::Commit(u, set(&[t])),
+            Record::Fragment(u, set(&[p]), vec![]),
+        ];
+
+        vec![root_fragment_with_tail, stacked_fragments, absorbed_chain]
+    }
+
+    /// Deterministic Fisher–Yates shuffle (no RNG dependency).
+    fn shuffled(records: &[Record], seed: u64) -> Vec<Record> {
+        let mut out = records.to_vec();
+        let mut state = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+        for i in (1..out.len()).rev() {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            #[allow(clippy::cast_possible_truncation)]
+            let j = ((state >> 33) as usize) % (i + 1);
+            out.swap(i, j);
+        }
+        out
+    }
+
+    /// Minimal case of the test below, found by searching its failing order:
+    /// a fragment whose boundary is `h1`, then the commit `h1`, then `h1`'s
+    /// parent `a`. Reloaded from storage the tree reports one set of heads; the
+    /// resident tree that received the same three records one at a time reports
+    /// another.
+    #[tokio::test]
+    #[allow(clippy::many_single_char_names)]
+    async fn resident_heads_after_late_parent_match_reload() -> TestResult {
+        let (subduction, sedimentrees, _storage) = subduction_over_memory_storage!();
+        let id = SedimentreeId::new([0x5C; 32]);
+        let (r, a, h1, c, d, h2) = (
+            id_at_depth(11, 0),
+            id_at_depth(12, 0),
+            id_at_depth(13, 1),
+            id_at_depth(14, 0),
+            id_at_depth(15, 0),
+            id_at_depth(16, 2),
+        );
+
+        subduction
+            .store_fragment(id, h2, set(&[h1]), &[c, d], Blob::new(vec![1]))
+            .await?;
+        subduction
+            .store_commit(id, h1, set(&[a]), Blob::new(vec![2]))
+            .await?;
+        subduction
+            .store_commit(id, a, set(&[r]), Blob::new(vec![3]))
+            .await?;
+        let resident: BTreeSet<CommitId> = subduction
+            .get_heads(id)
+            .await?
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+
+        sedimentrees.remove(&id).await;
+        let reloaded: BTreeSet<CommitId> = subduction
+            .get_heads(id)
+            .await?
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+
+        assert_eq!(
+            resident, reloaded,
+            "resident heads differ from heads reloaded from storage"
+        );
+        Ok(())
+    }
+
+    /// `get_heads` answers from the resident tree, which is fed one record at a
+    /// time and re-minimized after each write; after an eviction or a restart it
+    /// answers from the same records reloaded from storage and minimized at once.
+    /// Storage holds every record, so the two answers must agree after every
+    /// write, whatever order the records arrived in. A disagreement is a heads
+    /// change that exists only in memory: a consumer indexing `get_heads` after
+    /// each write (as a server-side heads index does) records heads that no
+    /// reload will ever report again.
+    #[tokio::test]
+    async fn resident_heads_match_heads_reloaded_from_storage() -> TestResult {
+        let (subduction, sedimentrees, storage) = subduction_over_memory_storage!();
+        let access = storage.hydration_access();
+
+        let mut tree_seed: u32 = 0;
+        for (history_index, history) in histories().iter().enumerate() {
+            for order_seed in 0..200u64 {
+                tree_seed += 1;
+                let mut id_bytes = [0x5B; 32];
+                id_bytes[..4].copy_from_slice(&tree_seed.to_be_bytes());
+                let id = SedimentreeId::new(id_bytes);
+
+                let order = shuffled(history, order_seed);
+                for (step, record) in order.iter().enumerate() {
+                    let mut blob_bytes = tree_seed.to_be_bytes().to_vec();
+                    blob_bytes.extend(step.to_be_bytes());
+                    blob_bytes.extend(history_index.to_be_bytes());
+                    let blob = Blob::new(blob_bytes);
+                    match record.clone() {
+                        Record::Commit(head, parents) => {
+                            subduction.store_commit(id, head, parents, blob).await?;
+                        }
+                        Record::Fragment(head, boundary, checkpoints) => {
+                            subduction
+                                .store_fragment(id, head, boundary, &checkpoints, blob)
+                                .await?;
+                        }
+                    }
+
+                    let resident: BTreeSet<CommitId> = subduction
+                        .get_heads(id)
+                        .await?
+                        .unwrap_or_default()
+                        .into_iter()
+                        .collect();
+
+                    let stored_commits: Vec<LooseCommit> = access
+                        .load_loose_commits::<Sendable>(id)
+                        .await?
+                        .into_iter()
+                        .map(|vm| vm.payload().clone())
+                        .collect();
+                    let stored_fragments: Vec<Fragment> = access
+                        .load_fragments::<Sendable>(id)
+                        .await?
+                        .into_iter()
+                        .map(|vm| vm.payload().clone())
+                        .collect();
+                    let reloaded: BTreeSet<CommitId> =
+                        Sedimentree::new(stored_fragments, stored_commits)
+                            .heads(&CountLeadingZeroBytes)
+                            .into_iter()
+                            .collect();
+
+                    assert_eq!(
+                        resident, reloaded,
+                        "history {history_index}, order seed {order_seed}, after step {step}: \
+                         resident heads differ from heads reloaded from storage"
+                    );
+                }
+
+                let resident: BTreeSet<CommitId> = subduction
+                    .get_heads(id)
+                    .await?
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect();
+                sedimentrees.remove(&id).await;
+                let after_eviction: BTreeSet<CommitId> = subduction
+                    .get_heads(id)
+                    .await?
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect();
+                assert_eq!(
+                    resident, after_eviction,
+                    "history {history_index}, order seed {order_seed}: get_heads changed across an eviction"
+                );
+            }
+        }
+
+        Ok(())
+    }
 }
