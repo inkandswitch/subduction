@@ -57,6 +57,7 @@ pub mod builder;
 pub mod error;
 pub mod fragment_batch_item;
 pub mod listener_future;
+mod multiplexer_map;
 pub mod per_peer_sync;
 pub mod request;
 
@@ -109,6 +110,7 @@ use futures::{
     stream::{AbortHandle, AbortRegistration, Abortable, FuturesUnordered},
 };
 use listener_future::ListenerFuture;
+use multiplexer_map::MultiplexerMap;
 use nonempty::NonEmpty;
 use per_peer_sync::PerPeerSync;
 use request::FragmentRequested;
@@ -188,7 +190,7 @@ pub struct Subduction<
     /// [`connections`](Self::connections). Read paths that need only this
     /// lock (response routing, mux lookup) may take it alone; paths that
     /// also need `connections` must take `connections` first.
-    multiplexers: Arc<Mutex<Map<PeerId, Vec<Arc<Multiplexer>>>>>,
+    multiplexers: Arc<Mutex<MultiplexerMap<Conn, Async>>>,
 
     /// Default per-call deadline for roundtrip calls (`BatchSyncRequest` →
     /// `BatchSyncResponse`) when a caller passes `timeout: None`. This is
@@ -354,7 +356,7 @@ where
             depth_metric,
             sedimentrees,
             connections,
-            multiplexers: Arc::new(Mutex::new(Map::new())),
+            multiplexers: Arc::new(Mutex::new(MultiplexerMap::new())),
             subscriptions,
             storage,
             nonce_tracker: Arc::new(nonce_cache),
@@ -593,41 +595,9 @@ where
         &self,
         conn: &Authenticated<Conn, Async>,
     ) -> Result<bool, Conn::DisconnectionError> {
-        let peer_id = conn.peer_id();
-        tracing::info!(peer = %peer_id, "disconnecting connection from peer");
-
-        // Detach the muxes inside the same critical section that removes
-        // the connection, so a concurrent `add_connection` can't have its
-        // fresh mux clobbered. Cancel them afterwards, off the lock.
-        let detached = {
-            let mut connections = self.connections.lock().await;
-            match connections.remove(&peer_id) {
-                None => return Ok(false),
-                Some(peer_conns) => match peer_conns.remove_item(conn) {
-                    RemoveResult::Removed(remaining) => {
-                        connections.insert(peer_id, remaining);
-                        None
-                    }
-                    RemoveResult::WasLast(_) => Some(
-                        self.detach_peer_muxes_locked(&mut connections, &peer_id)
-                            .await,
-                    ),
-                    RemoveResult::NotFound(original) => {
-                        connections.insert(peer_id, original);
-                        return Ok(false);
-                    }
-                },
-            }
-        };
-
-        if let Some(muxes) = detached {
-            self.teardown_peer(&peer_id, muxes, 1).await;
-        } else {
-            #[cfg(feature = "metrics")]
-            crate::metrics::connection_closed();
+        if self.unregister_connection(conn, None).await.is_none() {
+            return Ok(false);
         }
-        self.refresh_connection_gauge().await;
-
         conn.disconnect().await.map(|()| true)
     }
 
@@ -642,14 +612,14 @@ where
         // the bulk equivalent of `teardown_peer` for every peer at once.
         let (all_conns, removed_muxes): (Vec<Authenticated<Conn, Async>>, Vec<Arc<Multiplexer>>) = {
             let mut guard = self.connections.lock().await;
-            let conns = core::mem::take(&mut *guard)
-                .into_values()
-                .flat_map(NonEmpty::into_iter)
-                .collect();
-            let muxes = core::mem::take(&mut *self.multiplexers.lock().await)
-                .into_values()
-                .flatten()
-                .collect();
+            let (conns, muxes) = {
+                let mut multiplexers = self.multiplexers.lock().await;
+                let conns = core::mem::take(&mut *guard)
+                    .into_values()
+                    .flat_map(NonEmpty::into_iter)
+                    .collect();
+                (conns, multiplexers.detach_all())
+            };
             // Clear here so that we don't erase new connections established
             // whilst we're draining old connections.
             self.subscriptions.lock().await.clear();
@@ -695,15 +665,10 @@ where
         // concurrent reconnect can't be clobbered.
         let removed = {
             let mut connections = self.connections.lock().await;
-            match connections.remove(peer_id) {
-                Some(conns) => {
-                    let muxes = self
-                        .detach_peer_muxes_locked(&mut connections, peer_id)
-                        .await;
-                    Some((conns, muxes))
-                }
-                None => None,
-            }
+            let mut multiplexers = self.multiplexers.lock().await;
+            connections
+                .remove(peer_id)
+                .map(|conns| (conns, multiplexers.detach_peer(peer_id)))
         };
 
         if let Some((conns, muxes)) = removed {
@@ -811,27 +776,12 @@ where
         }
 
         let mux = Arc::new(Multiplexer::new(peer_id, self.default_roundtrip_timeout));
-        let mut multiplexers = self.multiplexers.lock().await;
-        match multiplexers.get_mut(&peer_id) {
-            Some(muxes) => muxes.push(mux),
-            None => {
-                multiplexers.insert(peer_id, alloc::vec![mux]);
-            }
-        }
+        self.multiplexers.lock().await.insert(conn.clone(), mux);
 
         true
     }
 
-    /// Reconcile tracking for a connection whose transport has **already
-    /// failed** — e.g. a send returned `Err`, or the per-connection
-    /// receive loop exited and reported the closure via the
-    /// `connection_closed` channel. There is no live transport to close,
-    /// so this only updates in-memory state (connection map, multiplexers,
-    /// subscriptions, metrics).
-    ///
-    /// To proactively shut down a connection you believe is still live,
-    /// use [`disconnect`](Self::disconnect), which also closes the
-    /// transport via `Connection::disconnect`.
+    /// Remove a failed connection and schedule its async disconnection.
     ///
     /// Returns `Some(true)` if this was the last connection for the peer,
     /// `Some(false)` if the peer still has connections,
@@ -844,39 +794,61 @@ where
         &self,
         conn: &Authenticated<Conn, Async>,
     ) -> Option<bool> {
+        self.unregister_connection(conn, Some(Async::disconnect_task(conn.clone())))
+            .await
+    }
+
+    /// Remove the connection from tracking and schedule its async disconnection
+    ///
+    /// The important point here is that if the `cleanup` argument is `Some`
+    /// then it will be spawned immediately after the connection and
+    /// multiplexer are removed. This ensures that even if the
+    /// `unregister_connection` task is cancelled, the cleanup
+    /// (i.e. disconnection) will be scheduled.
+    async fn unregister_connection(
+        &self,
+        conn: &Authenticated<Conn, Async>,
+        cleanup: Option<Async::Future<'static, ()>>,
+    ) -> Option<bool> {
         let peer_id = conn.peer_id();
 
-        let detached = {
+        let (last, detached) = {
             let mut connections = self.connections.lock().await;
-            match connections.remove(&peer_id) {
-                None => return None,
-                Some(peer_conns) => match peer_conns.remove_item(conn) {
-                    RemoveResult::Removed(remaining) => {
-                        connections.insert(peer_id, remaining);
-                        None
-                    }
-                    RemoveResult::WasLast(_) => Some(
-                        self.detach_peer_muxes_locked(&mut connections, &peer_id)
-                            .await,
-                    ),
-                    RemoveResult::NotFound(original) => {
-                        connections.insert(peer_id, original);
-                        return None;
-                    }
-                },
-            }
+            // Acquire both locks before mutating either map. After removal,
+            // there must be no suspension before the cleanup handoff.
+            let mut multiplexers = self.multiplexers.lock().await;
+            let last = match connections.remove(&peer_id)?.remove_item(conn) {
+                RemoveResult::Removed(remaining) => {
+                    connections.insert(peer_id, remaining);
+                    false
+                }
+                RemoveResult::WasLast(_) => true,
+                RemoveResult::NotFound(original) => {
+                    connections.insert(peer_id, original);
+                    return None;
+                }
+            };
+            let detached = if last {
+                multiplexers.detach_peer(&peer_id)
+            } else {
+                multiplexers.detach_connection(conn)
+            };
+            (last, detached)
         };
 
-        let last = if let Some(muxes) = detached {
-            self.teardown_peer(&peer_id, muxes, 1).await;
-            Some(true)
+        // No map locks are held while spawning or polling transport cleanup.
+        if let Some(cleanup) = cleanup {
+            self.spawner.spawn(cleanup);
+        }
+        if last {
+            self.teardown_peer(&peer_id, detached, 1).await;
         } else {
+            Self::cancel_detached_muxes(detached).await;
             #[cfg(feature = "metrics")]
             crate::metrics::connection_closed();
-            Some(false)
-        };
+        }
         self.refresh_connection_gauge().await;
-        last
+        Some(last)
     }
 
     /// Test-only public access to the crate-internal
@@ -890,25 +862,13 @@ where
         self.remove_connection(conn).await
     }
 
-    /// Remove a peer's multiplexers from the map and return them for the
-    /// caller to cancel after releasing the lock.
-    ///
-    /// Takes the held `connections` guard by `&mut` so the mux removal
-    /// happens inside the caller's `connections` critical section; this is
-    /// what keeps a concurrent [`add_connection`](Self::add_connection)
-    /// from having its fresh mux clobbered. Cancellation is left to the
-    /// caller via [`cancel_detached_muxes`](Self::cancel_detached_muxes)
-    /// because its `.await` must not be held across the `connections` lock.
-    async fn detach_peer_muxes_locked(
+    /// Find the mux belonging to this physical connection, not another
+    /// connection or replacement with the same peer identity.
+    async fn mux_for_connection(
         &self,
-        _connections_guard: &mut Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>,
-        peer_id: &PeerId,
-    ) -> Vec<Arc<Multiplexer>> {
-        self.multiplexers
-            .lock()
-            .await
-            .remove(peer_id)
-            .unwrap_or_default()
+        conn: &Authenticated<Conn, Async>,
+    ) -> Option<Arc<Multiplexer>> {
+        self.multiplexers.lock().await.get(conn)
     }
 
     /// Cancel the pending calls on a set of detached multiplexers.
@@ -916,11 +876,12 @@ where
     /// Resolves any awaiting `sync_with_*` callers with
     /// [`CallError::ResponseDropped`]
     /// immediately rather than letting them wait out the per-call timeout.
-    /// Call this *after* the `connections` lock has been released (see
-    /// [`detach_peer_muxes_locked`](Self::detach_peer_muxes_locked)).
+    /// Call this *after* the connections and mux-map locks have been released.
+    /// The map's synchronous detach helpers only transfer ownership; closing
+    /// the detached muxes is separate because it awaits their pending-call locks.
     async fn cancel_detached_muxes(muxes: Vec<Arc<Multiplexer>>) {
         for mux in muxes {
-            mux.cancel_all_pending().await;
+            mux.close().await;
         }
     }
 
@@ -943,8 +904,7 @@ where
     }
 
     /// Finish per-peer teardown after the peer's last connection is gone
-    /// and its muxes have been detached via
-    /// [`detach_peer_muxes_locked`](Self::detach_peer_muxes_locked).
+    /// and its muxes have been detached under the connections and mux-map locks.
     ///
     /// Shared post-lock cleanup for [`disconnect`](Self::disconnect) and
     /// [`disconnect_from_peer`](Self::disconnect_from_peer) so they clean
@@ -1116,10 +1076,7 @@ where
 
                     // Mux missing means the peer was torn down between the
                     // connection snapshot and here; skip rather than panic.
-                    let Some(mux) = ({
-                        let muxes = self.multiplexers.lock().await;
-                        muxes.get(&peer_id).and_then(|v| v.first()).cloned()
-                    }) else {
+                    let Some(mux) = self.mux_for_connection(&conn).await else {
                         tracing::debug!(peer = %peer_id, "multiplexer for peer gone (concurrent teardown); skipping");
                         continue;
                     };
@@ -2174,10 +2131,7 @@ where
 
             // Mux missing means the peer was torn down between the
             // connection snapshot and here; report it dropped, don't panic.
-            let Some(mux) = ({
-                let muxes = self.multiplexers.lock().await;
-                muxes.get(to_ask).and_then(|v| v.first()).cloned()
-            }) else {
+            let Some(mux) = self.mux_for_connection(&conn).await else {
                 tracing::debug!(peer = %to_ask, "multiplexer for peer gone (concurrent teardown); skipping");
                 conn_errs.push((conn.clone(), CallError::ResponseDropped));
                 continue;
@@ -2397,10 +2351,7 @@ where
                         // Mux missing means the peer was torn down between
                         // the connection snapshot and here; report it
                         // dropped, don't panic.
-                        let Some(mux) = ({
-                            let muxes = self.multiplexers.lock().await;
-                            muxes.get(peer_id).and_then(|v| v.first()).cloned()
-                        }) else {
+                        let Some(mux) = self.mux_for_connection(conn).await else {
                             tracing::debug!(peer = %peer_id, "multiplexer for peer gone (concurrent teardown); skipping");
                             conn_errs.push((
                                 conn.clone(),
@@ -3305,23 +3256,13 @@ where
                     if let Ok((conn, msg)) = resp_result {
                         let peer_id = conn.peer_id();
                         if let Some(resp) = msg.try_as_batch_sync_response() {
-                            let muxes_for_peer = {
-                                let multiplexers = self.multiplexers.lock().await;
-                                multiplexers.get(&peer_id).cloned()
+                            let consumed = match self.mux_for_connection(&conn).await {
+                                Some(mux) => mux.resolve_pending(resp).await,
+                                None => false,
                             };
-
-                            let mut consumed = false;
-                            if let Some(muxes) = muxes_for_peer {
-                                for mux in &muxes {
-                                    if mux.resolve_pending(resp).await {
-                                        tracing::debug!(peer = %peer_id, "routed BatchSyncResponse to pending caller");
-                                        consumed = true;
-                                        break;
-                                    }
-                                }
-                            }
-
-                            if !consumed {
+                            if consumed {
+                                tracing::debug!(peer = %peer_id, "routed BatchSyncResponse to pending caller");
+                            } else {
                                 tracing::warn!(
                                     peer = %peer_id,
                                     "BatchSyncResponse had no pending caller"
@@ -3378,19 +3319,10 @@ where
                                 peer = %peer_id,
                                 "BatchSyncResponse arrived via msg_queue (expected response_queue) — routing to multiplexer"
                             );
-                            let muxes_for_peer = {
-                                let multiplexers = self.multiplexers.lock().await;
-                                multiplexers.get(&peer_id).cloned()
+                            let consumed = match self.mux_for_connection(&conn).await {
+                                Some(mux) => mux.resolve_pending(resp).await,
+                                None => false,
                             };
-                            let mut consumed = false;
-                            if let Some(muxes) = muxes_for_peer {
-                                for mux in &muxes {
-                                    if mux.resolve_pending(resp).await {
-                                        consumed = true;
-                                        break;
-                                    }
-                                }
-                            }
                             if !consumed {
                                 tracing::warn!(
                                     peer = %peer_id,
@@ -3598,11 +3530,7 @@ impl<
     /// One multiplexer is created per connection, so at a quiescent point
     /// this equals [`connection_count`](Self::connection_count).
     pub async fn mux_count(&self, peer_id: &PeerId) -> usize {
-        self.multiplexers
-            .lock()
-            .await
-            .get(peer_id)
-            .map_or(0, Vec::len)
+        self.multiplexers.lock().await.count(peer_id)
     }
 
     /// Number of connections currently registered for `peer_id`.
@@ -4170,6 +4098,75 @@ mod tests {
         loose_commit::{LooseCommit, id::CommitId},
     };
     use testresult::TestResult;
+
+    /// Keep submitted work unpolled to distinguish handing off cleanup from
+    /// executing it. No scheduler progress is needed for cancellation safety.
+    #[derive(Clone, Default)]
+    struct RecordingSpawn(Arc<std::sync::Mutex<Vec<futures::future::BoxFuture<'static, ()>>>>);
+    impl Spawn<Sendable> for RecordingSpawn {
+        fn spawn(&self, future: futures::future::BoxFuture<'static, ()>) -> AbortHandle {
+            let (handle, registration) = AbortHandle::new_pair();
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(Box::pin(async move {
+                    let _result = Abortable::new(future, registration).await;
+                }));
+            handle
+        }
+    }
+
+    #[tokio::test]
+    async fn failure_cleanup_handoff_survives_cancellation() -> TestResult {
+        use crate::connection::test_utils::MockConnection;
+        let spawner = RecordingSpawn::default();
+        let (node, _handler, _listener, _manager) =
+            builder::SubductionBuilder::<_, _, _, _, _, _, 256>::new()
+                .signer(test_signer())
+                .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+                .spawner(spawner.clone())
+                .timer(InstantTimeout)
+                .build::<Sendable, MockConnection>();
+        let conn = MockConnection::new().authenticated();
+        node.add_connection(conn.clone()).await?;
+
+        // Cancellation while acquiring the second map lock cannot detach the
+        // connection before cleanup has somewhere to go.
+        let muxes = node.multiplexers.lock().await;
+        let mut removal = Box::pin(node.remove_connection(&conn));
+        assert!(futures::poll!(&mut removal).is_pending());
+        drop(removal);
+        drop(muxes);
+        assert_eq!(node.connection_count(&conn.peer_id()).await, 1);
+        assert!(
+            spawner
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty()
+        );
+
+        // Force suspension in post-removal subscription bookkeeping. Cleanup
+        // must already be owned by the spawner, outside the cancelled caller.
+        let subscriptions = node.subscriptions.lock().await;
+        let mut removal = Box::pin(node.remove_connection(&conn));
+        assert!(futures::poll!(&mut removal).is_pending());
+        drop(removal);
+        drop(subscriptions);
+        assert_eq!(node.connection_count(&conn.peer_id()).await, 0);
+        assert_eq!(node.remove_connection(&conn).await, None);
+        let work = core::mem::take(
+            &mut *spawner
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        assert_eq!(work.len(), 1, "one handoff, despite repeated removal");
+        for task in work {
+            task.await;
+        }
+        Ok(())
+    }
 
     fn make_commit_parts() -> (CommitId, BTreeSet<CommitId>, Blob) {
         let contents = vec![0u8; 32];
