@@ -332,12 +332,11 @@ impl<Async: FutureForm, Conn, WireMsg: Encode + Decode> RunManager<Conn, WireMsg
                             tracing::debug!(conn = %conn_id, peer = %peer_id, "connection closed normally");
                         });
 
+                        // Publish the reader record before its completion
+                        // cleanup can run, including on another worker thread.
+                        let mut tasks = manager.tasks.lock().await;
                         let handle = manager.spawner.spawn(fut);
-                        manager
-                            .tasks
-                            .lock()
-                            .await
-                            .push((conn_id, task_id, handle, conn));
+                        tasks.push((conn_id, task_id, handle, conn));
                     }
                     Command::ReAdd(conn_id, conn, peer_id) => {
                         tracing::debug!(conn = %conn_id, peer = %peer_id, "re-adding connection");
@@ -380,12 +379,9 @@ impl<Async: FutureForm, Conn, WireMsg: Encode + Decode> RunManager<Conn, WireMsg
                             tracing::debug!(conn = %conn_id, peer = %peer_id, "connection closed normally");
                         });
 
+                        let mut tasks = manager.tasks.lock().await;
                         let handle = manager.spawner.spawn(fut);
-                        manager
-                            .tasks
-                            .lock()
-                            .await
-                            .push((conn_id, task_id, handle, conn));
+                        tasks.push((conn_id, task_id, handle, conn));
                     }
                     Command::RemoveById(conn_id) => {
                         manager.remove_connection_by_id(conn_id).await;
