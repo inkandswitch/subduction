@@ -713,9 +713,9 @@ async fn send_rejection<K: FutureForm, H: Handshake<K>>(
     now: TimestampSeconds,
 ) -> Result<(), AuthenticateError<H::Error>> {
     let reason = match error {
-        HandshakeError::InvalidSignature | HandshakeError::ResponseValidation(_) => {
-            RejectionReason::InvalidSignature
-        }
+        HandshakeError::InvalidSignature
+        | HandshakeError::ResponseValidation(_)
+        | HandshakeError::PeerMismatch { .. } => RejectionReason::InvalidSignature,
         HandshakeError::ChallengeValidation(cv) => cv.to_rejection_reason(),
     };
     let rejection = Rejection::new(reason, now);
@@ -809,6 +809,7 @@ pub struct VerifiedResponse {
 /// Returns an error if:
 /// - The signature is invalid
 /// - The challenge digest doesn't match the original challenge
+/// - A known audience does not match the authenticated response signer
 pub fn verify_response(
     signed_response: &Signed<Response>,
     original_challenge: &Challenge,
@@ -825,8 +826,18 @@ pub fn verify_response(
         .validate(original_challenge)
         .map_err(HandshakeError::ResponseValidation)?;
 
+    let server_id = PeerId::from(verified.issuer());
+    if let Audience::Known(expected) = original_challenge.audience
+        && server_id != expected
+    {
+        return Err(HandshakeError::PeerMismatch {
+            expected,
+            actual: server_id,
+        });
+    }
+
     Ok(VerifiedResponse {
-        server_id: PeerId::from(verified.issuer()),
+        server_id,
         response: *response,
     })
 }
@@ -834,6 +845,15 @@ pub fn verify_response(
 /// Errors that can occur during the handshake.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum HandshakeError {
+    /// The authenticated responder was not the requested peer.
+    #[error("expected peer {expected}, authenticated {actual}")]
+    PeerMismatch {
+        /// Configured identity.
+        expected: PeerId,
+        /// Verified response signer.
+        actual: PeerId,
+    },
+
     /// The signature on the message was invalid.
     #[error("invalid signature")]
     InvalidSignature,
