@@ -595,6 +595,16 @@ impl Sedimentree {
         self.fragments
             .retain(|head, _| fragment_heads.contains(head));
         self.commits.retain(|head, _| commit_heads.contains(head));
+
+        // `retain` keeps the capacity, so a tree loaded from a long history
+        // would otherwise keep the whole history's allocation after
+        // minimizing down to a few items. A no-op unless the maps can at
+        // least halve.
+        #[cfg(feature = "std")]
+        {
+            self.fragments.shrink_to_fit();
+            self.commits.shrink_to_fit();
+        }
     }
 
     /// Compute the set of fragment heads and commit heads that survive

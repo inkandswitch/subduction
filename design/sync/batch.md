@@ -160,6 +160,46 @@ The diff produces:
 - **Responder-only items** → send data to requester (with blobs)
 - **Requester-only fingerprints** → echo back as `RequestedData`
 
+The responder offers from its minimal tree, but echoes back only what it does
+not hold at all (`MinimizedSedimentree::responder_diff`). A loose
+commit that a kept fragment covers was dropped from the minimal tree, yet the
+responder still holds it; asking for it would make the requester upload data
+the responder already has. A commit the responder holds only inside a
+fragment's blob, never as a loose commit, can't be recognized from fragment
+metadata and is still echoed.
+
+Nor does the responder offer loose commits that a fragment the requester
+listed carries. A summary carries no fragment boundaries, so this is
+otherwise known only for fragments both sides hold. But when the responder
+holds a requester fragment's head as a loose commit, it knows that head's
+range: the head and its ancestors down to the next boundary commit, the run
+`minimize` would take that fragment to cover. A commit belongs to the range of
+every boundary commit or tip it is reached from without crossing another
+boundary, and the responder withholds it only when every range it belongs to
+is headed by such a requester fragment, the same rule `minimize` applies to
+the fragments it keeps. One range is not enough: Automerge's fragments leave
+out the ancestors of their boundary, which a concurrent branch can reach
+without crossing a boundary commit, so those commits sit in the matched range
+and in the boundary's own range, and only a fragment for the latter carries
+them.
+
+This is the round in which a writer that synced a new fragment's commits loose
+first, head included, sends the fragment itself. Its own tree has already
+dropped the commits the fragment covers, while the responder holds them loose
+until it ingests the fragment; without the rule the responder would send the
+whole range back. A writer that lists a fragment the responder lacks is asked
+for it in the same response, so by the next round the responder holds it.
+
+The rule trusts the requester's list. Nothing checks that a fragment's blob
+carries what its metadata claims, so a requester can hold a forged fragment
+with the right head (from a writer of the document, or passed on by a relay
+that accepted one). A responder holding that head's range loose then does not
+offer the range to it. Without this rule that was already so at any responder
+holding some fragment with that head, because fragments are matched by head;
+the rule extends it to responders holding the head loose and no fragment for
+it. A writer uploads the fragment it listed, but a reader cannot, so a reader
+holding a forged fragment cannot recover its range from any relay.
+
 ## Reverse-Lookup (Requester Side)
 
 When the response echoes back fingerprints, the requester must resolve them to actual items. This is done by building a reverse-lookup table from the in-memory sedimentree using the same seed:

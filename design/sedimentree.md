@@ -212,10 +212,41 @@ let minimal = tree.minimize(&depth_metric);
 
 1. Sort fragments by depth
 2. Remove fragments fully supported by deeper ones
-3. Remove commits covered by fragment boundaries
+3. Remove loose commits the kept fragments cover (below)
 4. Result: minimal equivalent tree
 
 Two trees with the same content will have identical minimal representations.
+
+### Coverage
+
+Walking down from every tip of the loose-commit DAG, each loose commit belongs
+to the *range* of every boundary commit it is reached from without crossing
+another boundary commit. A commit reached from a tip with no boundary commit
+in between is in no range and always kept. A range is covered when a kept
+fragment names its head, as its head or as one of its checkpoints, and a
+loose commit is dropped only when every range it belongs to is covered.
+
+The walk starts at loose commits, so a fragment covers nothing unless its head
+is also held as a loose commit. A writer that stores a fragment's head only
+inside the fragment leaves every commit of its range loose on every peer, and
+each cold sync ships them twice. Syncing a new fragment's head, and the
+commits of its range, loose before the fragment lets every peer prune them.
+In the round that delivers that fragment, a responder applies the same rule
+to the requester's fragments it does not hold yet, so as not to send the range
+back (see [Batch Sync](sync/batch.md#diffing-algorithm)).
+
+A node keeps its trees in minimal form, and remembers the heads of the
+commits and fragments minimization dropped (`MinimizedSedimentree`). It still
+holds them, so receiving one again is not new and it is not re-added.
+Re-added, a covered commit would have no loose path left to the fragment that
+covers it, and could never be pruned again.
+
+That makes the minimal form independent of re-sends, but not yet of arrival
+order. A commit that first arrives after a child of it was pruned has the same
+problem, and stays loose until the tree is next rebuilt from storage, which
+minimizes the full history at once. Commits that arrive before the fragment
+covering them, as a writer uploads them, are pruned as if they had all arrived
+together.
 
 ### Minimal Hash
 

@@ -860,7 +860,7 @@ impl<
         let cached = self
             .sedimentrees
             .with_entry(&id, |tree| {
-                ResponderDiff::new(tree.minimized(&self.depth_metric), their_fingerprints)
+                ResponderDiff::new(tree, &self.depth_metric, their_fingerprints)
             })
             .await;
 
@@ -1035,25 +1035,19 @@ impl<
             // items.
             //
             // `get_or_insert_with` adopts a concurrently-installed value
-            // if one appeared and records an LRU access; the built tree
-            // is already minimal, so it is wrapped clean.
+            // if one appeared and records an LRU access. The built tree
+            // wraps the full history, so the items minimization drops
+            // stay held.
             let mut sedimentree = if loose_commits.is_empty() && fragments.is_empty() {
-                MinimizedSedimentree::already_minimal(Sedimentree::default())
+                MinimizedSedimentree::default()
             } else {
-                let built = Sedimentree::new(fragments, loose_commits).minimize(&self.depth_metric);
-                self.sedimentrees
-                    .get_or_insert_with(id, || MinimizedSedimentree::already_minimal(built))
-                    .await
+                let mut built =
+                    MinimizedSedimentree::new(Sedimentree::new(fragments, loose_commits));
+                built.ensure_minimized(&self.depth_metric);
+                self.sedimentrees.get_or_insert_with(id, || built).await
             };
 
-            // The wire diff requires the minimal form. A freshly built
-            // value is already minimal, but an adopted
-            // concurrently-installed value may be dirty, so minimize once
-            // here.
-            let diff = ResponderDiff::new(
-                sedimentree.minimized(&self.depth_metric),
-                their_fingerprints,
-            );
+            let diff = ResponderDiff::new(&mut sedimentree, &self.depth_metric, their_fingerprints);
 
             let commits = diff
                 .local_commit_ids
@@ -1279,16 +1273,22 @@ struct ResponderDiff {
 }
 
 impl ResponderDiff {
-    /// Diff `minimal` against the requestor's fingerprint summary.
-    ///
-    /// `minimal` must already be in minimal form (the wire diff and
-    /// `heads_assuming_minimal` both rely on it).
-    fn new(minimal: &Sedimentree, their_fingerprints: &FingerprintSummary) -> Self {
-        let diff = minimal.diff_remote_fingerprints(their_fingerprints);
+    /// Diff `tree` against the requestor's fingerprint summary: offer from
+    /// its minimal form, and request only what it does not hold (see
+    /// [`MinimizedSedimentree::responder_diff`]). Minimizes `tree`
+    /// first if dirty.
+    fn new<M: DepthMetric>(
+        tree: &mut MinimizedSedimentree,
+        depth_metric: &M,
+        their_fingerprints: &FingerprintSummary,
+    ) -> Self {
+        let heads = tree.heads(depth_metric);
+        let total_items = tree.loose_commits().count() + tree.fragments().count();
+        let diff = tree.responder_diff(depth_metric, their_fingerprints);
 
         Self {
-            total_items: minimal.loose_commits().count() + minimal.fragments().count(),
-            heads: minimal.heads_assuming_minimal(),
+            total_items,
+            heads,
             local_commit_ids: diff.local_only_commits.iter().map(|(id, _)| **id).collect(),
             local_fragment_ids: diff
                 .local_only_fragments

@@ -1,0 +1,21 @@
+# Sync-efficiency ratchet baselines. Lower is better for every metric.
+# Values are deterministic and checked exactly: a higher value fails as a
+# regression, a lower one fails as a stale baseline. Re-record with:
+#   UPDATE_SYNC_BASELINES=1 cargo test --features arbitrary --test sync_efficiency
+# and commit the diff only when the change is an improvement (or an
+# intentional, reviewed trade-off).
+sedimentree.am_layout.cold_diff.items.n1000 = 1000
+sedimentree.am_layout.cold_diff.items.n10000 = 10000
+sedimentree.am_layout.cold_diff.redundant_loose.n1000 = 765
+sedimentree.am_layout.cold_diff.redundant_loose.n10000 = 9945
+sedimentree.am_layout.fragment_holder.minimized.resent_loose.n1000 = 765
+sedimentree.am_layout.fragment_holder.minimized.resent_loose.n10000 = 9945
+sedimentree.am_layout.fragment_holder.unminimized.resent_loose.n1000 = 765
+sedimentree.am_layout.fragment_holder.unminimized.resent_loose.n10000 = 9945
+sedimentree.am_layout.in_sync_summary.growth_10x_history_x100 = 1000
+sedimentree.am_layout.in_sync_summary.items.n1000 = 1003
+sedimentree.am_layout.in_sync_summary.items.n10000 = 10039
+sedimentree.am_layout.linear_history.heads.n1000 = 4
+sedimentree.am_layout.linear_history.heads.n10000 = 40
+sedimentree.am_layout.minimize.covered_loose_survivors.n1000 = 765
+sedimentree.am_layout.minimize.covered_loose_survivors.n10000 = 9945
