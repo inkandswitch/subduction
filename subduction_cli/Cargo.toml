@@ -1,6 +1,6 @@
 [package]
 name = "subduction_cli"
-version = "0.21.0"
+version = "0.22.0"
 description = "CLI server for Subduction sync over WebSocket, HTTP long-poll, and Iroh (QUIC)"
 
 categories = ["command-line-utilities", "web-programming"]
@@ -35,7 +35,7 @@ hyper = { workspace = true, features = ["http1", "server"] }
 hyper-util = { workspace = true, features = ["tokio", "http1", "server-auto"] }
 iroh = { workspace = true }
 keyhive_core = { workspace = true }
-keyhive_crypto = { workspace = true }
+keyhive_crypto = { workspace = true, features = ["std"] }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 metrics-process = { workspace = true, optional = true }
@@ -72,6 +72,7 @@ url = { workspace = true, features = ["std"] }
 [dev-dependencies]
 bolero = { workspace = true }
 future_form = { workspace = true }
+keyline = { workspace = true, features = ["std"] }
 reqwest = { workspace = true, features = ["native-tls"] }
 sedimentree_core = { workspace = true, features = ["std"] }
 subduction_core = { workspace = true, features = ["std", "test_utils"] }
@@ -81,6 +82,7 @@ subduction_http_longpoll = { workspace = true, features = [
   "std",
   "native-tls",
 ] }
+subduction_keyhive = { workspace = true, features = ["runtime", "test-utils"] }
 subduction_websocket = { workspace = true, features = ["futures-timer"] }
 tempfile = "3"
 tokio = { workspace = true, features = ["full"] }

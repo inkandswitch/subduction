@@ -17,7 +17,7 @@ pub enum SigningError {
 
     /// The signing operation failed.
     #[error("signing failed")]
-    SigningFailed(#[source] keyhive_crypto::signed::SigningError),
+    SigningFailed(#[source] keyhive_crypto::verified::SignError),
 }
 
 /// Errors that can occur during message verification.
@@ -73,7 +73,14 @@ pub enum ProtocolError<SendErr: core::error::Error + 'static> {
 
     /// Failed to convert peer ID to identifier.
     #[error("failed to convert peer ID")]
-    InvalidIdentifier(#[source] ed25519_dalek::SignatureError),
+    InvalidIdentifier(#[source] keyhive_crypto::identifier::InvalidIdentifier),
+
+    /// A Keyhive operation failed in its Keyline store, or otherwise.
+    ///
+    /// Boxed so `ProtocolError` needs no type parameter for the store's
+    /// error. The source chain is kept.
+    #[error("keyhive operation failed")]
+    Keyhive(#[source] alloc::boxed::Box<dyn core::error::Error + Send + Sync + 'static>),
 
     /// Failed to receive contact card.
     #[error("failed to receive contact card")]
