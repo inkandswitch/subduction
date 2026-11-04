@@ -1006,7 +1006,9 @@ where
     }
 
     /// Read locally first, then sync and subscribe on every current and future
-    /// connection, including reconnects, for the lifetime of the stream.
+    /// connection authorized to fetch this document, including reconnects, for
+    /// the lifetime of the stream. Authorization is checked before each outgoing
+    /// sync request so denied peers receive neither the ID nor its inventory.
     /// Local replay and updates work without peers or a running network listener;
     /// network synchronization requires the listener. Missing data or peers do
     /// not end observation. `StorageChecked` marks a checked local view, not global
@@ -1979,7 +1981,9 @@ where
     /// `stats` aggregates the sync; and the [`Vec`] carries per-connection
     /// [`CallError`]s for connections
     /// that failed. `succeeded = false` with an empty error list means no
-    /// connections to the peer were available.
+    /// connections to the peer were available, local policy denied disclosure,
+    /// or the peer returned `NotFound`/`Unauthorized`. Local policy is checked
+    /// before sending the document ID or inventory.
     ///
     /// # Errors
     ///
@@ -2094,7 +2098,9 @@ where
         Ok(((had_success, stats, conn_errs), supplied))
     }
 
-    /// Request a batch sync from all connected peers for a given sedimentree ID.
+    /// Request a batch sync from all connected peers authorized to fetch the
+    /// given sedimentree. Denied peers receive no request and report
+    /// `succeeded = false` without a connection error.
     ///
     /// # Returns
     ///
@@ -2292,6 +2298,13 @@ where
         IoError<Async, Store, Conn, Hdl::Message>,
     > {
         let peer = conn.peer_id();
+        // A sync request discloses the document ID and local inventory even
+        // when no content is sent. Gate every outgoing round, including loader
+        // connections and forwarded subscriptions, before constructing it.
+        if let Err(error) = self.storage.policy().authorize_fetch(peer, id).await {
+            tracing::debug!(%peer, tree = ?id, %error, "policy rejected outgoing sync");
+            return Ok(Ok(None));
+        }
         let seed = FingerprintSeed::random();
         let resolver = tree.fingerprint_resolver(&seed);
         let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());

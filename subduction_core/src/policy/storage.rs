@@ -24,6 +24,10 @@ pub trait StoragePolicy<Async: FutureForm> {
 
     /// Authorize fetching data for the given sedimentree.
     ///
+    /// Also gates outgoing sync requests to `peer`: the peer must be allowed
+    /// to fetch the document before we disclose its ID or inventory to them,
+    /// even when the document is not yet stored locally.
+    ///
     /// Returns `Ok(())` if the fetch is allowed, or an error if disallowed.
     fn authorize_fetch(
         &self,
