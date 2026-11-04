@@ -3,7 +3,14 @@
 #![allow(clippy::panic)]
 
 use core::{convert::Infallible, fmt, time::Duration};
-use std::{collections::BTreeSet, sync::Arc, vec::Vec};
+use std::{
+    collections::BTreeSet,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    vec::Vec,
+};
 
 use future_form::Sendable;
 use futures::{FutureExt, future::BoxFuture};
@@ -264,9 +271,12 @@ async fn local_add_stores_data_despite_rejecting_policy() {
     assert!(!ids.is_empty(), "Sedimentree ID should be stored");
 }
 
-/// A policy that rejects all fetches but allows connections and puts.
-#[derive(Clone, Copy)]
-struct RejectFetchPolicy;
+/// A policy that rejects fetches by default but allows connections and puts.
+/// Tests can allow the initial request, then revoke access before its response.
+#[derive(Default)]
+struct RejectFetchPolicy {
+    allow_fetch: AtomicBool,
+}
 
 /// Error returned when a fetch is rejected.
 #[derive(Debug, Clone, Copy)]
@@ -300,7 +310,14 @@ impl StoragePolicy<Sendable> for RejectFetchPolicy {
         _peer: PeerId,
         _sedimentree_id: SedimentreeId,
     ) -> BoxFuture<'_, Result<(), Self::FetchDisallowed>> {
-        async { Err(FetchRejected) }.boxed()
+        async {
+            if self.allow_fetch.load(Ordering::SeqCst) {
+                Ok(())
+            } else {
+                Err(FetchRejected)
+            }
+        }
+        .boxed()
     }
 
     fn authorize_put(
@@ -315,9 +332,16 @@ impl StoragePolicy<Sendable> for RejectFetchPolicy {
     fn filter_authorized_fetch(
         &self,
         _peer: PeerId,
-        _ids: Vec<SedimentreeId>,
+        ids: Vec<SedimentreeId>,
     ) -> BoxFuture<'_, Vec<SedimentreeId>> {
-        async { Vec::new() }.boxed()
+        async move {
+            if self.allow_fetch.load(Ordering::SeqCst) {
+                ids
+            } else {
+                Vec::new()
+            }
+        }
+        .boxed()
     }
 }
 
@@ -357,9 +381,12 @@ async fn requested_data_rejection(all_peers: bool) -> TestResult {
     let _recorder = metrics::set_default_local_recorder(&recorder);
     metrics::counter!(names::REQUESTED_DATA_SEND_FAILURES_TOTAL).absolute(0);
 
+    let policy = Arc::new(RejectFetchPolicy {
+        allow_fetch: AtomicBool::new(true),
+    });
     let (node, _, listener, manager) = SubductionBuilder::<_, _, _, _, _, _, 256>::new()
         .signer(test_signer())
-        .storage(MemoryStorage::new(), Arc::new(RejectFetchPolicy))
+        .storage(MemoryStorage::new(), policy.clone())
         .spawner(TokioSpawn)
         .timer(TokioTimeout)
         .build::<Sendable, ChannelMockConnection<SyncMessage>>();
@@ -382,6 +409,9 @@ async fn requested_data_rejection(all_peers: bool) -> TestResult {
             panic!("expected a sync request");
         };
         assert!(!request.fingerprint_summary.commit_fingerprints().is_empty());
+        // The outgoing request was authorized, but access can change before
+        // return-direction data is requested. That send must recheck policy.
+        policy.allow_fetch.store(false, Ordering::SeqCst);
         remote
             .inbound_tx
             .send(SyncMessage::BatchSyncResponse(BatchSyncResponse {
@@ -656,7 +686,7 @@ async fn unauthorized_fetch_returns_unauthorized_result() -> TestResult {
     let (subduction, _handler, listener_fut, actor_fut) =
         SubductionBuilder::<_, _, _, _, _, _, 256>::new()
             .signer(test_signer())
-            .storage(MemoryStorage::new(), Arc::new(RejectFetchPolicy))
+            .storage(MemoryStorage::new(), Arc::new(RejectFetchPolicy::default()))
             .spawner(TokioSpawn)
             .timer(InstantTimeout)
             .build::<Sendable, ChannelMockConnection<SyncMessage>>();

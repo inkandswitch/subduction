@@ -398,8 +398,8 @@ async fn add_commit_sends_one_frame_per_commit_to_a_subscriber() -> TestResult {
 }
 
 /// The same intersection governs data a node pulls *as a requester*. Relay
-/// R (policy: only A may fetch) has subscribers A and C; R pulls X from its
-/// dialed upstream B and forwards it to A only.
+/// R (policy: A and upstream B may fetch) has subscribers A and C; R pulls
+/// X from B and forwards it to A only. B must be authorized to learn X's ID.
 ///
 /// ```text
 ///   A ──dials──▸ R ──dials──▸ B (holds X)
@@ -418,7 +418,8 @@ async fn requester_pulled_data_is_pushed_only_to_authorized_subscribers() -> Tes
 
     let a = make_node(a_s.clone(), OpenPolicy);
     let c = make_node(c_s.clone(), OpenPolicy);
-    let r = make_node(r_s.clone(), AllowFetchFor(BTreeSet::from([a_peer])));
+    let b_peer = PeerId::from(b_s.verifying_key());
+    let r = make_node(r_s.clone(), AllowFetchFor(BTreeSet::from([a_peer, b_peer])));
     let b = make_node(b_s.clone(), OpenPolicy);
     connect(&a, &a_s, &r, &r_s).await?;
     connect(&c, &c_s, &r, &r_s).await?;
