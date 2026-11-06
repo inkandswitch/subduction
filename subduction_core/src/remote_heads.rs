@@ -21,7 +21,7 @@ use crate::peer::id::PeerId;
 ///
 /// The counter is scoped per-peer and incremented each time the sender
 /// sends a message carrying heads. Receivers should only accept updates
-/// where `counter` is strictly greater than the last seen value.
+/// where `counter` is strictly greater than the last seen for that sedimentree.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -62,11 +62,14 @@ impl RemoteHeadsObserver for NoRemoteHeadsObserver {
     fn on_remote_heads(&self, _id: SedimentreeId, _peer: PeerId, _heads: RemoteHeads) {}
 }
 
-/// Wraps a [`RemoteHeadsObserver`] with a per-peer staleness filter.
+/// Wraps a [`RemoteHeadsObserver`] with a per-(peer, sedimentree) staleness filter.
 ///
 /// The observer is only reachable through [`notify`](Self::notify), which
 /// checks the monotonic counter before forwarding. This makes it impossible
 /// to bypass the staleness filter.
+///
+/// Per tree, not per peer: the counter spans all trees, and frames for
+/// different trees can reach the wire out of stamp order.
 ///
 /// ```text
 /// incoming RemoteHeads ──► FilteredHeadsNotifier::notify
@@ -77,7 +80,7 @@ impl RemoteHeadsObserver for NoRemoteHeadsObserver {
 /// ```
 pub struct FilteredHeadsNotifier<R: RemoteHeadsObserver> {
     observer: R,
-    recv_counter: Arc<Mutex<Map<PeerId, u64>>>,
+    recv_counter: Arc<Mutex<Map<(PeerId, SedimentreeId), u64>>>,
 }
 
 impl<R: RemoteHeadsObserver> FilteredHeadsNotifier<R> {
@@ -100,7 +103,7 @@ impl<R: RemoteHeadsObserver> FilteredHeadsNotifier<R> {
             return;
         };
 
-        let last = counters.entry(peer).or_insert(0);
+        let last = counters.entry((peer, id)).or_insert(0);
         if heads.counter <= *last {
             return;
         }
