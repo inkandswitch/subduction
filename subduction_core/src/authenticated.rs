@@ -3,6 +3,8 @@
 //! Provides [`Authenticated<Conn, Async>`], a witness type proving that a connection
 //! has completed cryptographic handshake verification.
 
+pub mod resume;
+
 use core::marker::PhantomData;
 
 use future_form::FutureForm;
@@ -31,6 +33,11 @@ use crate::{
 ///
 /// Use [`handshake::initiate`] or [`handshake::respond`] to perform
 /// handshake verification and obtain an `Authenticated` connection.
+///
+/// [`Authenticated::resume`] also rebuilds one from a [`ResumeToken`] this
+/// node signed after an earlier handshake (see the [`resume`] module).
+///
+/// [`ResumeToken`]: resume::ResumeToken
 ///
 /// [`handshake::initiate`]: super::handshake::initiate
 /// [`handshake::respond`]: super::handshake::respond
