@@ -212,7 +212,7 @@ struct RemoteHeads {
 }
 ```
 
-The `counter` is stamped by a shared [`PeerCounter`] at send time — each message
+The `counter` is stamped by a shared [`PeerCounter`] — each message
 to a given peer gets a unique, strictly increasing value. Receivers use this to
 detect and discard out-of-order or stale heads on non-TCP transports (e.g., QUIC,
 WebRTC, relay).
@@ -220,8 +220,9 @@ WebRTC, relay).
 The `responder_heads` on `BatchSyncResponse` and the `sender_heads` on fire-and-forget
 `LooseCommit`/`Fragment` messages both carry `RemoteHeads`. The application receives
 heads notifications via `RemoteHeadsObserver::on_remote_heads(id, peer, heads)`,
-filtered through a per-peer staleness check that drops updates where
-`counter <= last_seen`.
+filtered through a per-(peer, sedimentree) staleness check that drops updates where
+`counter <= last_seen`. Per sedimentree because frames for different sedimentrees
+can reach the wire out of stamp order.
 
 [`PeerCounter`]: ../../subduction_core/src/peer/counter.rs
 
