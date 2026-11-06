@@ -145,3 +145,38 @@ pub trait RemoteHeadsNotifier {
     /// Notify the application of a remote peer's current heads for a sedimentree.
     fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone, Default)]
+    struct Recording(Arc<spin::Mutex<Vec<SedimentreeId>>>);
+
+    impl RemoteHeadsObserver for Recording {
+        fn on_remote_heads(&self, id: SedimentreeId, _peer: PeerId, _heads: RemoteHeads) {
+            self.0.lock().push(id);
+        }
+    }
+
+    fn heads(counter: u64) -> RemoteHeads {
+        RemoteHeads {
+            counter,
+            heads: alloc::vec![CommitId::new([0xA; 32])],
+        }
+    }
+
+    #[test]
+    fn newer_report_for_one_tree_does_not_stale_another() {
+        let recording = Recording::default();
+        let notifier = FilteredHeadsNotifier::new(recording.clone());
+        let peer = PeerId::new([1; 32]);
+        let first = SedimentreeId::new([1; 32]);
+        let second = SedimentreeId::new([2; 32]);
+
+        notifier.notify(second, peer, heads(2));
+        notifier.notify(first, peer, heads(1));
+
+        assert_eq!(*recording.0.lock(), alloc::vec![second, first]);
+    }
+}
