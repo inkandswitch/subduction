@@ -488,6 +488,8 @@ fn rewrap_listen_error<T: NodeTransport>(
     match err {
         ListenError::IoError(io) => ListenError::IoError(match io {
             IoError::Storage(e) => IoError::Storage(e),
+            IoError::StorageInterrupted => IoError::StorageInterrupted,
+            IoError::Load(e) => IoError::Load(e),
             IoError::ConnSend(e) => IoError::ConnSend(e),
             IoError::ConnRecv(e) => IoError::ConnRecv(e),
             IoError::ConnCall(e) => IoError::ConnCall(e),

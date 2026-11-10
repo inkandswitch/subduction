@@ -640,17 +640,17 @@ mod tests {
         }
 
         /// Some verified author. Put never checks who.
-        async fn author(seed: u8) -> VerifiedAuthor {
+        async fn author(seed: u8) -> TestResult<VerifiedAuthor> {
             let signer = MemorySigner::from_bytes(&[seed; 32]);
             let commit = LooseCommit::new(
                 SedimentreeId::new([seed; 32]),
                 CommitId::new([seed; 32]),
                 BTreeSet::new(),
                 BlobMeta::new(&Blob::new(vec![seed])),
-            );
-            Signed::seal::<Local, _>(&signer, commit)
+            )?;
+            Ok(Signed::seal::<Local, _>(&signer, commit)
                 .await
-                .verified_author()
+                .verified_author())
         }
 
         /// An owner with a fresh document, and `others` who know the
@@ -699,11 +699,11 @@ mod tests {
                 .await?;
 
             // An authorized relay may push anyone's commit.
-            authorize_put_with(&owner, peer(relay), author(7).await, tree(doc)).await?;
+            authorize_put_with(&owner, peer(relay), author(7).await?, tree(doc)).await?;
 
             // A stranger may push no one's.
             let denied =
-                authorize_put_with(&owner, peer(stranger), author(8).await, tree(doc)).await;
+                authorize_put_with(&owner, peer(stranger), author(8).await?, tree(doc)).await;
             assert!(matches!(
                 denied,
                 Err(PutDisallowedError::InsufficientPower(_))
@@ -799,11 +799,11 @@ mod tests {
                 Err(FetchDisallowedError::InvalidSedimentreeId(_))
             ));
             assert!(matches!(
-                authorize_put_with(&owner, bad_peer, author(1).await, tree(doc)).await,
+                authorize_put_with(&owner, bad_peer, author(1).await?, tree(doc)).await,
                 Err(PutDisallowedError::InvalidRequestorId(_))
             ));
             assert!(matches!(
-                authorize_put_with(&owner, peer(&owner), author(1).await, bad_tree).await,
+                authorize_put_with(&owner, peer(&owner), author(1).await?, bad_tree).await,
                 Err(PutDisallowedError::InvalidSedimentreeId(_))
             ));
             Ok(())
