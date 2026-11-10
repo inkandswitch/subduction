@@ -477,9 +477,9 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "beekem"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27213239630d3b0f825bdb7cec3a7542d5e486c9cf94d986439f509bf49654ff"
+checksum = "c2fcd22af09b46f5c2ff4613d6dcae5b7e9aff50373927619638a7fc33497bcf"
 dependencies = [
  "blake3",
  "chacha20poly1305",
@@ -492,6 +492,7 @@ dependencies = [
  "rand 0.8.8",
  "thiserror 2.0.20",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -1343,28 +1344,6 @@ name = "deranged"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
-
-[[package]]
-name = "derivative"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fcc3dd5e9e9c0b295d6e1e4d811fb6f157d5ffd784b8d202fc62eac8035a770b"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.109",
-]
-
-[[package]]
-name = "derive-where"
-version = "1.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d08b3a0bcc0d079199cd476b2cae8435016ec11d1c0986c6901c5ac223041534"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
 
 [[package]]
 name = "derive_arbitrary"
@@ -2918,14 +2897,12 @@ dependencies = [
 
 [[package]]
 name = "keyhive_content"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdd2483838718a74d35e2cd378b2ba1fe26066b7e4255643940c1c400c546d0e"
+checksum = "cd8c195ab18ef7d4cba6f744b3dc485e326cd6aea5a1670b78325cec2a3d2f85"
 dependencies = [
  "blake3",
  "chacha20poly1305",
- "derivative",
- "derive-where",
  "dupe",
  "future_form",
  "futures",
@@ -2933,20 +2910,19 @@ dependencies = [
  "keyhive_crypto",
  "thiserror 2.0.20",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
 name = "keyhive_core"
-version = "0.10.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33a5c70c1d0fee188405ddecdcc9026bdfb2df999147f41258322e452bdc45b6"
+checksum = "d49a47ab0c7e1c2a0756e5e09d1dde51bea3ad721598cbd16fa129b7c3b3e4dc"
 dependencies = [
  "async-lock",
  "beekem",
  "blake3",
  "chacha20poly1305",
- "derivative",
- "derive-where",
  "derive_more 1.0.0",
  "dupe",
  "ed25519-dalek 2.2.0",
@@ -2963,13 +2939,14 @@ dependencies = [
  "thiserror 2.0.20",
  "tracing",
  "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]
 name = "keyhive_crypto"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5c43696feb4ef8c3a0ed42226ceb6ec97e68e9915945b9ab15788dcb2b563f2"
+checksum = "25c4d4f2322c52966cf78f5ddfbc9c499781c7d0e0997d65b3cb65efb88de590"
 dependencies = [
  "blake3",
  "chacha20poly1305",
@@ -2981,16 +2958,18 @@ dependencies = [
  "keyhive_codec",
  "rand 0.8.8",
  "signature 2.2.0",
+ "subtle",
  "thiserror 2.0.20",
  "tracing",
  "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]
 name = "keyline"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6103486d35fc190f62d47f6ebeece62e847604b9ccd678f9807c6cdb853b89a4"
+checksum = "93deafce2a24435e282a94e2b8252495b60f3877e3820b7f886ed0a7366ea84c"
 dependencies = [
  "bijoux",
  "ed25519-dalek 2.2.0",
@@ -3003,9 +2982,9 @@ dependencies = [
 
 [[package]]
 name = "keyline_memory"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f791bd46e6c806fc600eea8a884970df68adf849a3b8ec0c1eededc67f9aee5"
+checksum = "ae88a61f5230acaa21582ae5122a78e83b46e970991c6d81811fc3286a098338"
 dependencies = [
  "async-lock",
  "future_form",
@@ -5823,17 +5802,6 @@ checksum = "912017718eb4d21930546245af9a3475c9dccf15675a5c215664e76621afc471"
 dependencies = [
  "rustc-demangle",
  "symbolic-common",
-]
-
-[[package]]
-name = "syn"
-version = "1.0.109"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72b64191b275b66ffe2469e8af2c1cfe3bafa67b529ead792a6d0160888b4237"
-dependencies = [
- "proc-macro2",
- "quote",
- "unicode-ident",
 ]
 
 [[package]]
