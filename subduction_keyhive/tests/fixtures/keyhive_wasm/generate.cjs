@@ -12,8 +12,8 @@
 //   node generate.cjs <keyhive repo>/keyhive_wasm/pkg > vectors.txt
 //
 // Keys, prekeys, and signatures are fresh each run, so regenerating changes
-// every line. The checked-in vectors come from keyhive_wasm 0.6.0, the
-// release alongside `keyhive_core` 0.10.0.
+// every line. The checked-in vectors come from keyhive_wasm 0.7.0, the
+// release alongside `keyhive_core` 0.11.0.
 //
 // If wasm-pack can't find a matching wasm-bindgen CLI, lower keyhive's
 // `wasm-bindgen` pin to the CLI's version: that changes only the JS glue, not
