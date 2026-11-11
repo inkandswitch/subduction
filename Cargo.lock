@@ -473,6 +473,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "base64-simd"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "339abbe78e73178762e23bea9dfd08e697eb3f3301cd4be981c0f78ba5859195"
+dependencies = [
+ "outref",
+ "vsimd",
+]
+
+[[package]]
 name = "base64ct"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1757,6 +1767,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "from_js_ref"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68019223a84a846ec9fab2cee81adcc43357543326d816793e8302e274e40e17"
+dependencies = [
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "fs_extra"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2971,6 +2990,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "keyhive_wasm"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f25fd13132f5c43c2a1358c005ad1ee4f551bffa89250ad99985ff4fc03a7c9d"
+dependencies = [
+ "base64-simd",
+ "beekem",
+ "console_error_panic_hook",
+ "derive_more 1.0.0",
+ "dupe",
+ "ed25519-dalek 2.2.0",
+ "from_js_ref",
+ "future_form",
+ "futures",
+ "getrandom 0.2.17",
+ "js-sys",
+ "keyhive_codec",
+ "keyhive_content",
+ "keyhive_core",
+ "keyhive_crypto",
+ "keyline",
+ "keyline_memory",
+ "nonempty",
+ "rand 0.8.8",
+ "thiserror 2.0.20",
+ "tracing",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-tracing 2.1.0",
+ "wasm_refgen",
+ "web-sys",
+]
+
+[[package]]
 name = "keyline"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3940,6 +3993,12 @@ checksum = "8c7c9e0d9b23589f26070720bac724174bfec1083e82f7854cdd0267518343c0"
 dependencies = [
  "num-traits",
 ]
+
+[[package]]
+name = "outref"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a80800c0488c3a21695ea981a54918fbb37abf04f4d0720c453632255e2ff0e"
 
 [[package]]
 name = "owo-colors"
@@ -5667,6 +5726,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "subduction_keyhive_wasm"
+version = "0.1.0"
+dependencies = [
+ "async-lock",
+ "future_form",
+ "futures",
+ "js-sys",
+ "keyhive_core",
+ "keyhive_wasm",
+ "keyline_memory",
+ "rand 0.8.8",
+ "subduction_keyhive",
+ "thiserror 2.0.20",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
 name = "subduction_redb_storage"
 version = "0.5.0"
 dependencies = [
@@ -5744,7 +5821,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wasm-bindgen",
- "wasm-tracing",
+ "wasm-tracing 3.0.0-alpha.0",
 ]
 
 [[package]]
@@ -6504,6 +6581,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "vsimd"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
+
+[[package]]
 name = "walkdir"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6646,11 +6729,36 @@ dependencies = [
 
 [[package]]
 name = "wasm-tracing"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11ab253baf6d3772bbdb37a0966b67d37ab80657ccd1a084b4d7b3de3232375d"
+dependencies = [
+ "tracing",
+ "tracing-subscriber",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "wasm-tracing"
 version = "3.0.0-alpha.0"
 source = "git+https://github.com/dsgallups/wasm-tracing.git?rev=9288999e1fbbd315bfa0602488138d40b2a55299#9288999e1fbbd315bfa0602488138d40b2a55299"
 dependencies = [
  "tracing",
  "tracing-subscriber",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "wasm_refgen"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51f25952dcc65f207ccea34b73f9da08e81bb5e389003fa66d67f05a7fabf685"
+dependencies = [
+ "from_js_ref",
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
  "wasm-bindgen",
 ]
 
