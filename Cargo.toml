@@ -96,7 +96,7 @@ http-body-util = "0.1.4"
 iroh = "1.0"
 hyper = { version = "1.6", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
-js-sys = { version = "=0.3.98", default-features = false }
+js-sys = { version = "=0.3.105", default-features = false }
 keyhive_codec = { version = "0.1.0", default-features = false }
 keyhive_content = { version = "0.4.0", default-features = false }
 keyhive_core = "0.12.0"
@@ -139,8 +139,8 @@ tracing-loki = "0.2.7"
 tracing-subscriber = { version = "0.3.2", default-features = false }
 tungstenite = "0.27"
 url = { version = "2.5", default-features = false }
-wasm-bindgen = { version = "=0.2.121", default-features = false }
-wasm-bindgen-futures = { version = "=0.4.71", default-features = false }
+wasm-bindgen = { version = "=0.2.128", default-features = false }
+wasm-bindgen-futures = { version = "=0.4.78", default-features = false }
 wasm-tracing = { version = "3.0.0-alpha.0", git = "https://github.com/dsgallups/wasm-tracing.git", rev = "9288999e1fbbd315bfa0602488138d40b2a55299" }
 windows-sys = "0.61.2"
 
