@@ -189,6 +189,9 @@ name = "arrayvec"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
+dependencies = [
+ "zeroize",
+]
 
 [[package]]
 name = "async-channel"
@@ -477,9 +480,9 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "beekem"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2fcd22af09b46f5c2ff4613d6dcae5b7e9aff50373927619638a7fc33497bcf"
+checksum = "7072cc482818ceb73b5b29452ff9d58b809feb8f294e468f84c1110f9989d7d2"
 dependencies = [
  "blake3",
  "chacha20poly1305",
@@ -554,6 +557,7 @@ dependencies = [
  "cfg-if",
  "constant_time_eq",
  "cpufeatures 0.3.1",
+ "zeroize",
 ]
 
 [[package]]
@@ -2897,9 +2901,9 @@ dependencies = [
 
 [[package]]
 name = "keyhive_content"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd8c195ab18ef7d4cba6f744b3dc485e326cd6aea5a1670b78325cec2a3d2f85"
+checksum = "bc25299f0911d9d1b7d9e3abb9b909ea905fc54877205210395fe873816cfac1"
 dependencies = [
  "blake3",
  "chacha20poly1305",
@@ -2915,9 +2919,9 @@ dependencies = [
 
 [[package]]
 name = "keyhive_core"
-version = "0.11.1"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d49a47ab0c7e1c2a0756e5e09d1dde51bea3ad721598cbd16fa129b7c3b3e4dc"
+checksum = "1b276ed33de5d9db6e2bc7b3b258f1acdca802009f92a6b590b11d3ff073bfc9"
 dependencies = [
  "async-lock",
  "beekem",
@@ -2944,11 +2948,12 @@ dependencies = [
 
 [[package]]
 name = "keyhive_crypto"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25c4d4f2322c52966cf78f5ddfbc9c499781c7d0e0997d65b3cb65efb88de590"
+checksum = "5b8199171b69cd29ebba2e8aa693aee0cd537849d7fd232231b4011811e76415"
 dependencies = [
  "blake3",
+ "chacha20 0.9.1",
  "chacha20poly1305",
  "derive_more 1.0.0",
  "dupe",
@@ -2956,6 +2961,7 @@ dependencies = [
  "future_form",
  "futures",
  "keyhive_codec",
+ "poly1305",
  "rand 0.8.8",
  "signature 2.2.0",
  "subtle",
@@ -2967,9 +2973,9 @@ dependencies = [
 
 [[package]]
 name = "keyline"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93deafce2a24435e282a94e2b8252495b60f3877e3820b7f886ed0a7366ea84c"
+checksum = "95b3bbe4dcec19ca9e5cf858b0d13c6a174ca84059dfc1146791e6cb8d143476"
 dependencies = [
  "bijoux",
  "ed25519-dalek 2.2.0",
@@ -2982,9 +2988,9 @@ dependencies = [
 
 [[package]]
 name = "keyline_memory"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae88a61f5230acaa21582ae5122a78e83b46e970991c6d81811fc3286a098338"
+checksum = "90e41b34e154407341f207983feeb1997e2a4e1cd50c71a7e5f0caa933163596"
 dependencies = [
  "async-lock",
  "future_form",
@@ -4120,6 +4126,7 @@ dependencies = [
  "cpufeatures 0.2.17",
  "opaque-debug",
  "universal-hash",
+ "zeroize",
 ]
 
 [[package]]
