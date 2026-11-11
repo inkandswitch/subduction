@@ -94,6 +94,32 @@ fn pair_set_digest<'a>(hashes: impl IntoIterator<Item = &'a EventHash>) -> Event
     out
 }
 
+/// The outcome of handling a message, for callers that act on sync progress.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MessageOutcome {
+    /// Events in the message updated keyhive state.
+    pub ingested: bool,
+
+    /// The sender confirmed the end of a sync round.
+    pub confirmed: bool,
+}
+
+impl MessageOutcome {
+    const fn from_ingest(ingested: bool) -> Self {
+        Self {
+            ingested,
+            confirmed: false,
+        }
+    }
+}
+
+impl core::ops::BitOrAssign for MessageOutcome {
+    fn bitor_assign(&mut self, other: Self) {
+        self.ingested |= other.ingested;
+        self.confirmed |= other.confirmed;
+    }
+}
+
 /// Keyhive sync protocol handler.
 ///
 /// Manages peer connections and implements the keyhive sync protocol for
@@ -516,7 +542,7 @@ where
     ///
     /// Verifies the message signature, optionally ingests a contact card,
     /// and dispatches to the appropriate handler based on message type.
-    /// Updates syncpoints internally.
+    /// Updates syncpoints internally and returns what the message changed.
     ///
     /// The optional `conn` is used to auto-register unknown peers when a
     /// `SyncCheck` arrives before any explicit `add_peer` call.
@@ -524,14 +550,15 @@ where
     /// # Errors
     ///
     /// Returns [`ProtocolError`] if signature verification, contact card
-    /// ingestion, or message handling fails.
+    /// ingestion, or message handling fails. Events can already be ingested
+    /// when an error is returned, e.g., when the reply cannot be sent.
     #[tracing::instrument(name = "keyhive_handle_message", level = "debug", skip_all, fields(peer = %from))]
     pub async fn handle_message(
         &self,
         from: &KeyhivePeerId,
         signed_msg: SignedMessage,
         conn: Option<Conn>,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<MessageOutcome, ProtocolError<Conn::SendError>> {
         let cached_sender_pair = self.cached_events_for_pair_with_peer(from).await;
         let verified = signed_msg.verify(from)?;
 
@@ -552,17 +579,26 @@ where
         }
 
         match &message {
-            Message::SyncRequest { .. } => {
-                self.handle_sync_request(message, cached_sender_pair.as_deref())
-                    .await
-            }
-            Message::SyncResponse { .. } => {
-                self.handle_sync_response(message, cached_sender_pair.as_deref())
-                    .await
-            }
-            Message::SyncOps { .. } => self.handle_sync_ops(message).await,
-            Message::RequestContactCard { .. } => self.handle_request_contact_card(message).await,
-            Message::MissingContactCard { .. } => self.handle_missing_contact_card(message).await,
+            Message::SyncRequest { .. } => self
+                .handle_sync_request(message, cached_sender_pair.as_deref())
+                .await
+                .map(|()| MessageOutcome::default()),
+            Message::SyncResponse { .. } => self
+                .handle_sync_response(message, cached_sender_pair.as_deref())
+                .await
+                .map(MessageOutcome::from_ingest),
+            Message::SyncOps { .. } => self
+                .handle_sync_ops(message)
+                .await
+                .map(MessageOutcome::from_ingest),
+            Message::RequestContactCard { .. } => self
+                .handle_request_contact_card(message)
+                .await
+                .map(|()| MessageOutcome::default()),
+            Message::MissingContactCard { .. } => self
+                .handle_missing_contact_card(message)
+                .await
+                .map(|()| MessageOutcome::default()),
             Message::SyncCheck {
                 sender_id,
                 sender_total,
@@ -585,6 +621,7 @@ where
                     local_syncpoint_for_sender,
                 )
                 .await
+                .map(|()| MessageOutcome::default())
             }
             Message::SyncConfirmation {
                 sender_id,
@@ -595,7 +632,10 @@ where
                     .lock()
                     .await
                     .set(sender_id.clone(), *confirmer_total);
-                Ok(())
+                Ok(MessageOutcome {
+                    ingested: false,
+                    confirmed: true,
+                })
             }
         }
     }
@@ -694,11 +734,12 @@ where
     ///
     /// If ops are sent back, the other side will confirm in `handle_sync_ops`.
     /// If no ops are sent, we send a confirmation and establish a syncpoint.
+    /// Returns whether the message's events updated keyhive state.
     async fn handle_sync_response(
         &self,
         message: Message,
         cached_sender_pair: Option<&AgentHashMap>,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<bool, ProtocolError<Conn::SendError>> {
         let Message::SyncResponse {
             sender_id,
             requested: requested_hashes,
@@ -757,7 +798,7 @@ where
                 if advanced {
                     self.syncpoints.lock().await.invalidate_all();
                 }
-                return Ok(());
+                return Ok(advanced);
             }
         }
 
@@ -778,14 +819,15 @@ where
             map.set(sender_id, sync_responder_total);
         }
 
-        Ok(())
+        Ok(advanced)
     }
 
     /// Handle `SyncOps`: ingest received operations and send confirmation.
+    /// Returns whether the message's events added keyhive state.
     async fn handle_sync_ops(
         &self,
         message: Message,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<bool, ProtocolError<Conn::SendError>> {
         let Message::SyncOps {
             sender_id,
             ops,
@@ -832,7 +874,7 @@ where
             map.set(sender_id, sync_requester_total);
         }
 
-        Ok(())
+        Ok(advanced)
     }
 
     /// Handle `RequestContactCard`: send our contact card to the requesting
@@ -3147,6 +3189,48 @@ mod tests {
             bob_conn.inbound_rx.try_recv().is_ok(),
             "digest mismatch should trigger a fallback sync"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn message_outcome_reports_new_state_and_confirmation() {
+        let TwoPeerHarness {
+            alice_proto,
+            bob_proto,
+            alice_kh,
+            bob_kh,
+            alice_id,
+            bob_id,
+            alice_conn,
+            bob_conn,
+        } = exchange_contact_cards_and_setup().await;
+
+        create_group_with_read_members(&*alice_kh.lock().await, &[&bob_id]).await;
+        create_group_with_read_members(&*bob_kh.lock().await, &[&alice_id]).await;
+
+        let ingested_and_confirmed = MessageOutcome {
+            ingested: true,
+            confirmed: true,
+        };
+        let confirmed = MessageOutcome {
+            ingested: false,
+            confirmed: true,
+        };
+        for (expected_at_bob, expected_at_alice) in [
+            (ingested_and_confirmed, MessageOutcome::from_ingest(true)),
+            (MessageOutcome::default(), confirmed),
+        ] {
+            let (at_bob, at_alice) = run_sync_round(
+                &bob_proto,
+                &alice_proto,
+                &bob_id,
+                &alice_id,
+                &bob_conn,
+                &alice_conn,
+            )
+            .await;
+            assert_eq!(at_bob, expected_at_bob);
+            assert_eq!(at_alice, expected_at_alice);
+        }
     }
 
     // ── Revocation chain regression test ──────────────────────────────

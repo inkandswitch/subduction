@@ -267,6 +267,7 @@ async fn run_local_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
                     .handle_message(&keyhive_peer, msg, Some(conn))
                     .await
                     .map_err(|e| e.to_string())
+                    .map(|_outcome| ())
             }
         },
         move |_peer, conn| {

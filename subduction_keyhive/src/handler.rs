@@ -355,6 +355,7 @@ where
                 .handle_message(&kh_peer, signed_msg, Some(adapter))
                 .await
                 .map_err(|e| HandleError::Protocol(e.to_string()))
+                .map(|_outcome| ())
         })
     }
 
