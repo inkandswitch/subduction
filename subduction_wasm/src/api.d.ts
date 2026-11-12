@@ -8,6 +8,26 @@ export interface SubductionOptions {
     ephemeralPolicy?: EphemeralPolicy;
     onRemoteHeads?: (id: SedimentreeId, peer: PeerId, heads: CommitId[]) => void;
     onEphemeral?: (topic: Topic, sender: PeerId, payload: Uint8Array) => void;
+    /**
+     * A keyhive to run Subduction's keyhive sync protocol for. Keyhive frames
+     * then go to the protocol, not to a handler from `registerFrameHandler`.
+     * The protocol stores nothing, so persist keyhive state from the
+     * keyhive's event listener. Received events still waiting for their
+     * dependencies are not reported to that listener, so they are lost on
+     * reload and arrive again in the next full sync.
+     *
+     * Subduction calls these methods whenever a keyhive frame arrives.
+     * Nothing serializes those calls against the caller's own calls on the
+     * keyhive, so the caller must keep the two from overlapping.
+     */
+    keyhive?: KeyhiveAccess;
+    /**
+     * Called after each keyhive frame. `ingested` is whether its sync ops
+     * increased keyhive's op count and `confirmed` is whether the peer
+     * confirmed the end of a sync round. A frame that fails is not reported,
+     * though it can still have ingested events.
+     */
+    onKeyhiveOutcome?: (peer: PeerId, ingested: boolean, confirmed: boolean) => void;
     defaultTimeoutMilliseconds?: number;
 }
 export interface SyncOptions { subscribe?: boolean; timeoutMilliseconds?: number }
@@ -78,4 +98,18 @@ export class Subduction {
     unsubscribeEphemeral(topics: readonly Topic[]): Promise<void>;
     registerFrameHandler(handler?: FrameHandler | null): Promise<void>;
     sendKeyhiveMessage(payload: Uint8Array, peer: PeerId): Promise<void>;
+    /**
+     * Start a keyhive round with a connected peer. This sends a digest check
+     * if an earlier round left a syncpoint. Otherwise, it requests a full sync.
+     * Requires the `keyhive` option.
+     */
+    syncKeyhiveWithPeer(peer: PeerId): Promise<void>;
+    /** Start a keyhive round with a connected peer from a full comparison. Requires the `keyhive` option. */
+    fullSyncKeyhiveWithPeer(peer: PeerId): Promise<void>;
+    /**
+     * Rebuild the keyhive event cache if keyhive's op count has changed.
+     * Replies to peers come from this cache, so call it after keyhive changes.
+     * Requires the `keyhive` option.
+     */
+    refreshKeyhiveCache(): Promise<void>;
 }

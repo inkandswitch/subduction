@@ -221,7 +221,7 @@ impl KeyhiveSync {
     }
 
     /// Start a round with a peer. This sends a digest check if the two have a
-    /// syncpoint from an earlier round, and a full sync otherwise.
+    /// syncpoint from an earlier round. Otherwise, it requests a full sync.
     ///
     /// # Errors
     ///
