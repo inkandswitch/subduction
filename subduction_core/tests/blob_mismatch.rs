@@ -4,6 +4,8 @@
 //! are rejected before being stored. This prevents poisoned metadata from
 //! referencing non-existent blobs.
 
+#![allow(clippy::expect_used, reason = "bounded test fixtures")]
+
 use std::{collections::BTreeSet, sync::Arc};
 
 use core::{future::Future, time::Duration};
@@ -35,7 +37,8 @@ use testresult::TestResult;
 async fn make_valid_commit(id: &SedimentreeId, data: &[u8]) -> (Signed<LooseCommit>, Blob) {
     let blob = Blob::new(data.to_vec());
     let blob_meta = BlobMeta::new(&blob);
-    let commit = LooseCommit::new(*id, CommitId::new([0xA1; 32]), BTreeSet::new(), blob_meta);
+    let commit = LooseCommit::new(*id, CommitId::new([0xA1; 32]), BTreeSet::new(), blob_meta)
+        .expect("valid metadata");
     let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
     (verified.into_signed(), blob)
 }
@@ -47,7 +50,8 @@ async fn make_mismatched_commit(id: &SedimentreeId) -> (Signed<LooseCommit>, Blo
     let claimed_data = b"claimed data";
     let claimed_blob = Blob::new(claimed_data.to_vec());
     let blob_meta = BlobMeta::new(&claimed_blob);
-    let commit = LooseCommit::new(*id, CommitId::new([0xA2; 32]), BTreeSet::new(), blob_meta);
+    let commit = LooseCommit::new(*id, CommitId::new([0xA2; 32]), BTreeSet::new(), blob_meta)
+        .expect("valid metadata");
     let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
 
     // But actual blob contains different data
@@ -64,7 +68,7 @@ async fn make_valid_fragment(id: &SedimentreeId, data: &[u8]) -> (Signed<Fragmen
     // Use arbitrary bytes for test fixture digests
     let head = CommitId::new([1u8; 32]);
     let boundary = BTreeSet::from([CommitId::new([2u8; 32])]);
-    let fragment = Fragment::new(*id, head, boundary, &[], blob_meta);
+    let fragment = Fragment::new(*id, head, boundary, &[], blob_meta).expect("valid metadata");
     let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment).await;
     (verified.into_signed(), blob)
 }
@@ -78,7 +82,7 @@ async fn make_mismatched_fragment(id: &SedimentreeId) -> (Signed<Fragment>, Blob
     // Use arbitrary bytes for test fixture digests
     let head = CommitId::new([1u8; 32]);
     let boundary = BTreeSet::from([CommitId::new([2u8; 32])]);
-    let fragment = Fragment::new(*id, head, boundary, &[], blob_meta);
+    let fragment = Fragment::new(*id, head, boundary, &[], blob_meta).expect("valid metadata");
     let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment).await;
 
     // But actual blob contains different data

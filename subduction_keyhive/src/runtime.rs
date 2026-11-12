@@ -216,7 +216,7 @@ async fn run_local_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
         }
     };
 
-    let contact_card = match keyhive.contact_card().await {
+    let contact_card = match keyhive.generate_contact_card().await {
         Ok(cc) => cc,
         Err(e) => {
             let msg = format!("failed to generate keyhive contact card: {e}");
@@ -326,7 +326,7 @@ pub async fn init_sendable_keyhive(
     .map_err(|e| format!("failed to generate keyhive: {e}"))?;
 
     let contact_card = keyhive
-        .contact_card()
+        .generate_contact_card()
         .await
         .map_err(|e| format!("failed to generate keyhive contact card: {e}"))?;
 

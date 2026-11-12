@@ -35,7 +35,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use futures::executor::block_on;
 use keyhive_core::{
     access::Access,
-    principal::{agent::Agent, identifier::Identifier, membered::Membered, public::Public},
+    principal::{identifier::Identifier, public::Public},
 };
 use nonempty::nonempty;
 use subduction_keyhive::{
@@ -95,7 +95,7 @@ async fn build(n: usize, shape: Shape) -> (TestProtocol, Sizes) {
         peers.push(make_keyhive().await);
     }
     for p in &peers {
-        let cc = p.contact_card().await.expect("contact_card");
+        let cc = p.generate_contact_card().await.expect("contact_card");
         server
             .receive_contact_card(&cc)
             .await
@@ -105,17 +105,14 @@ async fn build(n: usize, shape: Shape) -> (TestProtocol, Sizes) {
     // N docs owned by the server, shared per `shape`.
     for i in 0..n {
         let fill = ((i % 251) + 1) as u8;
-        let doc = server
+        let doc_id = server
             .generate_doc(vec![], nonempty![[fill; 32]])
             .await
             .expect("generate_doc");
-        let doc_id = doc.lock().await.doc_id();
-        let membered = Membered::Document(doc_id, doc.clone());
         match shape {
             Shape::Public => {
-                let public_agent: Agent<_, _, _, _> = Public.individual().into();
                 server
-                    .add_member(public_agent, &membered, Access::Read, &[])
+                    .add_member(Public.id(), doc_id, Access::Read, &[])
                     .await
                     .expect("add_member public");
             }
@@ -130,9 +127,9 @@ async fn build(n: usize, shape: Shape) -> (TestProtocol, Sizes) {
                         continue;
                     }
                     let id: Identifier = peers[j].id().into();
-                    if let Some(agent) = server.get_agent(id).await {
+                    if server.get_agent(id).await.is_some() {
                         server
-                            .add_member(agent, &membered, Access::Read, &[])
+                            .add_member(id, doc_id, Access::Read, &[])
                             .await
                             .expect("add_member peer");
                     }
@@ -158,7 +155,7 @@ async fn build(n: usize, shape: Shape) -> (TestProtocol, Sizes) {
 async fn build_synced(n: usize) -> (TestProtocol, Sizes) {
     let server_kh = make_keyhive().await;
     let server_id = keyhive_peer_id(&server_kh);
-    let server_cc = server_kh.contact_card().await.expect("server cc");
+    let server_cc = server_kh.generate_contact_card().await.expect("server cc");
     let server_identifier: Identifier = server_kh.id().into();
 
     let mut peer_khs: Vec<SimpleKeyhive> = Vec::with_capacity(n);
@@ -167,7 +164,7 @@ async fn build_synced(n: usize) -> (TestProtocol, Sizes) {
     }
     // Contact cards both directions so peer<->server can sync.
     for p in &peer_khs {
-        let p_cc = p.contact_card().await.expect("peer cc");
+        let p_cc = p.generate_contact_card().await.expect("peer cc");
         server_kh
             .receive_contact_card(&p_cc)
             .await
@@ -179,21 +176,14 @@ async fn build_synced(n: usize) -> (TestProtocol, Sizes) {
     // Each peer owns a doc, makes it public, and grants the server relay (Read).
     for (i, p) in peer_khs.iter().enumerate() {
         let fill = ((i % 251) + 1) as u8;
-        let doc = p
+        let doc_id = p
             .generate_doc(vec![], nonempty![[fill; 32]])
             .await
             .expect("generate_doc");
-        let doc_id = doc.lock().await.doc_id();
-        let membered = Membered::Document(doc_id, doc.clone());
-        let public_agent: Agent<_, _, _, _> = Public.individual().into();
-        p.add_member(public_agent, &membered, Access::Read, &[])
+        p.add_member(Public.id(), doc_id, Access::Read, &[])
             .await
             .expect("add public");
-        let server_agent = p
-            .get_agent(server_identifier)
-            .await
-            .expect("server agent known to peer");
-        p.add_member(server_agent, &membered, Access::Read, &[])
+        p.add_member(server_identifier, doc_id, Access::Read, &[])
             .await
             .expect("add server relay");
     }

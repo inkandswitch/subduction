@@ -8,6 +8,7 @@
 //! redb backend to the same standard.
 
 #![allow(clippy::indexing_slicing)]
+#![allow(clippy::expect_used, reason = "bounded test fixtures")]
 
 use std::collections::BTreeSet;
 
@@ -35,7 +36,9 @@ async fn seal_commit(
     blob: Vec<u8>,
 ) -> VerifiedMeta<LooseCommit> {
     let verified_blob = VerifiedBlobMeta::new(Blob::new(blob));
-    VerifiedMeta::seal::<Sendable, _>(signer, (id, head, BTreeSet::new()), verified_blob).await
+    VerifiedMeta::seal::<Sendable, _>(signer, (id, head, BTreeSet::new()), verified_blob)
+        .await
+        .expect("valid metadata")
 }
 
 /// Recursively collect every external blob file under the `blobs/` dir.

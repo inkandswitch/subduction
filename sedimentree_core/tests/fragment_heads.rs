@@ -1,5 +1,7 @@
 //! Regression tests for <https://github.com/inkandswitch/subduction/issues/286>.
 
+#![allow(clippy::expect_used, reason = "bounded test fixtures")]
+
 use std::collections::BTreeSet;
 
 use sedimentree_core::{
@@ -41,6 +43,7 @@ fn fragment(head: CommitId, boundary: &[CommitId]) -> Fragment {
         &[],
         blob_meta(),
     )
+    .expect("valid metadata")
 }
 
 #[test]
@@ -63,12 +66,15 @@ fn only_the_tip_of_chained_fragments_and_loose_commits_is_a_head() {
             fragment(first_fragment_head, &[]),
             fragment(second_fragment_head, &[first_fragment_head]),
         ],
-        vec![LooseCommit::new(
-            SEDIMENTREE_ID,
-            loose_tip,
-            BTreeSet::from([second_fragment_head]),
-            blob_meta(),
-        )],
+        vec![
+            LooseCommit::new(
+                SEDIMENTREE_ID,
+                loose_tip,
+                BTreeSet::from([second_fragment_head]),
+                blob_meta(),
+            )
+            .expect("valid metadata"),
+        ],
     );
 
     assert_eq!(tree.heads(&CountLeadingZeroBytes), vec![loose_tip]);
@@ -83,13 +89,15 @@ fn disconnected_components_each_contribute_a_head() {
     let tree = Sedimentree::new(
         vec![fragment(fragment_head, &[])],
         vec![
-            LooseCommit::new(SEDIMENTREE_ID, loose_parent, BTreeSet::new(), blob_meta()),
+            LooseCommit::new(SEDIMENTREE_ID, loose_parent, BTreeSet::new(), blob_meta())
+                .expect("valid metadata"),
             LooseCommit::new(
                 SEDIMENTREE_ID,
                 loose_tip,
                 BTreeSet::from([loose_parent]),
                 blob_meta(),
-            ),
+            )
+            .expect("valid metadata"),
         ],
     );
 
@@ -108,7 +116,8 @@ fn fragment_checkpoint_marks_a_stored_head_as_an_ancestor() {
         BTreeSet::new(),
         &[checkpoint],
         blob_meta(),
-    );
+    )
+    .expect("valid metadata");
     let tree = Sedimentree::new(
         vec![
             covering_fragment,

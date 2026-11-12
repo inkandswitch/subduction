@@ -51,7 +51,7 @@ struct IngestResult {
 /// [`Automerge::bundle_fragments`]: maps each level-1+ `automerge::Fragment`
 /// into a sedimentree [`Fragment`] and each level-0 fragment into a
 /// [`LooseCommit`].
-fn ingest_automerge(doc: &Automerge, sedimentree_id: SedimentreeId) -> IngestResult {
+fn ingest_automerge(doc: &Automerge, sedimentree_id: SedimentreeId) -> Result<IngestResult> {
     let cached = doc.fragments(1..);
     let loose = doc.fragments(0..=0);
     let cached_bytes = doc.bundle_fragments(cached.iter().cloned());
@@ -74,7 +74,7 @@ fn ingest_automerge(doc: &Automerge, sedimentree_id: SedimentreeId) -> IngestRes
             boundary,
             &checkpoints,
             meta,
-        ));
+        )?);
         blobs.push(blob);
     }
 
@@ -84,7 +84,7 @@ fn ingest_automerge(doc: &Automerge, sedimentree_id: SedimentreeId) -> IngestRes
         let parents: BTreeSet<CommitId> = f.boundary.iter().map(|p| CommitId::new(p.0)).collect();
         let blob = Blob::new(raw);
         let meta = BlobMeta::new(&blob);
-        loose_commits.push(LooseCommit::new(sedimentree_id, head, parents, meta));
+        loose_commits.push(LooseCommit::new(sedimentree_id, head, parents, meta)?);
         blobs.push(blob);
     }
 
@@ -92,14 +92,14 @@ fn ingest_automerge(doc: &Automerge, sedimentree_id: SedimentreeId) -> IngestRes
     let loose_count = loose_commits.len();
     let covered_count = covered.len();
 
-    IngestResult {
+    Ok(IngestResult {
         sedimentree: Sedimentree::new(fragments, loose_commits),
         blobs,
         change_count: doc.get_changes_meta(&[]).len(),
         covered_count,
         loose_count,
         fragment_count,
-    }
+    })
 }
 
 /// Ingest an Automerge document into a Subduction sync server.
@@ -303,7 +303,7 @@ async fn main() -> Result<()> {
 
     // Ingest: automerge → sedimentree.
     eprintln!("ingesting...");
-    let result = ingest_automerge(&doc, sed_id);
+    let result = ingest_automerge(&doc, sed_id)?;
     print_ingest_stats(&result, sed_id);
 
     if args.dry_run {

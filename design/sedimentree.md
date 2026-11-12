@@ -96,7 +96,8 @@ struct FingerprintSummary {
 }
 ```
 
-Uses 8-byte SipHash-2-4 keyed hashes instead of full 32-byte digests, reducing sync request payload by ~75%. Fingerprints are computed over _causal identity_ only: `digest()` for commits, `head + boundary` for fragments (excluding `blob_meta`).
+
+Uses 8-byte SipHash-2-4 keyed hashes instead of full 32-byte digests, reducing sync request payload by ~75%. Fingerprints are computed over _causal identity_ only: `digest()` for commits, `head + boundary` for fragments (excluding `blob_meta`). Fragment boundaries are not payload members and are not advertised as held unless independently present as loose commits or fragment heads.
 
 > [!NOTE]
 > `SedimentreeSummary` (with full digests) still exists for local diffing and testing but is no longer used on the wire.

@@ -6,7 +6,7 @@
 //!
 //! | Method | Description |
 //! |--------|-------------|
-//! | [`add_connection`] | Add a connection (no automatic sync) |
+//! | [`add_connection`] | Add a connection (active loaders sync their documents) |
 //! | [`disconnect`] | Graceful connection shutdown |
 //! | [`disconnect_all`] | Disconnect all connections |
 //! | [`disconnect_from_peer`] | Disconnect all connections from a peer |
@@ -57,14 +57,19 @@ pub mod builder;
 pub mod error;
 pub mod fragment_batch_item;
 pub mod listener_future;
+mod multiplexer_map;
 pub mod per_peer_sync;
 pub mod request;
 
 pub mod dispatch_completion;
 pub(crate) mod ingest;
+#[cfg(test)]
+mod mutation;
 pub(crate) mod peers;
+mod stored;
 pub use peers::{SendPushes, upstream_peers};
 pub(crate) mod spawn_guard;
+pub mod upstream_fetch;
 
 use crate::{
     authenticated::Authenticated,
@@ -76,8 +81,8 @@ use crate::{
         managed::{CallError, ManagedCall, ManagedConnection},
         manager::{Command, ConnectionManager, QueuedDispatch, RunManager},
         message::{
-            BatchSyncRequest, BatchSyncResponse, DataRequestRejected, RequestedData, SyncDiff,
-            SyncMessage, SyncResult, TryAsBatchSyncResponse, TryAsSubscribeRequest,
+            BatchSyncRequest, DataRequestRejected, RequestedData, SyncDiff, SyncMessage,
+            SyncResult, TryAsBatchSyncResponse, TryAsSubscribeRequest,
         },
         stats::{SendCount, SyncStats},
     },
@@ -89,10 +94,10 @@ use crate::{
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     remote_heads::{RemoteHeads, RemoteHeadsNotifier},
     spawn::Spawn,
-    storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
+    storage::{fetcher::Fetcher, powerbox::StoragePowerbox, putter::Putter, traits::Storage},
     timeout::{Timeout, call::CallTimeout},
 };
-use alloc::{collections::BTreeSet, sync::Arc, vec::Vec};
+use alloc::{collections::BTreeSet, string::ToString, sync::Arc, vec::Vec};
 use async_channel::{Sender, bounded};
 use async_lock::{Mutex, SemaphoreGuardArc};
 use core::{marker::PhantomData, time::Duration};
@@ -108,6 +113,7 @@ use futures::{
     stream::{AbortHandle, AbortRegistration, Abortable, FuturesUnordered},
 };
 use listener_future::ListenerFuture;
+use multiplexer_map::MultiplexerMap;
 use nonempty::NonEmpty;
 use per_peer_sync::PerPeerSync;
 use request::FragmentRequested;
@@ -162,7 +168,7 @@ pub struct Subduction<
     timer: Timer,
     depth_metric: Metric,
     sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
-    storage: StoragePowerbox<Store, Auth>,
+    storage: StoragePowerbox<Store, Auth, Async>,
 
     /// Active connections, keyed by peer ID.
     ///
@@ -177,6 +183,9 @@ pub struct Subduction<
     /// [`register_connection`]: Self::register_connection
     connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
 
+    /// Broadcast wakeups for active loaders to reconcile connection generations.
+    connections_changed: Arc<event_listener::Event>,
+
     /// Per-connection multiplexers for request-response correlation.
     ///
     /// Keyed by peer ID, with one [`Multiplexer`] per connection. Used by
@@ -187,7 +196,7 @@ pub struct Subduction<
     /// [`connections`](Self::connections). Read paths that need only this
     /// lock (response routing, mux lookup) may take it alone; paths that
     /// also need `connections` must take `connections` first.
-    multiplexers: Arc<Mutex<Map<PeerId, Vec<Arc<Multiplexer>>>>>,
+    multiplexers: Arc<Mutex<MultiplexerMap<Conn, Async>>>,
 
     /// Default per-call deadline for roundtrip calls (`BatchSyncRequest` →
     /// `BatchSyncResponse`) when a caller passes `timeout: None`. This is
@@ -208,6 +217,11 @@ pub struct Subduction<
     /// See [`propagate_subscription`](Self::propagate_subscription) for the
     /// claim lifecycle.
     outgoing_subscriptions: Arc<Mutex<Map<PeerId, Set<SedimentreeId>>>>,
+
+    /// Upstream fetches in flight for locally missing documents, shared by
+    /// concurrent inbound subscribes. See
+    /// [`hold_for_upstream_fetch`](Self::hold_for_upstream_fetch).
+    in_flight_fetches: Arc<upstream_fetch::InFlightFetches>,
 
     /// Shared monotonic counter for outgoing messages, per peer.
     ///
@@ -262,7 +276,10 @@ where
     /// `Arc` clones of whatever shared state it needs.
     ///
     /// For the standard sync protocol, pass a [`SyncHandler`] constructed
-    /// from the same `Arc`s.
+    /// from the same `Arc`s. Create the powerbox with
+    /// [`NodeTasks::storage_powerbox`], using this node's cache and spawner.
+    /// Use a fresh powerbox for each node; clones are for sharing with its handlers.
+    /// Backends and errors need `'static` for node-owned mutation tasks.
     ///
     /// # Example
     ///
@@ -270,7 +287,9 @@ where
     /// let sedimentrees = Arc::new(BoundedShardedMap::new());
     /// let connections = Arc::new(Mutex::new(Map::new()));
     /// let subscriptions = Arc::new(Mutex::new(Map::new()));
-    /// let storage = StoragePowerbox::new(storage, Arc::new(policy));
+    /// let storage = Async::storage_powerbox(
+    ///     storage, Arc::new(policy), sedimentrees.clone(), spawner.clone(),
+    /// );
     ///
     /// let handler = Arc::new(SyncHandler::new(
     ///     sedimentrees.clone(),
@@ -301,7 +320,7 @@ where
         sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
-        storage: StoragePowerbox<Store, Auth>,
+        storage: StoragePowerbox<Store, Auth, Async>,
         send_counter: PeerCounter,
         nonce_cache: NonceCache,
         timer: Timer,
@@ -314,7 +333,7 @@ where
         crate::connection::manager::ManagerFuture<Async>,
     )
     where
-        Async: StartListener<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
+        Async: NodeTasks<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
         Timer: Send + Sync + 'a,
         Sp: Clone + Send + Sync + 'static,
         'a: 'static,
@@ -348,12 +367,14 @@ where
             depth_metric,
             sedimentrees,
             connections,
-            multiplexers: Arc::new(Mutex::new(Map::new())),
+            connections_changed: Arc::new(event_listener::Event::new()),
+            multiplexers: Arc::new(Mutex::new(MultiplexerMap::new())),
             subscriptions,
             storage,
             nonce_tracker: Arc::new(nonce_cache),
             reconnect_backoff: Arc::new(Mutex::new(Map::new())),
             outgoing_subscriptions: Arc::new(Mutex::new(Map::new())),
+            in_flight_fetches: Arc::default(),
             send_counter,
             manager_channel: manager_sender,
             msg_queue: queue_receiver,
@@ -573,6 +594,7 @@ where
     /// await), the listener drains its outstanding spawned `Handler::handle`
     /// dispatch tasks before exiting. Idempotent.
     pub fn shutdown(&self) {
+        self.storage.state.close();
         self.manager_channel.close();
         self.msg_queue.close();
     }
@@ -586,41 +608,9 @@ where
         &self,
         conn: &Authenticated<Conn, Async>,
     ) -> Result<bool, Conn::DisconnectionError> {
-        let peer_id = conn.peer_id();
-        tracing::info!(peer = %peer_id, "disconnecting connection from peer");
-
-        // Detach the muxes inside the same critical section that removes
-        // the connection, so a concurrent `add_connection` can't have its
-        // fresh mux clobbered. Cancel them afterwards, off the lock.
-        let detached = {
-            let mut connections = self.connections.lock().await;
-            match connections.remove(&peer_id) {
-                None => return Ok(false),
-                Some(peer_conns) => match peer_conns.remove_item(conn) {
-                    RemoveResult::Removed(remaining) => {
-                        connections.insert(peer_id, remaining);
-                        None
-                    }
-                    RemoveResult::WasLast(_) => Some(
-                        self.detach_peer_muxes_locked(&mut connections, &peer_id)
-                            .await,
-                    ),
-                    RemoveResult::NotFound(original) => {
-                        connections.insert(peer_id, original);
-                        return Ok(false);
-                    }
-                },
-            }
-        };
-
-        if let Some(muxes) = detached {
-            self.teardown_peer(&peer_id, muxes, 1).await;
-        } else {
-            #[cfg(feature = "metrics")]
-            crate::metrics::connection_closed();
+        if self.unregister_connection(conn, None).await.is_none() {
+            return Ok(false);
         }
-        self.refresh_connection_gauge().await;
-
         conn.disconnect().await.map(|()| true)
     }
 
@@ -635,19 +625,23 @@ where
         // the bulk equivalent of `teardown_peer` for every peer at once.
         let (all_conns, removed_muxes): (Vec<Authenticated<Conn, Async>>, Vec<Arc<Multiplexer>>) = {
             let mut guard = self.connections.lock().await;
-            let conns = core::mem::take(&mut *guard)
-                .into_values()
-                .flat_map(NonEmpty::into_iter)
-                .collect();
-            let muxes = core::mem::take(&mut *self.multiplexers.lock().await)
-                .into_values()
-                .flatten()
-                .collect();
+            let (conns, muxes) = {
+                let mut multiplexers = self.multiplexers.lock().await;
+                let conns = core::mem::take(&mut *guard)
+                    .into_values()
+                    .flat_map(NonEmpty::into_iter)
+                    .collect();
+                (conns, multiplexers.detach_all())
+            };
+            // Clear here so that we don't erase new connections established
+            // whilst we're draining old connections.
+            self.subscriptions.lock().await.clear();
+            self.outgoing_subscriptions.lock().await.clear();
+            self.connections_changed.notify(usize::MAX);
             (conns, muxes)
         };
 
         Self::cancel_detached_muxes(removed_muxes).await;
-        self.subscriptions.lock().await.clear();
         // Send counters survive on purpose; see `teardown_peer`.
 
         #[cfg(feature = "metrics")]
@@ -685,15 +679,12 @@ where
         // concurrent reconnect can't be clobbered.
         let removed = {
             let mut connections = self.connections.lock().await;
-            match connections.remove(peer_id) {
-                Some(conns) => {
-                    let muxes = self
-                        .detach_peer_muxes_locked(&mut connections, peer_id)
-                        .await;
-                    Some((conns, muxes))
-                }
-                None => None,
-            }
+            let mut multiplexers = self.multiplexers.lock().await;
+            connections.remove(peer_id).map(|conns| {
+                let muxes = multiplexers.detach_peer(peer_id);
+                self.connections_changed.notify(usize::MAX);
+                (conns, muxes)
+            })
         };
 
         if let Some((conns, muxes)) = removed {
@@ -715,8 +706,9 @@ where
 
     /// Add a connection to tracking.
     ///
-    /// This does not perform any synchronization. To sync after adding,
-    /// call [`full_sync_with_peer`](Self::full_sync_with_peer).
+    /// Active [`load_and_watch`](Self::load_and_watch) streams sync their documents
+    /// on new connections. To sync other documents after adding, call
+    /// [`full_sync_with_peer`](Self::full_sync_with_peer).
     ///
     /// # Returns
     ///
@@ -797,30 +789,17 @@ where
         // cannot suppress a propagation for this arrival.
         if newly_present {
             self.clear_stale_outgoing_claims(&peer_id).await;
+            peers::remove_peer_from_subscriptions(&self.subscriptions, peer_id).await;
         }
 
         let mux = Arc::new(Multiplexer::new(peer_id, self.default_roundtrip_timeout));
-        let mut multiplexers = self.multiplexers.lock().await;
-        match multiplexers.get_mut(&peer_id) {
-            Some(muxes) => muxes.push(mux),
-            None => {
-                multiplexers.insert(peer_id, alloc::vec![mux]);
-            }
-        }
+        self.multiplexers.lock().await.insert(conn.clone(), mux);
+        self.connections_changed.notify(usize::MAX);
 
         true
     }
 
-    /// Reconcile tracking for a connection whose transport has **already
-    /// failed** — e.g. a send returned `Err`, or the per-connection
-    /// receive loop exited and reported the closure via the
-    /// `connection_closed` channel. There is no live transport to close,
-    /// so this only updates in-memory state (connection map, multiplexers,
-    /// subscriptions, metrics).
-    ///
-    /// To proactively shut down a connection you believe is still live,
-    /// use [`disconnect`](Self::disconnect), which also closes the
-    /// transport via `Connection::disconnect`.
+    /// Remove a failed connection and schedule its async disconnection.
     ///
     /// Returns `Some(true)` if this was the last connection for the peer,
     /// `Some(false)` if the peer still has connections,
@@ -833,39 +812,62 @@ where
         &self,
         conn: &Authenticated<Conn, Async>,
     ) -> Option<bool> {
+        self.unregister_connection(conn, Some(Async::disconnect_task(conn.clone())))
+            .await
+    }
+
+    /// Remove the connection from tracking and schedule its async disconnection
+    ///
+    /// The important point here is that if the `cleanup` argument is `Some`
+    /// then it will be spawned immediately after the connection and
+    /// multiplexer are removed. This ensures that even if the
+    /// `unregister_connection` task is cancelled, the cleanup
+    /// (i.e. disconnection) will be scheduled.
+    async fn unregister_connection(
+        &self,
+        conn: &Authenticated<Conn, Async>,
+        cleanup: Option<Async::Future<'static, ()>>,
+    ) -> Option<bool> {
         let peer_id = conn.peer_id();
 
-        let detached = {
+        let (last, detached) = {
             let mut connections = self.connections.lock().await;
-            match connections.remove(&peer_id) {
-                None => return None,
-                Some(peer_conns) => match peer_conns.remove_item(conn) {
-                    RemoveResult::Removed(remaining) => {
-                        connections.insert(peer_id, remaining);
-                        None
-                    }
-                    RemoveResult::WasLast(_) => Some(
-                        self.detach_peer_muxes_locked(&mut connections, &peer_id)
-                            .await,
-                    ),
-                    RemoveResult::NotFound(original) => {
-                        connections.insert(peer_id, original);
-                        return None;
-                    }
-                },
-            }
+            // Acquire both locks before mutating either map. After removal,
+            // there must be no suspension before the cleanup handoff.
+            let mut multiplexers = self.multiplexers.lock().await;
+            let last = match connections.remove(&peer_id)?.remove_item(conn) {
+                RemoveResult::Removed(remaining) => {
+                    connections.insert(peer_id, remaining);
+                    false
+                }
+                RemoveResult::WasLast(_) => true,
+                RemoveResult::NotFound(original) => {
+                    connections.insert(peer_id, original);
+                    return None;
+                }
+            };
+            let detached = if last {
+                multiplexers.detach_peer(&peer_id)
+            } else {
+                multiplexers.detach_connection(conn)
+            };
+            self.connections_changed.notify(usize::MAX);
+            (last, detached)
         };
 
-        let last = if let Some(muxes) = detached {
-            self.teardown_peer(&peer_id, muxes, 1).await;
-            Some(true)
+        // No map locks are held while spawning or polling transport cleanup.
+        if let Some(cleanup) = cleanup {
+            self.spawner.spawn(cleanup);
+        }
+        if last {
+            self.teardown_peer(&peer_id, detached, 1).await;
         } else {
+            Self::cancel_detached_muxes(detached).await;
             #[cfg(feature = "metrics")]
             crate::metrics::connection_closed();
-            Some(false)
-        };
+        }
         self.refresh_connection_gauge().await;
-        last
+        Some(last)
     }
 
     /// Test-only public access to the crate-internal
@@ -879,25 +881,13 @@ where
         self.remove_connection(conn).await
     }
 
-    /// Remove a peer's multiplexers from the map and return them for the
-    /// caller to cancel after releasing the lock.
-    ///
-    /// Takes the held `connections` guard by `&mut` so the mux removal
-    /// happens inside the caller's `connections` critical section; this is
-    /// what keeps a concurrent [`add_connection`](Self::add_connection)
-    /// from having its fresh mux clobbered. Cancellation is left to the
-    /// caller via [`cancel_detached_muxes`](Self::cancel_detached_muxes)
-    /// because its `.await` must not be held across the `connections` lock.
-    async fn detach_peer_muxes_locked(
+    /// Find the mux belonging to this physical connection, not another
+    /// connection or replacement with the same peer identity.
+    async fn mux_for_connection(
         &self,
-        _connections_guard: &mut Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>,
-        peer_id: &PeerId,
-    ) -> Vec<Arc<Multiplexer>> {
-        self.multiplexers
-            .lock()
-            .await
-            .remove(peer_id)
-            .unwrap_or_default()
+        conn: &Authenticated<Conn, Async>,
+    ) -> Option<Arc<Multiplexer>> {
+        self.multiplexers.lock().await.get(conn)
     }
 
     /// Cancel the pending calls on a set of detached multiplexers.
@@ -905,11 +895,12 @@ where
     /// Resolves any awaiting `sync_with_*` callers with
     /// [`CallError::ResponseDropped`]
     /// immediately rather than letting them wait out the per-call timeout.
-    /// Call this *after* the `connections` lock has been released (see
-    /// [`detach_peer_muxes_locked`](Self::detach_peer_muxes_locked)).
+    /// Call this *after* the connections and mux-map locks have been released.
+    /// The map's synchronous detach helpers only transfer ownership; closing
+    /// the detached muxes is separate because it awaits their pending-call locks.
     async fn cancel_detached_muxes(muxes: Vec<Arc<Multiplexer>>) {
         for mux in muxes {
-            mux.cancel_all_pending().await;
+            mux.close().await;
         }
     }
 
@@ -932,8 +923,7 @@ where
     }
 
     /// Finish per-peer teardown after the peer's last connection is gone
-    /// and its muxes have been detached via
-    /// [`detach_peer_muxes_locked`](Self::detach_peer_muxes_locked).
+    /// and its muxes have been detached under the connections and mux-map locks.
     ///
     /// Shared post-lock cleanup for [`disconnect`](Self::disconnect) and
     /// [`disconnect_from_peer`](Self::disconnect_from_peer) so they clean
@@ -946,11 +936,15 @@ where
         conn_count: usize,
     ) {
         Self::cancel_detached_muxes(muxes).await;
-        peers::remove_peer_from_subscriptions(&self.subscriptions, *peer_id).await;
-
-        // GC only — invalidation happens on next arrival
-        // (`clear_stale_outgoing_claims`); this bounds the map.
-        self.outgoing_subscriptions.lock().await.remove(peer_id);
+        {
+            // It's possible that a new connection to the same peer was added
+            // just before the caller called us, in that case we do nothing
+            let connections = self.connections.lock().await;
+            if !connections.contains_key(peer_id) {
+                peers::remove_peer_from_subscriptions(&self.subscriptions, *peer_id).await;
+                self.outgoing_subscriptions.lock().await.remove(peer_id);
+            }
+        }
 
         // The send counter is deliberately not cleared: receivers keep a
         // never-reset high-water mark, so a restarted sequence would be
@@ -963,18 +957,6 @@ where
 
         #[cfg(not(feature = "metrics"))]
         let _ = conn_count;
-    }
-
-    /// Get all connections as a flat list.
-    ///
-    /// This is useful for iterating over all connections to send messages.
-    async fn all_connections(&self) -> Vec<Authenticated<Conn, Async>> {
-        self.connections
-            .lock()
-            .await
-            .values()
-            .flat_map(|ne| ne.iter().cloned())
-            .collect()
     }
 
     /// Add a subscription for a peer to a sedimentree.
@@ -1023,6 +1005,31 @@ where
         ingest::get_blob(&self.storage, id, digest).await
     }
 
+    /// Read locally first, then sync and subscribe on every current and future
+    /// connection authorized to fetch this document, including reconnects, for
+    /// the lifetime of the stream. Authorization is checked before each outgoing
+    /// sync request so denied peers receive neither the ID nor its inventory.
+    /// Local replay and updates work without peers or a running network listener;
+    /// network synchronization requires the listener. Missing data or peers do
+    /// not end observation. `StorageChecked` marks a checked local view, not global
+    /// synchronization. Cached contents may be partial or stale, so they do not
+    /// skip peer work. Empty successful rounds emit ordered `PeerSynced` markers.
+    ///
+    /// The stream keeps the node alive. There is no concurrency cap or loading/
+    /// peer deadline. Closing or dropping it cancels observation and scoped sync
+    /// attempts, not admitted writes or established node-owned subscriptions.
+    /// Shutdown or loss of mutation ownership terminates the stream.
+    #[must_use]
+    pub fn load_and_watch(self: &Arc<Self>, id: SedimentreeId) -> crate::stored::StoredUpdates
+    where
+        Async: NodeTasks<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
+        Timer: Send + Sync + 'a,
+        Sp: Send + Sync + 'static,
+        'a: 'static,
+    {
+        Async::start_stored(self.clone(), id, CallTimeout::Uncapped, true)
+    }
+
     /// Get all blobs associated with a given sedimentree ID from local storage.
     ///
     /// # Returns
@@ -1042,15 +1049,15 @@ where
         // Read blobs straight from durable storage. Storage is the source of
         // truth, so we do not gate on in-RAM cache residency (an evicted tree
         // must still return its blobs). `None` ⇔ storage holds nothing.
-        let local_access = self.storage.hydration_access();
+        let local_access = self.storage.local_fetcher(id);
         let mut results = Vec::new();
 
         // With compound storage, blobs are stored with their commits/fragments
-        for verified in local_access.load_loose_commits::<Async>(id).await? {
+        for verified in local_access.load_loose_commits().await? {
             results.push(verified.blob().clone());
         }
 
-        for verified in local_access.load_fragments::<Async>(id).await? {
+        for verified in local_access.load_fragments().await? {
             results.push(verified.blob().clone());
         }
 
@@ -1070,125 +1077,48 @@ where
     ///
     /// * Returns `IoError` if a storage or network error occurs.
     ///
-    /// # Panics
-    ///
-    /// Panics if a connected peer has no corresponding multiplexer
-    /// (internal invariant: `add_connection` always creates one).
+    /// Collect the same local-first loader used by `load_and_watch`, without
+    /// establishing subscriptions. Requires an Arc receiver to own its scoped
+    /// coordinator. Candidate misses return None; loading errors use `IoError::Load`.
     pub async fn fetch_blobs(
-        &self,
+        self: &Arc<Self>,
         id: SedimentreeId,
         timeout: CallTimeout,
-    ) -> Result<Option<NonEmpty<Blob>>, IoError<Async, Store, Conn, Hdl::Message>> {
-        // Resolve caller policy to the low-level deadline (`None` = uncapped).
-        let timeout = timeout.resolve(self.default_roundtrip_timeout);
-
-        tracing::debug!(tree = ?id, "fetching blobs for sedimentree");
-        if let Some(maybe_blobs) = self.get_blobs(id).await.map_err(IoError::Storage)? {
-            Ok(Some(maybe_blobs))
-        } else {
-            // No blobs locally. Hydrate (cache or storage) to decide whether
-            // the tree exists; only then ask peers for its data. The hydrated
-            // tree is already minimized for wire use.
-            let tree = self.get_or_hydrate(id).await?;
-            if let Some(tree) = tree {
-                // Requests, not pushes: each responder applies its own fetch
-                // policy, so asking every peer is fine.
-                let conns = self.all_connections().await;
-                for conn in conns {
-                    let peer_id = conn.peer_id();
-                    let seed = FingerprintSeed::random();
-                    let resolver = tree.fingerprint_resolver(&seed);
-
-                    // Mux missing means the peer was torn down between the
-                    // connection snapshot and here; skip rather than panic.
-                    let Some(mux) = ({
-                        let muxes = self.multiplexers.lock().await;
-                        muxes.get(&peer_id).and_then(|v| v.first()).cloned()
-                    }) else {
-                        tracing::debug!(peer = %peer_id, "multiplexer for peer gone (concurrent teardown); skipping");
-                        continue;
-                    };
-                    let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
-                    let req_id = managed.next_request_id();
-                    let BatchSyncResponse {
-                        id,
-                        result,
-                        req_id: resp_batch_id,
-                        ..
-                    } = ManagedCall::<Async, Hdl::Message>::call(
-                        &managed,
-                        BatchSyncRequest {
-                            id,
-                            req_id,
-                            fingerprint_summary: resolver.summary().clone(),
-                            subscribe: false,
-                        },
-                        timeout,
-                    )
-                    .await
-                    .map_err(IoError::ConnCall)?;
-
-                    debug_assert_eq!(req_id, resp_batch_id);
-
-                    let diff = match result {
-                        SyncResult::Ok(diff) => diff,
-                        SyncResult::NotFound => {
-                            tracing::debug!(peer = %conn.peer_id(), tree = ?id, "peer reports sedimentree not found");
-                            continue;
-                        }
-                        SyncResult::Unauthorized => {
-                            tracing::debug!(peer = %conn.peer_id(), tree = ?id, "peer reports we are unauthorized for sedimentree");
-                            continue;
-                        }
-                    };
-
-                    // Send back data the responder requested (bidirectional sync)
-                    if !diff.requesting.is_empty()
-                        && let Err(e) = self
-                            .send_requested_data(&conn, id, &resolver, &diff.requesting)
-                            .await
-                    {
-                        if matches!(e, SendRequestedDataError::Unauthorized(_)) {
-                            let msg: Hdl::Message =
-                                SyncMessage::from(DataRequestRejected { id }).into();
-                            if let Err(send_err) = conn.send(&msg).await {
-                                tracing::info!(
-                                    peer = %conn.peer_id(),
-                                    error = %send_err,
-                                    "peer disconnected while sending DataRequestRejected"
-                                );
-                            }
-                        } else {
-                            // Policy rejections aren't send failures; count
-                            // only transport/preparation errors (matching the
-                            // safety-net path's classification).
-                            #[cfg(feature = "metrics")]
-                            crate::metrics::requested_data_send_failure();
-                        }
-                        tracing::warn!(
-                            peer = %conn.peer_id(),
-                            error = %e,
-                            "failed to send requested data to peer"
-                        );
-                    }
-
-                    if let Err(e) = self
-                        .recv_batch_sync_response(&conn.peer_id(), id, diff)
-                        .await
-                    {
-                        tracing::error!(
-                            peer = %conn.peer_id(),
-                            error = %e,
-                            "error handling batch sync response from peer"
-                        );
+    ) -> Result<Option<NonEmpty<Blob>>, IoError<Async, Store, Conn, Hdl::Message>>
+    where
+        Async: NodeTasks<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
+        Timer: Send + Sync + 'a,
+        Sp: Send + Sync + 'static,
+        'a: 'static,
+    {
+        use crate::stored::{LoadError, StoredEvent, StoredItem};
+        let mut updates = Async::start_stored(self.clone(), id, timeout, false);
+        let mut blobs = Map::new();
+        while let Some(event) = updates.next().await {
+            match event {
+                Ok(StoredEvent::Item(StoredItem::Commit(item))) => {
+                    blobs.insert(
+                        (0_u8, Digest::hash(item.payload()).into_bytes()),
+                        item.blob().clone(),
+                    );
+                }
+                Ok(StoredEvent::Item(StoredItem::Fragment(item))) => {
+                    blobs.insert(
+                        (1_u8, Digest::hash(item.payload()).into_bytes()),
+                        item.blob().clone(),
+                    );
+                }
+                Ok(StoredEvent::RescanRequired) => blobs.clear(),
+                Ok(StoredEvent::StorageChecked | StoredEvent::PeerSynced { .. }) => {
+                    if updates.initial_load_complete() {
+                        return Ok(NonEmpty::from_vec(blobs.into_values().collect()));
                     }
                 }
+                Err(LoadError::Unavailable) => return Ok(None),
+                Err(error) => return Err(IoError::Load(error)),
             }
-
-            let updated = self.get_blobs(id).await.map_err(IoError::Storage)?;
-
-            Ok(updated)
         }
+        Err(IoError::Load(LoadError::Closed))
     }
 
     /// Remove a sedimentree locally and delete all associated data from storage.
@@ -1200,31 +1130,13 @@ where
         &self,
         id: SedimentreeId,
     ) -> Result<(), IoError<Async, Store, Conn, Hdl::Message>> {
-        // Drop the in-RAM cache entry (if resident) and delete from durable
-        // storage unconditionally. We must NOT gate storage deletion on RAM
-        // residency: with the LRU cache, an existing tree may have been
-        // evicted from memory, yet still needs deleting from disk.
-        self.sedimentrees.remove(&id).await;
-
-        let destroyer = self.storage.local_destroyer(id);
-
-        // With compound storage, deleting commits/fragments also deletes their blobs.
-        destroyer
-            .delete_loose_commits()
+        // Delete independently of residency. Invalidation and registration
+        // removal belong to the owned mutation, not its cancellable waiter.
+        self.storage
+            .local_destroyer(id)
+            .delete_tree()
             .await
-            .map_err(IoError::Storage)?;
-
-        destroyer
-            .delete_fragments()
-            .await
-            .map_err(IoError::Storage)?;
-
-        // Existence is recorded by the id index; remove it so the tree no
-        // longer appears in `sedimentree_ids` / enumeration.
-        destroyer
-            .delete_sedimentree_id()
-            .await
-            .map_err(IoError::Storage)?;
+            .map_err(IoError::from)?;
 
         Ok(())
     }
@@ -1253,6 +1165,8 @@ where
     /// * [`WriteError::Io`] (`IoError::Storage`) if a storage error occurs.
     ///
     /// Note: `WriteError::PutDisallowed` is unreachable for local writes.
+    ///
+    /// See [metadata validity](crate#metadata-validity) for validation errors.
     pub async fn store_commit(
         &self,
         id: SedimentreeId,
@@ -1263,16 +1177,17 @@ where
         Option<FragmentRequested>,
         WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>,
     > {
-        let putter = self.storage.local_putter::<Async>(id);
+        let putter = self.storage.local_putter(id);
 
         let verified_blob = VerifiedBlobMeta::new(blob);
         let verified_meta: VerifiedMeta<LooseCommit> =
-            VerifiedMeta::seal::<Async, _>(&self.signer, (id, head, parents), verified_blob).await;
+            VerifiedMeta::seal::<Async, _>(&self.signer, (id, head, parents), verified_blob)
+                .await?;
         let commit_head = verified_meta.payload().head();
 
         self.insert_commit_locally(&putter, verified_meta)
             .await
-            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+            .map_err(|e| WriteError::Io(IoError::from(e)))?;
 
         self.minimize_tree(id).await;
 
@@ -1310,6 +1225,8 @@ where
     ///
     /// Note: `WriteError::PutDisallowed` is unreachable for local writes
     /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
+    ///
+    /// See [metadata validity](crate#metadata-validity) for validation errors.
     pub async fn add_commit(
         &self,
         id: SedimentreeId,
@@ -1321,11 +1238,12 @@ where
         WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>,
     > {
         let self_id = self.peer_id();
-        let putter = self.storage.local_putter::<Async>(id);
+        let putter = self.storage.local_putter(id);
 
         let verified_blob = VerifiedBlobMeta::new(blob);
         let verified_meta: VerifiedMeta<LooseCommit> =
-            VerifiedMeta::seal::<Async, _>(&self.signer, (id, head, parents), verified_blob).await;
+            VerifiedMeta::seal::<Async, _>(&self.signer, (id, head, parents), verified_blob)
+                .await?;
 
         let commit_head = verified_meta.payload().head();
         tracing::debug!(commit = ?commit_head, tree = ?id, "adding commit to sedimentree");
@@ -1335,7 +1253,7 @@ where
 
         self.insert_commit_locally(&putter, verified_meta)
             .await
-            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+            .map_err(|e| WriteError::Io(IoError::from(e)))?;
 
         self.minimize_tree(id).await;
 
@@ -1363,12 +1281,10 @@ where
     /// returns as soon as the write is durable. Propagate later via
     /// [`add_fragment`](Self::add_fragment) or a sync.
     ///
-    /// NOTE this performs no integrity checks; we assume this is a good
-    /// fragment at the right depth.
-    ///
     /// # Errors
     ///
     /// * [`WriteError::Io`] (`IoError::Storage`) if a storage error occurs.
+    /// * [Metadata validation errors](crate#metadata-validity).
     pub async fn store_fragment(
         &self,
         id: SedimentreeId,
@@ -1378,18 +1294,18 @@ where
         blob: Blob,
     ) -> Result<(), WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>> {
         let verified_blob = VerifiedBlobMeta::new(blob);
-        let putter = self.storage.local_putter::<Async>(id);
+        let putter = self.storage.local_putter(id);
 
         let verified_meta: VerifiedMeta<Fragment> = VerifiedMeta::seal::<Async, _>(
             &self.signer,
             (id, head, boundary, checkpoints.to_vec()),
             verified_blob,
         )
-        .await;
+        .await?;
 
         self.insert_fragment_locally(&putter, verified_meta)
             .await
-            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+            .map_err(|e| WriteError::Io(IoError::from(e)))?;
 
         self.minimize_tree(id).await;
 
@@ -1411,12 +1327,10 @@ where
     /// peers. For a durable write with no propagation, use
     /// [`store_fragment`](Self::store_fragment).
     ///
-    /// NOTE this performs no integrity checks;
-    /// we assume this is a good fragment at the right depth
-    ///
     /// # Errors
     ///
     /// * [`IoError`] if a storage or network error occurs.
+    /// * [Metadata validation errors](crate#metadata-validity).
     pub async fn add_fragment(
         &self,
         id: SedimentreeId,
@@ -1428,14 +1342,14 @@ where
         let verified_blob = VerifiedBlobMeta::new(blob);
 
         let self_id = self.peer_id();
-        let putter = self.storage.local_putter::<Async>(id);
+        let putter = self.storage.local_putter(id);
 
         let verified_meta: VerifiedMeta<Fragment> = VerifiedMeta::seal::<Async, _>(
             &self.signer,
             (id, head, boundary, checkpoints.to_vec()),
             verified_blob,
         )
-        .await;
+        .await?;
         let fragment_digest = Digest::hash(verified_meta.payload());
 
         tracing::debug!(digest = ?fragment_digest, tree = ?id, "adding fragment to sedimentree");
@@ -1444,7 +1358,7 @@ where
 
         self.insert_fragment_locally(&putter, verified_meta)
             .await
-            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+            .map_err(|e| WriteError::Io(IoError::from(e)))?;
 
         self.minimize_tree(id).await;
 
@@ -1484,17 +1398,13 @@ where
 
         // On a heads read failure push with empty heads rather than drop the
         // data, matching `SyncHandler::heads_for`.
-        let heads = ingest::heads_or_hydrate(
-            &self.sedimentrees,
-            &self.storage,
-            &self.depth_metric,
-            id,
-        )
-        .await
-        .unwrap_or_else(|e| {
-            tracing::warn!(tree = ?id, error = %e, "could not read heads; pushing with none");
-            Vec::new()
-        });
+        let heads = match self.get_heads(id).await {
+            Ok(heads) => heads.unwrap_or_default(),
+            Err(e) => {
+                tracing::warn!(tree = ?id, error = %e, "could not read heads; pushing with none");
+                Vec::new()
+            }
+        };
 
         let pushes: Vec<(Authenticated<Conn, Async>, Hdl::Message)> =
             peers::build_pushes(id, &heads, &self.send_counter, &conns, ingested)
@@ -1522,53 +1432,27 @@ where
     /// * [`WriteError::Io`] (`IoError::Storage`) if a storage error occurs.
     ///   On non-transactional [`Storage`](crate::storage::traits::Storage)
     ///   backends `save_batch` may have persisted some commits before
-    ///   surfacing an error; this method then returns early and leaves the
-    ///   in-memory tree behind the on-disk state until rehydrate.
+    ///   surfacing an error. The cached tree is invalidated so its next read
+    ///   rehydrates the actual stored contents; the error does not imply rollback.
     ///
     /// Note: `WriteError::PutDisallowed` is unreachable for local writes
     /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
+    ///
+    /// See [metadata validity](crate#metadata-validity) for validation errors and
+    /// batch validation semantics.
     pub async fn store_commits_batch(
         &self,
         id: SedimentreeId,
         commits: Vec<(CommitId, BTreeSet<CommitId>, Blob)>,
     ) -> Result<(), WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>> {
-        if commits.is_empty() {
-            return Ok(());
-        }
-
-        let putter = self.storage.local_putter::<Async>(id);
-        let count = commits.len();
-        tracing::info!(count, tree = ?id, "bulk-inserting commits into sedimentree");
-
-        // Sign first; defer storage I/O so we can flush via a single
-        // `save_batch` call instead of N `save_commit` round trips.
-        let mut verified_commits: Vec<VerifiedMeta<LooseCommit>> = Vec::with_capacity(count);
-        let mut commit_payloads: Vec<LooseCommit> = Vec::with_capacity(count);
-        for (head, parents, blob) in commits {
-            let verified_blob = VerifiedBlobMeta::new(blob);
-            let verified_meta: VerifiedMeta<LooseCommit> =
-                VerifiedMeta::seal::<Async, _>(&self.signer, (id, head, parents), verified_blob)
-                    .await;
-            commit_payloads.push(verified_meta.payload().clone());
-            verified_commits.push(verified_meta);
-        }
-
-        putter
-            .save_batch(verified_commits, Vec::new())
-            .await
-            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
-
-        self.with_tree_hydrated(id, move |tree| {
-            for commit in commit_payloads {
-                tree.add_commit(commit);
-            }
-        })
-        .await
-        .map_err(WriteError::Io)?;
-        self.minimize_tree(id).await;
-
-        tracing::info!(count, "bulk-insert of commits complete, tree minimized");
-        Ok(())
+        // Validate the entire batch before signing or touching storage.
+        let commits = commits
+            .into_iter()
+            .map(|(head, parents, blob)| {
+                LooseCommit::new(id, head, parents, blob.meta()).map(|commit| (commit, blob))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.store_built_batch(id, commits, Vec::new()).await
     }
 
     /// Bulk-insert fragments without per-fragment minimization or broadcasting.
@@ -1585,61 +1469,34 @@ where
     /// * [`WriteError::Io`] (`IoError::Storage`) if a storage error occurs.
     ///   On non-transactional [`Storage`](crate::storage::traits::Storage)
     ///   backends `save_batch` may have persisted some fragments before
-    ///   surfacing an error; this method then returns early and leaves the
-    ///   in-memory tree behind the on-disk state until rehydrate.
+    ///   surfacing an error. The cached tree is invalidated so its next read
+    ///   rehydrates the actual stored contents; the error does not imply rollback.
     ///
     /// Note: `WriteError::PutDisallowed` is unreachable for local writes
     /// (the node trusts itself via [`local_putter`](crate::storage::powerbox::StoragePowerbox::local_putter)).
+    ///
+    /// See [metadata validity](crate#metadata-validity) for validation errors and
+    /// batch validation semantics.
     pub async fn store_fragments_batch(
         &self,
         id: SedimentreeId,
         fragments: Vec<FragmentBatchItem>,
     ) -> Result<(), WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>> {
-        if fragments.is_empty() {
-            return Ok(());
-        }
-
-        let putter = self.storage.local_putter::<Async>(id);
-        let count = fragments.len();
-        tracing::info!(count, tree = ?id, "bulk-inserting fragments into sedimentree");
-
-        // Sign first; defer storage I/O so we can flush via a single
-        // `save_batch` call instead of N `save_fragment` round trips.
-        let mut verified_fragments: Vec<VerifiedMeta<Fragment>> = Vec::with_capacity(count);
-        let mut fragment_payloads: Vec<Fragment> = Vec::with_capacity(count);
-        for item in fragments {
-            let FragmentBatchItem {
-                head,
-                boundary,
-                checkpoints,
-                blob,
-            } = item;
-            let verified_blob = VerifiedBlobMeta::new(blob);
-            let verified_meta: VerifiedMeta<Fragment> = VerifiedMeta::seal::<Async, _>(
-                &self.signer,
-                (id, head, boundary, checkpoints),
-                verified_blob,
-            )
-            .await;
-            fragment_payloads.push(verified_meta.payload().clone());
-            verified_fragments.push(verified_meta);
-        }
-
-        putter
-            .save_batch(Vec::new(), verified_fragments)
-            .await
-            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
-
-        self.with_tree_hydrated(id, move |tree| {
-            for fragment in fragment_payloads {
-                tree.add_fragment(fragment);
-            }
-        })
-        .await
-        .map_err(WriteError::Io)?;
-        self.minimize_tree(id).await;
-        tracing::info!(count, "bulk-insert of fragments complete, tree minimized");
-        Ok(())
+        // Normalize and validate every fragment before signing or touching storage.
+        let fragments = fragments
+            .into_iter()
+            .map(|item| {
+                Fragment::new(
+                    id,
+                    item.head,
+                    item.boundary,
+                    &item.checkpoints,
+                    item.blob.meta(),
+                )
+                .map(|fragment| (fragment, item.blob))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.store_built_batch(id, Vec::new(), fragments).await
     }
 
     /// Persist already-built [`LooseCommit`] and [`Fragment`] payloads
@@ -1662,8 +1519,8 @@ where
     /// * [`WriteError::Io`] (`IoError::Storage`) if a storage error occurs.
     ///   On non-transactional [`Storage`](crate::storage::traits::Storage)
     ///   backends `save_batch` may have persisted some items before
-    ///   surfacing an error; this method then returns early and leaves the
-    ///   in-memory tree behind the on-disk state until rehydrate.
+    ///   surfacing an error. The cached tree is invalidated so its next read
+    ///   rehydrates the actual stored contents; the error does not imply rollback.
     /// * [`WriteError::Io`] (`IoError::BlobMismatch`) if any provided blob's
     ///   digest does not match its payload's claimed
     ///   [`BlobMeta`](sedimentree_core::blob::BlobMeta).
@@ -1680,7 +1537,7 @@ where
             return Ok(());
         }
 
-        let putter = self.storage.local_putter::<Async>(id);
+        let putter = self.storage.local_putter(id);
         let commit_count = commits.len();
         let fragment_count = fragments.len();
         tracing::info!(
@@ -1693,41 +1550,25 @@ where
         // Sign every commit and fragment first; defer all storage I/O so we
         // can hit the adapter exactly once via `save_batch`.
         let mut verified_commits: Vec<VerifiedMeta<LooseCommit>> = Vec::with_capacity(commit_count);
-        let mut commit_payloads: Vec<LooseCommit> = Vec::with_capacity(commit_count);
         for (commit, blob) in commits {
             let verified_sig = Signed::seal::<Async, _>(&self.signer, commit).await;
             let verified_meta = VerifiedMeta::new(verified_sig, blob)
                 .map_err(|e| WriteError::Io(IoError::BlobMismatch(e)))?;
-            commit_payloads.push(verified_meta.payload().clone());
             verified_commits.push(verified_meta);
         }
 
         let mut verified_fragments: Vec<VerifiedMeta<Fragment>> =
             Vec::with_capacity(fragment_count);
-        let mut fragment_payloads: Vec<Fragment> = Vec::with_capacity(fragment_count);
         for (fragment, blob) in fragments {
             let verified_sig = Signed::seal::<Async, _>(&self.signer, fragment).await;
             let verified_meta = VerifiedMeta::new(verified_sig, blob)
                 .map_err(|e| WriteError::Io(IoError::BlobMismatch(e)))?;
-            fragment_payloads.push(verified_meta.payload().clone());
             verified_fragments.push(verified_meta);
         }
 
-        putter
-            .save_batch(verified_commits, verified_fragments)
+        self.insert_sedimentree_locally(&putter, verified_commits, verified_fragments)
             .await
-            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
-
-        self.with_tree_hydrated(id, move |tree| {
-            for commit in commit_payloads {
-                tree.add_commit(commit);
-            }
-            for fragment in fragment_payloads {
-                tree.add_fragment(fragment);
-            }
-        })
-        .await
-        .map_err(WriteError::Io)?;
+            .map_err(|error| WriteError::Io(IoError::from(error)))?;
         self.minimize_tree(id).await;
 
         tracing::info!(
@@ -1787,7 +1628,7 @@ where
     ) -> Result<(), WriteError<Async, Store, Conn, Hdl::Message, Auth::PutDisallowed>> {
         use sedimentree_core::collections::Map;
 
-        let putter = self.storage.local_putter::<Async>(id);
+        let putter = self.storage.local_putter(id);
 
         // Index blobs by digest for matching with commits/fragments
         let blobs_by_digest: Map<Digest<Blob>, Blob> =
@@ -1823,7 +1664,7 @@ where
 
         self.insert_sedimentree_locally(&putter, verified_commits, verified_fragments)
             .await
-            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+            .map_err(|e| WriteError::Io(IoError::from(e)))?;
 
         Ok(())
     }
@@ -1895,8 +1736,8 @@ where
     ///   call hits a storage error. On non-transactional
     ///   [`Storage`](crate::storage::traits::Storage) backends `save_batch`
     ///   may have persisted some items before surfacing an error; in that
-    ///   case this method returns early and leaves the in-memory tree
-    ///   behind the on-disk state until rehydrate.
+    ///   case the cached tree is invalidated so its next read rehydrates actual
+    ///   storage contents. The error does not imply rollback.
     /// * [`WriteError::Io`] (`IoError::BlobMismatch`) if any provided blob's
     ///   digest does not match its payload's claimed
     ///   [`BlobMeta`](sedimentree_core::blob::BlobMeta).
@@ -2140,7 +1981,9 @@ where
     /// `stats` aggregates the sync; and the [`Vec`] carries per-connection
     /// [`CallError`]s for connections
     /// that failed. `succeeded = false` with an empty error list means no
-    /// connections to the peer were available.
+    /// connections to the peer were available, local policy denied disclosure,
+    /// or the peer returned `NotFound`/`Unauthorized`. Local policy is checked
+    /// before sending the document ID or inventory.
     ///
     /// # Errors
     ///
@@ -2174,7 +2017,25 @@ where
         ),
         IoError<Async, Store, Conn, Hdl::Message>,
     > {
-        // Resolve caller policy to the low-level deadline (`None` = uncapped).
+        Ok(self.sync_peer(to_ask, id, subscribe, timeout).await?.0)
+    }
+
+    /// The shared round also carries private initial-loader readiness. It must
+    /// not infer supplied data from advertised heads or offered-item statistics.
+    #[allow(clippy::type_complexity)]
+    async fn sync_peer(
+        &self,
+        to_ask: &PeerId,
+        id: SedimentreeId,
+        subscribe: bool,
+        timeout: CallTimeout,
+    ) -> Result<
+        (
+            per_peer_sync::PeerSyncEntry<Conn, Async, Conn::SendError>,
+            bool,
+        ),
+        IoError<Async, Store, Conn, Hdl::Message>,
+    > {
         let timeout = timeout.resolve(self.default_roundtrip_timeout);
 
         tracing::info!(tree = ?id, peer = %to_ask, "requesting batch sync for sedimentree");
@@ -2184,6 +2045,7 @@ where
 
         let mut stats = SyncStats::new();
         let mut had_success = false;
+        let mut supplied = false;
 
         let peer_conns: Vec<Authenticated<Conn, Async>> = {
             self.connections
@@ -2197,141 +2059,17 @@ where
         let mut conn_errs = Vec::new();
 
         for conn in peer_conns {
-            tracing::info!(peer = %to_ask, "using connection to peer");
-            let seed = FingerprintSeed::random();
-            // A nonexistent tree syncs as empty: we advertise nothing and the
-            // peer sends us everything it has. The hydrated tree is already
-            // minimized for the wire diff.
+            // Refresh per attempt, unlike all-peer sync's shared snapshot.
+            // An unknown tree advertises an empty inventory.
             let tree = self.get_or_hydrate(id).await?.unwrap_or_default();
-            let resolver = tree.fingerprint_resolver(&seed);
-
-            tracing::debug!(
-                tree = ?id,
-                commit_fps = resolver.summary().commit_fingerprints().len(),
-                fragment_fps = resolver.summary().fragment_fingerprints().len(),
-                "sending fingerprint summary"
-            );
-
-            // Mux missing means the peer was torn down between the
-            // connection snapshot and here; report it dropped, don't panic.
-            let Some(mux) = ({
-                let muxes = self.multiplexers.lock().await;
-                muxes.get(to_ask).and_then(|v| v.first()).cloned()
-            }) else {
-                tracing::debug!(peer = %to_ask, "multiplexer for peer gone (concurrent teardown); skipping");
-                conn_errs.push((conn.clone(), CallError::ResponseDropped));
-                continue;
-            };
-            let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
-            let req_id = managed.next_request_id();
-
-            let result = ManagedCall::<Async, Hdl::Message>::call(
-                &managed,
-                BatchSyncRequest {
-                    id,
-                    req_id,
-                    fingerprint_summary: resolver.summary().clone(),
-                    subscribe,
-                },
-                timeout,
-            )
-            .await;
-
-            match result {
-                Err(e) => conn_errs.push((conn, e)),
-                Ok(BatchSyncResponse {
-                    result,
-                    responder_heads,
-                    ..
-                }) => {
-                    self.handler
-                        .notify_remote_heads(id, conn.peer_id(), responder_heads.clone());
-                    stats.remote_heads = responder_heads;
-                    let SyncDiff {
-                        missing_commits,
-                        missing_fragments,
-                        requesting,
-                    } = match result {
-                        SyncResult::Ok(diff) => diff,
-                        SyncResult::NotFound => {
-                            tracing::debug!(peer = %to_ask, tree = ?id, "peer reports sedimentree not found");
-                            continue;
-                        }
-                        SyncResult::Unauthorized => {
-                            tracing::debug!(peer = %to_ask, tree = ?id, "peer reports we are unauthorized for sedimentree");
-                            continue;
-                        }
-                    };
-
-                    // Track counts for stats
-                    let commits_to_receive = missing_commits.len();
-                    let fragments_to_receive = missing_fragments.len();
-
-                    // Ingest in one batched pass: `recv_batch_sync_response` groups
-                    // items by author and writes each batch in a single `save_batch`.
-                    // `requesting` is handled separately below, so the ingester's
-                    // copy is left empty.
-                    let ingested = ingest::recv_batch_sync_response(
-                        &self.sedimentrees,
-                        &self.storage,
-                        to_ask,
-                        id,
-                        SyncDiff {
-                            missing_commits,
-                            missing_fragments,
-                            requesting: RequestedData::default(),
-                        },
-                    )
-                    .await?;
-                    self.minimize_tree(id).await;
-                    self.push_to_subscribers(id, to_ask, &ingested).await;
-
-                    // Update received stats (count what was offered, not verified)
-                    stats.commits_received += commits_to_receive;
-                    stats.fragments_received += fragments_to_receive;
-
-                    tracing::debug!(
-                        tree = ?id,
-                        commits_received = commits_to_receive,
-                        requesting_commits = requesting.commit_fingerprints.len(),
-                        requesting_fragments = requesting.fragment_fingerprints.len(),
-                        "received response"
-                    );
-
-                    // Send back data the responder requested (bidirectional sync)
-                    if !requesting.is_empty() {
-                        tracing::debug!(tree = ?id, "calling send_requested_data");
-                        match self
-                            .send_requested_data(&conn, id, &resolver, &requesting)
-                            .await
-                        {
-                            Ok(sent) => {
-                                tracing::debug!(
-                                    commits = sent.commits,
-                                    fragments = sent.fragments,
-                                    "send_requested_data returned"
-                                );
-                                stats.commits_sent += sent.commits;
-                                stats.fragments_sent += sent.fragments;
-                            }
-                            Err(e) => {
-                                tracing::warn!(peer = %to_ask, error = %e, "failed to send requested data to peer");
-                                if !matches!(e, SendRequestedDataError::Unauthorized(_)) {
-                                    #[cfg(feature = "metrics")]
-                                    crate::metrics::requested_data_send_failure();
-                                }
-                            }
-                        }
-                    }
-
-                    // Mutual subscription: we subscribed to them, so also add them
-                    // to our subscriptions so our commits get pushed to them
-                    if subscribe {
-                        self.track_outgoing_subscription(*to_ask, id).await;
-                        self.add_subscription(*to_ask, id).await;
-                        tracing::debug!(peer = %to_ask, tree = ?id, "mutual subscription: added peer to our subscriptions");
-                    }
-
+            match self
+                .sync_connection(&conn, id, &tree, subscribe, timeout, &mut stats)
+                .await?
+            {
+                Err(error) => conn_errs.push((conn, error)),
+                Ok(None) => {}
+                Ok(Some(stored_content)) => {
+                    supplied = stored_content;
                     had_success = true;
                     break;
                 }
@@ -2357,10 +2095,12 @@ where
             }
         }
 
-        Ok((had_success, stats, conn_errs))
+        Ok(((had_success, stats, conn_errs), supplied))
     }
 
-    /// Request a batch sync from all connected peers for a given sedimentree ID.
+    /// Request a batch sync from all connected peers authorized to fetch the
+    /// given sedimentree. Denied peers receive no request and report
+    /// `succeeded = false` without a connection error.
     ///
     /// # Returns
     ///
@@ -2430,144 +2170,28 @@ where
                     let mut stats = SyncStats::new();
 
                     for conn in peer_conns {
-                        tracing::debug!(peer = %conn.peer_id(), "using connection to peer");
-                        let seed = FingerprintSeed::random();
-                        let resolver = shared_tree.fingerprint_resolver(&seed);
-
-                        // Mux missing means the peer was torn down between
-                        // the connection snapshot and here; report it
-                        // dropped, don't panic.
-                        let Some(mux) = ({
-                            let muxes = self.multiplexers.lock().await;
-                            muxes.get(peer_id).and_then(|v| v.first()).cloned()
-                        }) else {
-                            tracing::debug!(peer = %peer_id, "multiplexer for peer gone (concurrent teardown); skipping");
-                            conn_errs.push((
-                                conn.clone(),
-                                CallError::ResponseDropped,
-                            ));
-                            continue;
-                        };
-                        let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
-                        let req_id = managed.next_request_id();
-
-                        let result = ManagedCall::<Async, Hdl::Message>::call(
-                                &managed,
-                                BatchSyncRequest {
-                                    id,
-                                    req_id,
-                                    fingerprint_summary: resolver.summary().clone(),
-                                    subscribe,
-                                },
-                                timeout,
-                            )
-                            .await;
-
-                        match result {
-                            Err(e) => conn_errs.push((conn.clone(), e)),
-                            Ok(BatchSyncResponse {
-                                result,
-                                responder_heads,
-                                ..
-                            }) => {
-                                self.handler.notify_remote_heads(
-                                    id,
-                                    *peer_id,
-                                    responder_heads.clone(),
-                                );
-                                stats.remote_heads = responder_heads;
-                                let SyncDiff {
-                                    missing_commits,
-                                    missing_fragments,
-                                    requesting,
-                                } = match result {
-                                    SyncResult::Ok(diff) => diff,
-                                    SyncResult::NotFound => {
-                                        tracing::debug!(peer = %peer_id, tree = ?id, "peer reports sedimentree not found");
-                                        continue;
-                                    }
-                                    SyncResult::Unauthorized => {
-                                        tracing::debug!(peer = %peer_id, tree = ?id, "peer reports we are unauthorized for sedimentree");
-                                        continue;
-                                    }
-                                };
-
-                                // Track counts for stats
-                                let commits_to_receive = missing_commits.len();
-                                let fragments_to_receive = missing_fragments.len();
-
-                                tracing::debug!(
-                                    sedimentree_id = ?id,
-                                    commits_received = commits_to_receive,
-                                    fragments_received = fragments_to_receive,
-                                    peer_requesting_commits = requesting.commit_fingerprints.len(),
-                                    peer_requesting_fragments = requesting.fragment_fingerprints.len(),
-                                    "sync_with_all_peers: response received"
-                                );
-
-                                // Ingest in one batched pass; see `sync_with_peer`.
-                                // `requesting` is handled separately below.
-                                let ingested = ingest::recv_batch_sync_response(
-                                    &self.sedimentrees,
-                                    &self.storage,
-                                    peer_id,
-                                    id,
-                                    SyncDiff {
-                                        missing_commits,
-                                        missing_fragments,
-                                        requesting: RequestedData::default(),
-                                    },
-                                )
-                                .await?;
-                                self.minimize_tree(id).await;
-                                self.push_to_subscribers(id, peer_id, &ingested).await;
-
-                                // Update received stats
-                                stats.commits_received += commits_to_receive;
-                                stats.fragments_received += fragments_to_receive;
-
-                                // Send back data the responder requested (bidirectional sync)
-                                if !requesting.is_empty() {
-                                    match self.send_requested_data(conn, id, &resolver, &requesting).await {
-                                        Ok(sent) => {
-                                            stats.commits_sent += sent.commits;
-                                            stats.fragments_sent += sent.fragments;
-                                        }
-                                        Err(ref e @ SendRequestedDataError::Unauthorized(_)) => {
-                                            let msg: Hdl::Message = SyncMessage::from(DataRequestRejected { id }).into();
-                                            if let Err(send_err) = conn.send(&msg).await {
-                                                tracing::warn!(peer = %peer_id, error = %send_err, "peer disconnected while sending DataRequestRejected");
-                                            }
-                                            tracing::warn!(peer = %peer_id, error = %e, "failed to send requested data to peer");
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!(peer = %peer_id, error = %e, "failed to send requested data to peer");
-                                            #[cfg(feature = "metrics")]
-                                            crate::metrics::requested_data_send_failure();
-                                        }
-                                    }
-                                }
-
-                                // Mutual subscription: we subscribed to them, so also add them
-                                // to our subscriptions so our commits get pushed to them
-                                if subscribe {
-                                    self.track_outgoing_subscription(*peer_id, id).await;
-                                    self.add_subscription(*peer_id, id).await;
-                                    tracing::debug!(peer = %peer_id, tree = ?id, "mutual subscription: added peer to our subscriptions");
-                                }
-
+                        match self
+                            .sync_connection(conn, id, &shared_tree, subscribe, timeout, &mut stats)
+                            .await?
+                        {
+                            Err(error) => conn_errs.push((conn.clone(), error)),
+                            Ok(None) => {}
+                            Ok(Some(_)) => {
                                 had_success = true;
                                 break;
                             }
                         }
                     }
 
-                    Ok::<(PeerId, bool, SyncStats, Vec<(Authenticated<Conn, Async>, _)>), IoError<Async, Store, Conn, Hdl::Message>>((
-                        *peer_id,
-                        had_success,
-                        stats,
-                        conn_errs,
-                    ))
+                    Ok::<
+                        (
+                            PeerId,
+                            bool,
+                            SyncStats,
+                            Vec<(Authenticated<Conn, Async>, _)>,
+                        ),
+                        IoError<Async, Store, Conn, Hdl::Message>,
+                    >((*peer_id, had_success, stats, conn_errs))
                 }
             })
             .collect();
@@ -2584,6 +2208,190 @@ where
             }
         }
         Ok(PerPeerSync::new(out))
+    }
+
+    /// Sync the exact connection generation observed by a live loader, rather
+    /// than retrying an older (possibly stalled) connection to the same peer.
+    async fn sync_stored_connection(
+        &self,
+        conn: Authenticated<Conn, Async>,
+        mux: Arc<Multiplexer>,
+        id: SedimentreeId,
+    ) -> Result<Option<(PeerId, bool)>, crate::stored::LoadError> {
+        #[cfg(feature = "metrics")]
+        let started = std::time::Instant::now();
+        let mut stats = SyncStats::new();
+        let result = async {
+            let tree = self.get_or_hydrate(id).await?.unwrap_or_default();
+            self.sync_connection_on_mux(&conn, mux, id, &tree, true, None, &mut stats)
+                .await
+        }
+        .await;
+        #[cfg(feature = "metrics")]
+        if let Ok(round) = &result {
+            if matches!(round, Ok(Some(_))) {
+                crate::metrics::sync_duration(started.elapsed().as_secs_f64());
+            }
+            crate::metrics::sync_data_exchanged(
+                stats.commits_received,
+                stats.fragments_received,
+                stats.commits_sent,
+                stats.fragments_sent,
+            );
+            if let Err(error) = round {
+                crate::metrics::sync_call_failure(error.error_name());
+            }
+        }
+        match result {
+            Ok(Ok(Some(supplied))) => Ok(Some((conn.peer_id(), supplied))),
+            Ok(Ok(None) | Err(_))
+            | Err(IoError::ConnCall(_) | IoError::ConnSend(_) | IoError::ConnRecv(_)) => Ok(None),
+            Err(IoError::StorageInterrupted) => Err(crate::stored::LoadError::Closed),
+            Err(error @ (IoError::Storage(_) | IoError::BlobMismatch(_) | IoError::Load(_))) => {
+                Err(crate::stored::LoadError::Operation(error.to_string()))
+            }
+        }
+    }
+
+    /// Process one connection's round. The outer result covers local I/O;
+    /// the inner result preserves per-connection call errors and refusals.
+    /// Callers retain their own inventory lifetime and aggregation policy.
+    #[allow(clippy::type_complexity)]
+    async fn sync_connection(
+        &self,
+        conn: &Authenticated<Conn, Async>,
+        id: SedimentreeId,
+        tree: &Sedimentree,
+        subscribe: bool,
+        timeout: Option<Duration>,
+        stats: &mut SyncStats,
+    ) -> Result<
+        Result<Option<bool>, CallError<Conn::SendError>>,
+        IoError<Async, Store, Conn, Hdl::Message>,
+    > {
+        let Some(mux) = self.mux_for_connection(conn).await else {
+            tracing::debug!(peer = %conn.peer_id(), "multiplexer gone during sync; skipping connection");
+            return Ok(Err(CallError::ResponseDropped));
+        };
+        self.sync_connection_on_mux(conn, mux, id, tree, subscribe, timeout, stats)
+            .await
+    }
+
+    /// A captured mux identifies one registration even if the same connection
+    /// object is later re-registered. Never route an old attempt via a new mux.
+    #[allow(
+        clippy::type_complexity,
+        clippy::too_many_lines,
+        clippy::too_many_arguments
+    )]
+    async fn sync_connection_on_mux(
+        &self,
+        conn: &Authenticated<Conn, Async>,
+        mux: Arc<Multiplexer>,
+        id: SedimentreeId,
+        tree: &Sedimentree,
+        subscribe: bool,
+        timeout: Option<Duration>,
+        stats: &mut SyncStats,
+    ) -> Result<
+        Result<Option<bool>, CallError<Conn::SendError>>,
+        IoError<Async, Store, Conn, Hdl::Message>,
+    > {
+        let peer = conn.peer_id();
+        // A sync request discloses the document ID and local inventory even
+        // when no content is sent. Gate every outgoing round, including loader
+        // connections and forwarded subscriptions, before constructing it.
+        if let Err(error) = self.storage.policy().authorize_fetch(peer, id).await {
+            tracing::debug!(%peer, tree = ?id, %error, "policy rejected outgoing sync");
+            return Ok(Ok(None));
+        }
+        let seed = FingerprintSeed::random();
+        let resolver = tree.fingerprint_resolver(&seed);
+        let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
+        let response = ManagedCall::<Async, Hdl::Message>::call(
+            &managed,
+            BatchSyncRequest {
+                id,
+                req_id: managed.next_request_id(),
+                fingerprint_summary: resolver.summary().clone(),
+                subscribe,
+            },
+            timeout,
+        )
+        .await;
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => return Ok(Err(error)),
+        };
+        self.handler
+            .notify_remote_heads(id, peer, response.responder_heads.clone());
+        stats.remote_heads = response.responder_heads;
+        let SyncDiff {
+            missing_commits,
+            missing_fragments,
+            requesting,
+        } = match response.result {
+            SyncResult::Ok(diff) => diff,
+            SyncResult::NotFound => {
+                tracing::debug!(peer = %peer, tree = ?id, "peer reports sedimentree not found");
+                return Ok(Ok(None));
+            }
+            SyncResult::Unauthorized => {
+                tracing::debug!(peer = %peer, tree = ?id, "peer reports we are unauthorized for sedimentree");
+                return Ok(Ok(None));
+            }
+        };
+        let commits_to_receive = missing_commits.len();
+        let fragments_to_receive = missing_fragments.len();
+        // The shared ingester verifies and groups accepted items by author;
+        // return-direction requests belong to this captured resolver instead.
+        let ingested = ingest::recv_batch_sync_response(
+            &self.sedimentrees,
+            &self.storage,
+            &peer,
+            id,
+            SyncDiff {
+                missing_commits,
+                missing_fragments,
+                requesting: RequestedData::default(),
+            },
+        )
+        .await?;
+        self.minimize_tree(id).await;
+        self.push_to_subscribers(id, &peer, &ingested).await;
+        // Existing statistics count offered items, not acceptance.
+        stats.commits_received += commits_to_receive;
+        stats.fragments_received += fragments_to_receive;
+
+        if !requesting.is_empty() {
+            match self
+                .send_requested_data(conn, id, &resolver, &requesting)
+                .await
+            {
+                Ok(sent) => {
+                    stats.commits_sent += sent.commits;
+                    stats.fragments_sent += sent.fragments;
+                }
+                Err(error @ SendRequestedDataError::Unauthorized(_)) => {
+                    let message: Hdl::Message =
+                        SyncMessage::from(DataRequestRejected { id }).into();
+                    if let Err(send_error) = conn.send(&message).await {
+                        tracing::warn!(peer = %peer, error = %send_error, "peer disconnected while sending DataRequestRejected");
+                    }
+                    tracing::warn!(peer = %peer, %error, "policy rejected requested data");
+                }
+                Err(error) => {
+                    tracing::warn!(peer = %peer, %error, "failed to send requested data to peer");
+                    #[cfg(feature = "metrics")]
+                    crate::metrics::requested_data_send_failure();
+                }
+            }
+        }
+        if subscribe {
+            self.track_outgoing_subscription(peer, id).await;
+            self.add_subscription(peer, id).await;
+        }
+        Ok(Ok(Some(ingested.stored_content)))
     }
 
     /// Sync all known [`Sedimentree`]s with all connected peers.
@@ -2658,7 +2466,7 @@ where
     pub async fn sedimentree_ids(&self) -> Vec<SedimentreeId> {
         match self
             .storage
-            .hydration_access()
+            .local_access()
             .load_all_sedimentree_ids::<Async>()
             .await
         {
@@ -2712,6 +2520,25 @@ where
         }
     }
 
+    /// Get the current heads of a single sedimentree.
+    ///
+    /// Returns `Ok(None)` when the tree does not exist, and `Ok(Some(vec![]))`
+    /// for a tree that exists but has no heads yet.
+    ///
+    /// To query several trees, call this once per id and choose your own
+    /// concurrency (e.g. `buffer_unordered`).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Store::Error` if the tree is not resident and loading it from
+    /// storage fails.
+    pub async fn get_heads(
+        &self,
+        id: SedimentreeId,
+    ) -> Result<Option<Vec<CommitId>>, Store::Error> {
+        ingest::heads_or_hydrate(&self.sedimentrees, &self.storage, &self.depth_metric, id).await
+    }
+
     /// Get the current heads for every known sedimentree.
     ///
     /// Enumerates from durable storage so the result is complete even after
@@ -2729,8 +2556,8 @@ where
         let ids = self.sedimentree_ids().await;
         let mut out = Vec::with_capacity(ids.len());
         for id in ids {
-            match self.get_or_hydrate(id).await {
-                Ok(Some(tree)) => out.push((id, tree.heads(&self.depth_metric))),
+            match self.get_heads(id).await {
+                Ok(Some(heads)) => out.push((id, heads)),
                 // Tree genuinely gone (raced with a delete): omit it.
                 Ok(None) => {}
                 // Transient hydration failure: keep the id (it was just
@@ -2782,7 +2609,7 @@ where
         putter: &Putter<Async, Store>,
         verified_commits: Vec<VerifiedMeta<LooseCommit>>,
         verified_fragments: Vec<VerifiedMeta<Fragment>>,
-    ) -> Result<(), Store::Error> {
+    ) -> Result<(), crate::storage::mutation::MutationError<Store::Error>> {
         let id = putter.sedimentree_id();
         tracing::debug!(tree = ?id, "adding sedimentree");
 
@@ -2790,31 +2617,8 @@ where
         // `Storage::save_batch` contract — no explicit
         // `save_sedimentree_id` call needed here.
 
-        // Extract payloads for the in-memory tree before moving the verified
-        // metas into a single `save_batch` call.
-        let loose_commits: Vec<LooseCommit> = verified_commits
-            .iter()
-            .map(|v| v.payload().clone())
-            .collect();
-        let fragments: Vec<Fragment> = verified_fragments
-            .iter()
-            .map(|v| v.payload().clone())
-            .collect();
-
         putter
             .save_batch(verified_commits, verified_fragments)
-            .await?;
-
-        let sedimentree = Sedimentree::new(fragments, loose_commits);
-        // Hydrate-on-miss so merging into an evicted tree preserves its full
-        // durable history.
-        let access = self.storage.hydration_access();
-        self.sedimentrees
-            .with_entry_hydrated(
-                id,
-                || ingest::load_tree::<Async, _>(&access, id),
-                |tree| tree.merge(sedimentree),
-            )
             .await?;
 
         Ok(())
@@ -2853,7 +2657,7 @@ where
             "sending requested commits and fragments to peer"
         );
 
-        let fetcher = match self.storage.get_fetcher::<Async>(peer_id, id).await {
+        let fetcher = match self.storage.get_fetcher(peer_id, id).await {
             Ok(f) => f,
             Err(e) => {
                 tracing::debug!(
@@ -2886,7 +2690,7 @@ where
             .filter_map(|fp| {
                 let id = resolver.resolve_commit(fp);
                 if id.is_none() {
-                    // Coverage-only fingerprints (fragment head/boundary) are in
+                    // Coverage-only fingerprints (fragment heads) are in
                     // the summary but intentionally not in the resolver. The remote
                     // echoing them back is expected when it doesn't have that CommitId.
                     tracing::debug!(fingerprint = %fp, "requested commit fingerprint not found in resolver");
@@ -3040,7 +2844,7 @@ where
         &self,
         putter: &Putter<Async, Store>,
         verified_meta: VerifiedMeta<LooseCommit>,
-    ) -> Result<bool, Store::Error> {
+    ) -> Result<bool, crate::storage::mutation::MutationError<Store::Error>> {
         ingest::insert_commit_locally(&self.sedimentrees, putter, verified_meta).await
     }
 
@@ -3055,7 +2859,7 @@ where
         &self,
         putter: &Putter<Async, Store>,
         verified_meta: VerifiedMeta<Fragment>,
-    ) -> Result<bool, Store::Error> {
+    ) -> Result<bool, crate::storage::mutation::MutationError<Store::Error>> {
         ingest::insert_fragment_locally(&self.sedimentrees, putter, verified_meta).await
     }
 
@@ -3079,28 +2883,6 @@ where
             .await
             .map_err(IoError::Storage)
     }
-
-    /// Mutate the in-memory tree for `id`, hydrating it from storage first if
-    /// it is not resident.
-    ///
-    /// The write-path counterpart to [`get_or_hydrate`](Self::get_or_hydrate):
-    /// a mutation applied to an evicted tree starts from its full durable
-    /// history rather than an empty default. The caller is responsible for
-    /// having persisted the underlying data to storage *before* calling this
-    /// (storage is the source of truth). The mutation runs against the
-    /// [`MinimizedSedimentree`] wrapper, which it marks dirty; callers
-    /// re-minimize (e.g. via [`minimize_tree`](Self::minimize_tree)) afterward.
-    async fn with_tree_hydrated<F: FnOnce(&mut MinimizedSedimentree) -> R, R>(
-        &self,
-        id: SedimentreeId,
-        mutate: F,
-    ) -> Result<R, IoError<Async, Store, Conn, Hdl::Message>> {
-        let access = self.storage.hydration_access();
-        self.sedimentrees
-            .with_entry_hydrated(id, || ingest::load_tree::<Async, _>(&access, id), mutate)
-            .await
-            .map_err(IoError::Storage)
-    }
 }
 
 // The spawning methods (`listen` + `full_sync_with_peer`) share their own
@@ -3108,11 +2890,11 @@ where
 // for inbound handlers, `Async::doc_sync_task` for per-document cold-start
 // fan-out) and so require bounds the rest of the sync surface does not:
 // `'a: 'static`, `Timer: Send + Sync`, `Sp: Send + Sync + 'static`, and
-// `SpawnDocSync`. Every real deployment uses a `'static` `Subduction`, so this
+// `NodeTasks`. Every real deployment uses a `'static` `Subduction`, so this
 // is not a practical restriction.
 impl<
     Async: SubductionFutureForm<'static, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>
-        + SpawnDocSync<'static, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>
+        + NodeTasks<'static, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>
         + 'static,
     Store: Storage<Async>,
     Conn: Connection<Async, Hdl::Message> + PartialEq + 'static,
@@ -3133,6 +2915,121 @@ where
             SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
         >,
 {
+    /// Check whether to await ongoing requests completion before subscribing
+    ///
+    /// When we receive a request for a document that we don't hold we need to forward those
+    /// requests on to other connected peers and wait for those peers to respond before we respond
+    /// to the originating peer. If we have multiple concurrent requests for the same document then
+    /// we want to forward that request once and have all the concurrent originators wait on the
+    /// same outgoing requests. This method provides the answer to "should I wait for an ongoing
+    /// request before responding".
+    ///
+    /// More specifically this method checks if there is an ongoing request for the document using
+    /// [`upstream_fetch::InFlightFetches`] and, if there is no such request but the document is
+    /// not available locally, creates one and waits for it.
+    ///
+    /// Returns
+    ///
+    /// - `false` if:
+    ///     - the `originator` isn't authorized to fetch
+    ///     - the document is present _and there is no ongoing request_ (note
+    ///       that the document could be present because we are in the process
+    ///       of resolving an ongoing upstream request)
+    /// - `true` if the originator is authorized and
+    ///     - there is an ongoing request for the document
+    ///     - the document was not present locally (i.e. we have begun an
+    ///       ongoing fetch)
+    ///
+    /// Really though, if this returns `false` then you can just immediately
+    /// return
+    pub(crate) async fn hold_for_upstream_fetch(
+        self: &Arc<Self>,
+        id: SedimentreeId,
+        originator: PeerId,
+    ) -> bool {
+        use upstream_fetch::FetchSlot;
+
+        // If the requestor is not authorized then there's no need to hold
+        let Ok(fetcher) = self.storage.get_fetcher(originator, id).await else {
+            return false;
+        };
+
+        // A fetch already in flight is joined even if it has ingested a
+        // partial result from one of several upstreams.
+        let done = if let Some(done) = self.in_flight_fetches.join(id).await {
+            done
+        } else {
+            let missing = !self.holds_locally(&fetcher).await;
+            // A request could have begun whilst we were calling `holds_locally`
+            // so we need to re-check for in flight fetches
+            match self.in_flight_fetches.join_or_claim(id, missing).await {
+                // We're still waiting for an ongoing request
+                FetchSlot::Joined(done) => done,
+                // We started a fresh request, need to actually spawn it
+                FetchSlot::Claimed(done, token) => {
+                    self.spawner.spawn(Async::forward_subscription_task(
+                        Arc::clone(self),
+                        id,
+                        originator,
+                        Some(token),
+                    ));
+                    done
+                }
+                // Held locally and nobody is fetching: answer right away.
+                FetchSlot::NothingInFlight => return false,
+            }
+        };
+
+        let _ = self
+            .timer
+            .timeout(self.default_roundtrip_timeout / 2, Async::fetch_done(done))
+            .await;
+        true
+    }
+
+    /// Post-handler hook for an inbound subscribe to `id` from `originator`
+    /// that was answered from local data: forward it upstream, detached from
+    /// the dispatch so a slow upstream never holds the per-peer permit.
+    ///
+    /// Re-checks authorization first — the handler returns `Ok` even after
+    /// sending `Unauthorized`, so handler success alone is too permissive a
+    /// gate (see `design/sync/subscriptions.md#authorization-gate`).
+    pub(crate) async fn forward_subscription_in_background(
+        self: &Arc<Self>,
+        id: SedimentreeId,
+        originator: PeerId,
+    ) {
+        if self
+            .storage
+            .policy()
+            .authorize_fetch(originator, id)
+            .await
+            .is_ok()
+        {
+            self.spawner.spawn(Async::forward_subscription_task(
+                Arc::clone(self),
+                id,
+                originator,
+                None,
+            ));
+        }
+    }
+
+    /// Whether anything is held for `fetcher`'s sedimentree, resident or
+    /// durable. An explicitly registered empty tree counts as held.
+    ///
+    /// Deliberately cheap: neither clones nor minimizes a resident tree, nor
+    /// hydrates a cold one. A storage error is treated as "held" so that a
+    /// failing store degrades to the immediate-response path rather than
+    /// stalling every request.
+    async fn holds_locally(&self, fetcher: &Fetcher<Async, Store>) -> bool {
+        self.sedimentrees
+            .with_entry(&fetcher.sedimentree_id(), |_| ())
+            .await
+            .is_some()
+            || !matches!(fetcher.contains_sedimentree_id().await, Ok(false))
+    }
+
     /// Listen for incoming messages and dispatch them through the handler.
     ///
     /// This method runs indefinitely, processing messages as they arrive.
@@ -3211,23 +3108,13 @@ where
                     if let Ok((conn, msg)) = resp_result {
                         let peer_id = conn.peer_id();
                         if let Some(resp) = msg.try_as_batch_sync_response() {
-                            let muxes_for_peer = {
-                                let multiplexers = self.multiplexers.lock().await;
-                                multiplexers.get(&peer_id).cloned()
+                            let consumed = match self.mux_for_connection(&conn).await {
+                                Some(mux) => mux.resolve_pending(resp).await,
+                                None => false,
                             };
-
-                            let mut consumed = false;
-                            if let Some(muxes) = muxes_for_peer {
-                                for mux in &muxes {
-                                    if mux.resolve_pending(resp).await {
-                                        tracing::debug!(peer = %peer_id, "routed BatchSyncResponse to pending caller");
-                                        consumed = true;
-                                        break;
-                                    }
-                                }
-                            }
-
-                            if !consumed {
+                            if consumed {
+                                tracing::debug!(peer = %peer_id, "routed BatchSyncResponse to pending caller");
+                            } else {
                                 tracing::warn!(
                                     peer = %peer_id,
                                     "BatchSyncResponse had no pending caller"
@@ -3284,19 +3171,10 @@ where
                                 peer = %peer_id,
                                 "BatchSyncResponse arrived via msg_queue (expected response_queue) — routing to multiplexer"
                             );
-                            let muxes_for_peer = {
-                                let multiplexers = self.multiplexers.lock().await;
-                                multiplexers.get(&peer_id).cloned()
+                            let consumed = match self.mux_for_connection(&conn).await {
+                                Some(mux) => mux.resolve_pending(resp).await,
+                                None => false,
                             };
-                            let mut consumed = false;
-                            if let Some(muxes) = muxes_for_peer {
-                                for mux in &muxes {
-                                    if mux.resolve_pending(resp).await {
-                                        consumed = true;
-                                        break;
-                                    }
-                                }
-                            }
                             if !consumed {
                                 tracing::warn!(
                                     peer = %peer_id,
@@ -3504,11 +3382,7 @@ impl<
     /// One multiplexer is created per connection, so at a quiescent point
     /// this equals [`connection_count`](Self::connection_count).
     pub async fn mux_count(&self, peer_id: &PeerId) -> usize {
-        self.multiplexers
-            .lock()
-            .await
-            .get(peer_id)
-            .map_or(0, Vec::len)
+        self.multiplexers.lock().await.count(peer_id)
     }
 
     /// Number of connections currently registered for `peer_id`.
@@ -3591,6 +3465,7 @@ impl<
 > Drop for Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
 {
     fn drop(&mut self) {
+        self.storage.state.close();
         self.abort_manager_handle.abort();
         self.abort_listener_handle.abort();
     }
@@ -3675,7 +3550,7 @@ impl<
 /// Similarly, the trait alias helps us avoid repeating the same complex trait bounds everywhere,
 /// and needing to update them in many places if the constraints change.
 ///
-/// Note: [`StartListener`] is _not_ a supertrait here — it is only required
+/// Note: [`NodeTasks`] is _not_ a supertrait here — it is only required
 /// on the constructor methods that build the listener future, keeping the
 /// handler type `Hdl` out of the main `Subduction` struct definition.
 pub trait SubductionFutureForm<
@@ -3692,6 +3567,7 @@ pub trait SubductionFutureForm<
     + RunManager<Authenticated<Conn, Self>, WireMsg>
     + Sized
     + peers::SendPushes<Conn, WireMsg>
+    + upstream_fetch::AwaitFetch
 {
 }
 
@@ -3707,110 +3583,14 @@ impl<
     Async: FutureForm
         + RunManager<Authenticated<Conn, Async>, WireMsg>
         + peers::SendPushes<Conn, WireMsg>
+        + upstream_fetch::AwaitFetch
         + Sized,
 > SubductionFutureForm<'a, Store, Conn, WireMsg, Auth, Sign, Metric, SHARDS> for Async
 {
 }
 
-/// A trait for starting the listener task for Subduction.
-///
-/// This lets us abstract over `Send` and `!Send` futures while keeping
-/// the handler type `Hdl` available for the `#[future_form]` macro to
-/// generate correct `Send` bounds.
-///
-/// `Hdl` is a trait-level (not method-level) generic so the macro can
-/// emit the required `Hdl: Send + Sync` bounds for the `Sendable` impl.
-pub trait StartListener<
-    'a,
-    Store: Storage<Self>,
-    Conn: Connection<Self, WireMsg> + PartialEq + 'a,
-    WireMsg: Encode + Decode + Clone + Send + core::fmt::Debug + 'static,
-    Hdl: Handler<Self, Conn, Message = WireMsg> + RemoteHeadsNotifier,
-    Auth: ConnectionPolicy<Self> + StoragePolicy<Self>,
-    Sign: Signer<Self>,
-    Metric: DepthMetric,
-    const SHARDS: usize,
->:
-    FutureForm
-    + RunManager<Authenticated<Conn, Self>, WireMsg>
-    + peers::SendPushes<Conn, WireMsg>
-    + Sized where
-    Hdl::HandlerError: Into<ListenError<Self, Store, Conn, WireMsg>>,
-{
-    /// Start the listener task for Subduction.
-    #[allow(clippy::type_complexity)]
-    fn start_listener<
-        Timer: Timeout<Self> + Clone + Send + Sync + 'a,
-        Sp: Spawn<Self> + Clone + Send + Sync + 'static,
-    >(
-        subduction: Arc<
-            Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
-        >,
-        abort_reg: AbortRegistration,
-    ) -> Abortable<Self::Future<'a, ()>>
-    where
-        Self: Sized,
-        'a: 'static;
-}
-
-#[future_form(
-    Sendable where
-        Conn: Connection<Sendable, WireMsg> + PartialEq + Clone + Send + Sync + 'static,
-        WireMsg: Encode + Decode + Clone + Send + Sync + core::fmt::Debug + 'static,
-        Store: Storage<Sendable> + Send + Sync + 'a,
-        Auth: ConnectionPolicy<Sendable> + StoragePolicy<Sendable> + Send + Sync + 'a,
-        Auth::PutDisallowed: Send + 'static,
-        Auth::FetchDisallowed: Send + 'static,
-        Sign: Signer<Sendable> + Send + Sync + 'a,
-        Metric: DepthMetric + Send + Sync + 'a,
-        Hdl: Handler<Sendable, Conn, Message = WireMsg> + RemoteHeadsNotifier + Send + Sync + 'a,
-        Hdl::HandlerError: Into<ListenError<Sendable, Store, Conn, WireMsg>> + Send + 'static,
-        Store::Error: Send + 'static,
-        Conn::DisconnectionError: Send + 'static,
-        Conn::RecvError: Send + 'static,
-        Conn::SendError: Send + 'static,
-    Local where
-        Conn: Connection<Local, WireMsg> + PartialEq + Clone + 'static,
-        WireMsg: Encode + Decode + Clone + Send + core::fmt::Debug + 'static,
-        Store: Storage<Local> + 'a,
-        Auth: ConnectionPolicy<Local> + StoragePolicy<Local> + 'a,
-        Sign: Signer<Local> + 'a,
-        Metric: DepthMetric + 'a,
-        Hdl: Handler<Local, Conn, Message = WireMsg> + RemoteHeadsNotifier + 'a,
-        Hdl::HandlerError: Into<ListenError<Local, Store, Conn, WireMsg>>
-)]
-impl<'a, Async: FutureForm, Conn, Store, WireMsg, Hdl, Auth, Sign, Metric, const SHARDS: usize>
-    StartListener<'a, Store, Conn, WireMsg, Hdl, Auth, Sign, Metric, SHARDS> for Async
-where
-    Hdl: Handler<Async, Conn, Message = WireMsg> + RemoteHeadsNotifier,
-    Hdl::HandlerError: Into<ListenError<Async, Store, Conn, WireMsg>>,
-    WireMsg: Encode + Decode + Clone + Send + core::fmt::Debug + From<SyncMessage> + 'static,
-{
-    fn start_listener<
-        Timer: Timeout<Self> + Clone + Send + Sync + 'a,
-        Sp: Spawn<Self> + Clone + Send + Sync + 'static,
-    >(
-        subduction: Arc<
-            Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
-        >,
-        abort_reg: AbortRegistration,
-    ) -> Abortable<Self::Future<'a, ()>>
-    where
-        'a: 'static,
-    {
-        Abortable::new(
-            Async::from_future(async move {
-                if let Err(e) = subduction.listen().await {
-                    tracing::info!(error = %e, "subduction listener disconnected");
-                }
-            }),
-            abort_reg,
-        )
-    }
-}
-
 /// Result of a single document's sync, as sent back through the fan-out
-/// channel by a spawned [`SpawnDocSync`] task.
+/// channel by a spawned [`NodeTasks`] task.
 #[allow(clippy::type_complexity)]
 pub type DocSyncResult<Async, Store, Conn, WireMsg> = (
     SedimentreeId,
@@ -3833,15 +3613,14 @@ pub type DocSyncResult<Async, Store, Conn, WireMsg> = (
 pub type DispatchOutcomeFor<Conn, Async, Hdl> =
     DispatchOutcome<Conn, Async, <Hdl as Handler<Async, Conn>>::HandlerError>;
 
-/// Builds the `'static` future that syncs one document and reports the result
-/// back through a channel — the per-task unit of the cold-start fan-out in
-/// [`Subduction::full_sync_with_peer`].
+/// Construct node tasks with the appropriate Local or Sendable future bounds.
 ///
-/// This exists as a `#[future_form]`-split trait (mirroring [`StartListener`])
-/// solely so the per-task future can be constructed via `Async::from_future`
-/// with the correct `Send` bounds on `Sendable` and no `Send` requirement on
-/// `Local`. The bounded-channel driver loop itself stays in the generic method.
-pub trait SpawnDocSync<
+/// Listener, dispatch, and document-sync work share this one implementation of
+/// the runtime-form boundary. Their driving loops remain ordinary core methods;
+/// the caller's [`Spawn`] implementation owns and supervises submitted tasks.
+/// This trait does not provide another executor or require storage operations to
+/// run through the network listener.
+pub trait NodeTasks<
     'a,
     Store: Storage<Self>,
     Conn: Connection<Self, WireMsg> + PartialEq + 'a,
@@ -3855,8 +3634,50 @@ pub trait SpawnDocSync<
     FutureForm
     + RunManager<Authenticated<Conn, Self>, WireMsg>
     + peers::SendPushes<Conn, WireMsg>
-    + Sized
+    + upstream_fetch::AwaitFetch
+    + Sized where
+    Hdl::HandlerError: Into<ListenError<Self, Store, Conn, WireMsg>>,
 {
+    /// Construct a fully initialized powerbox for a node and its handlers.
+    /// Every mutation uses this cache and spawner from its first submission.
+    fn storage_powerbox<Sp: Spawn<Self> + Clone + Send + Sync + 'static>(
+        storage: Store,
+        policy: Arc<Auth>,
+        cache: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
+        spawner: Sp,
+    ) -> StoragePowerbox<Store, Auth, Self>;
+
+    /// Start document loading, either following connections or collecting once.
+    /// Register before scheduling; streams retain the node until cancellation.
+    #[allow(clippy::type_complexity)]
+    fn start_stored<
+        Timer: Timeout<Self> + Clone + Send + Sync + 'a,
+        Sp: Spawn<Self> + Clone + Send + Sync + 'static,
+    >(
+        node: Arc<Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>>,
+        id: SedimentreeId,
+        timeout: CallTimeout,
+        subscribe: bool,
+    ) -> crate::stored::StoredUpdates
+    where
+        'a: 'static,
+        ManagedConnection<Conn, Self, Timer>:
+            ManagedCall<Self, WireMsg, SendError = <Conn as Connection<Self, WireMsg>>::SendError>;
+
+    /// Construct the listener future; construction does not submit it to an executor.
+    #[allow(clippy::type_complexity)]
+    fn start_listener<
+        Timer: Timeout<Self> + Clone + Send + Sync + 'a,
+        Sp: Spawn<Self> + Clone + Send + Sync + 'static,
+    >(
+        subduction: Arc<
+            Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
+        >,
+        abort_reg: AbortRegistration,
+    ) -> Abortable<Self::Future<'a, ()>>
+    where
+        'a: 'static;
+
     /// Construct the spawnable future for syncing a single document.
     #[allow(clippy::type_complexity)]
     fn doc_sync_task<
@@ -3878,9 +3699,11 @@ pub trait SpawnDocSync<
             ManagedCall<Self, WireMsg, SendError = <Conn as Connection<Self, WireMsg>>::SendError>;
 
     /// Construct the spawnable future for handling one inbound message in the
-    /// listen loop. Runs `handler.handle`, then the subscription-propagation
-    /// gate, then reports `(conn, result)` back through `sender` so the
-    /// listener's cleanup arm can tear down a broken connection on error.
+    /// listen loop. Runs `handler.handle` bracketed by the subscription
+    /// forwarding hooks (`Subduction::hold_for_upstream_fetch` before,
+    /// `Subduction::forward_subscription_in_background` after), then reports
+    /// `(conn, result)` back through `sender` so the listener's cleanup arm
+    /// can tear down a broken connection on error.
     #[allow(clippy::type_complexity)]
     fn dispatch_task<
         Timer: Timeout<Self> + Clone + Send + Sync + 'static,
@@ -3895,6 +3718,28 @@ pub trait SpawnDocSync<
         propagate: Option<(SedimentreeId, PeerId)>,
         sender: async_channel::Sender<DispatchOutcomeFor<Conn, Self, Hdl>>,
         permit: SemaphoreGuardArc,
+    ) -> Self::Future<'static, ()>;
+
+    /// Construct the detached task that forwards an inbound subscribe to
+    /// `id` from `originator` upstream. If the caller claimed the shared
+    /// fetch slot for `id` (`claim` is `Some`), the claim is released once
+    /// forwarding completes so every waiter on it wakes.
+    ///
+    /// Detached from the requesting dispatch so a slow upstream never holds
+    /// the per-peer permit, and so a waiter timing out cannot cancel
+    /// ingestion or strand outgoing-subscription claims. Authorization is
+    /// the caller's responsibility; both hooks check it before spawning.
+    #[allow(clippy::type_complexity)]
+    fn forward_subscription_task<
+        Timer: Timeout<Self> + Clone + Send + Sync + 'static,
+        Sp: Spawn<Self> + Clone + Send + Sync + 'static,
+    >(
+        subduction: Arc<
+            Subduction<'static, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
+        >,
+        id: SedimentreeId,
+        originator: PeerId,
+        claim: Option<upstream_fetch::FetchToken>,
     ) -> Self::Future<'static, ()>;
 }
 
@@ -3918,6 +3763,7 @@ pub trait SpawnDocSync<
         Conn: Connection<Local, WireMsg> + PartialEq + Clone + 'static,
         WireMsg: Encode + Decode + Clone + Send + core::fmt::Debug + From<SyncMessage> + 'static,
         Store: Storage<Local> + 'static,
+        Store::Error: 'static,
         Auth: ConnectionPolicy<Local> + StoragePolicy<Local> + 'static,
         Sign: Signer<Local> + 'static,
         Metric: DepthMetric + 'static,
@@ -3925,12 +3771,192 @@ pub trait SpawnDocSync<
         Hdl::HandlerError: Into<ListenError<Local, Store, Conn, WireMsg>>
 )]
 impl<'a, Async: FutureForm, Conn, Store, WireMsg, Hdl, Auth, Sign, Metric, const SHARDS: usize>
-    SpawnDocSync<'a, Store, Conn, WireMsg, Hdl, Auth, Sign, Metric, SHARDS> for Async
+    NodeTasks<'a, Store, Conn, WireMsg, Hdl, Auth, Sign, Metric, SHARDS> for Async
 where
     Hdl: Handler<Async, Conn, Message = WireMsg> + RemoteHeadsNotifier,
     Hdl::HandlerError: Into<ListenError<Async, Store, Conn, WireMsg>>,
     WireMsg: Encode + Decode + Clone + Send + core::fmt::Debug + From<SyncMessage> + 'static,
 {
+    fn storage_powerbox<Sp: Spawn<Self> + Clone + Send + Sync + 'static>(
+        storage: Store,
+        policy: Arc<Auth>,
+        cache: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
+        spawner: Sp,
+    ) -> StoragePowerbox<Store, Auth, Self> {
+        StoragePowerbox::new(
+            storage,
+            policy,
+            Arc::new(move |fetcher, operation| {
+                let (sender, receiver) = async_channel::bounded(1);
+                let cache = cache.clone();
+                // Admission covers submission too. A rejected, never-polled future
+                // must close validity even if its waiter disappears immediately.
+                let tracked = fetcher.coordination().track_mutation();
+                let _task = spawner.spawn(Async::from_future(async move {
+                    let update = operation.update();
+                    // Avoid notification clones when nobody observes this tree.
+                    // A watcher joining mid-write waits for settlement, then scans.
+                    let items = if tracked.observed() {
+                        operation.items()
+                    } else {
+                        None
+                    };
+                    let result = tracked
+                        .persist(
+                            &cache,
+                            operation.persist::<Async, Store>(
+                                fetcher.storage(),
+                                fetcher.sedimentree_id(),
+                            ),
+                            update,
+                            items,
+                        )
+                        .await
+                        .map_err(crate::storage::mutation::MutationError::Storage);
+                    drop(sender.try_send(result));
+                }));
+                receiver
+            }),
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn start_stored<
+        Timer: Timeout<Self> + Clone + Send + Sync + 'a,
+        Sp: Spawn<Self> + Clone + Send + Sync + 'static,
+    >(
+        node: Arc<Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>>,
+        id: SedimentreeId,
+        timeout: CallTimeout,
+        subscribe: bool,
+    ) -> crate::stored::StoredUpdates
+    where
+        'a: 'static,
+        ManagedConnection<Conn, Self, Timer>:
+            ManagedCall<Self, WireMsg, SendError = <Conn as Connection<Self, WireMsg>>::SendError>,
+    {
+        let watch = node.storage.state.watch(id);
+        let fetcher = node.storage.local_fetcher(id);
+        // Acknowledged delivery prevents taking a second notification while
+        // this one-slot channel is occupied (also supported without std).
+        let (sender, receiver) = async_channel::bounded(1);
+        let terminal = Arc::new(spin::Mutex::new(None));
+        let mut output = stored::Output {
+            sender,
+            terminal: terminal.clone(),
+        };
+        let spawner = node.spawner.clone();
+        let abort = spawner.spawn(Async::from_future(async move {
+            let work = async {
+                let initial = async {
+                    let load_ready = stored::snapshot(&fetcher, &watch, &mut output, true).await?;
+                    // Collecting fetches may finish from storage, but watchers
+                    // must establish sync/subscriptions even for cached trees.
+                    if subscribe || !load_ready {
+                        let node = &node;
+                        let rounds = if subscribe {
+                            stored::connection_rounds(
+                                node.connections_changed.clone(),
+                                || async { node.multiplexers.lock().await.snapshot() },
+                                |conn, mux| async move {
+                                    node.sync_stored_connection(conn, mux, id).await
+                                },
+                            )
+                            .left_stream()
+                        } else {
+                            let peers = node.connected_peer_ids().await;
+                            // Uncapped rounds must not keep later candidates from starting.
+                            let rounds = peers.into_iter().map(|peer| async move {
+                                match node
+                                    .sync_peer(&peer, id, subscribe, CallTimeout::Uncapped)
+                                    .await
+                                {
+                                    Ok(((success, _, _), supplied)) => {
+                                        Ok(success.then_some((peer, supplied)))
+                                    }
+                                    Err(
+                                        IoError::ConnCall(_)
+                                        | IoError::ConnSend(_)
+                                        | IoError::ConnRecv(_),
+                                    ) => Ok(None),
+                                    Err(IoError::StorageInterrupted) => {
+                                        Err(crate::stored::LoadError::Closed)
+                                    }
+                                    Err(
+                                        error @ (IoError::Storage(_)
+                                        | IoError::BlobMismatch(_)
+                                        | IoError::Load(_)),
+                                    ) => {
+                                        Err(crate::stored::LoadError::Operation(error.to_string()))
+                                    }
+                                }
+                            });
+                            rounds.collect::<FuturesUnordered<_>>().right_stream()
+                        };
+                        stored::load(
+                            &fetcher,
+                            &watch,
+                            &mut output,
+                            rounds,
+                            load_ready,
+                            !subscribe,
+                        )
+                        .await?;
+                    }
+                    Ok::<(), crate::stored::LoadError>(())
+                };
+                if let Some(duration) = timeout.resolve(node.default_roundtrip_timeout) {
+                    // Only collecting fetches have an overall deadline.
+                    node.timer
+                        .timeout(duration, Async::from_future(initial))
+                        .await
+                        .map_err(|_| crate::stored::LoadError::TimedOut)??;
+                } else {
+                    initial.await?;
+                }
+                // Collecting fetches release their scoped rounds here.
+                // Subscribing loaders keep coordinating connections and stored
+                // updates above until cancellation, shutdown, or a local error.
+                stored::live(&fetcher, &watch, &mut output).await
+            };
+            let result = match futures::future::select(
+                alloc::boxed::Box::pin(fetcher.coordination().wait_closed()),
+                alloc::boxed::Box::pin(work),
+            )
+            .await
+            {
+                futures::future::Either::Left(_) => Err(crate::stored::LoadError::Closed),
+                futures::future::Either::Right((result, _)) => result,
+            };
+            if let Err(error) = result {
+                *output.terminal.lock() = Some(error);
+            }
+        }));
+        crate::stored::StoredUpdates::new(receiver, terminal, abort)
+    }
+
+    fn start_listener<
+        Timer: Timeout<Self> + Clone + Send + Sync + 'a,
+        Sp: Spawn<Self> + Clone + Send + Sync + 'static,
+    >(
+        subduction: Arc<
+            Subduction<'a, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
+        >,
+        abort_reg: AbortRegistration,
+    ) -> Abortable<Self::Future<'a, ()>>
+    where
+        'a: 'static,
+    {
+        Abortable::new(
+            Async::from_future(async move {
+                if let Err(error) = subduction.listen().await {
+                    tracing::info!(%error, "subduction listener disconnected");
+                }
+            }),
+            abort_reg,
+        )
+    }
+
     fn doc_sync_task<
         Timer: Timeout<Self> + Clone + Send + Sync + 'a,
         Sp: Spawn<Self> + Clone + Send + Sync + 'static,
@@ -3980,25 +4006,45 @@ where
 
             let mut completion = DispatchCompletion::new(sender);
 
+            // We need to hold the inbound subscription here, before we've run
+            // the fetch, then forward the subscription after the fetch
+            // completes
+            let held = match propagate {
+                Some((id, originator)) => subduction.hold_for_upstream_fetch(id, originator).await,
+                None => false,
+            };
+
             let result = handler.handle(&conn, msg).await;
+
             if result.is_ok()
-                && let Some((sed_id, originator)) = propagate
+                && !held
+                && let Some((id, originator)) = propagate
             {
-                let sd = Arc::clone(&subduction);
-                let _propagation = subduction.spawner.spawn(Async::from_future(async move {
-                    if sd
-                        .storage
-                        .policy()
-                        .authorize_fetch(originator, sed_id)
-                        .await
-                        .is_ok()
-                    {
-                        sd.propagate_subscription(sed_id, originator).await;
-                    }
-                }));
+                subduction
+                    .forward_subscription_in_background(id, originator)
+                    .await;
             }
 
             completion.complete(conn, result);
+        })
+    }
+
+    fn forward_subscription_task<
+        Timer: Timeout<Self> + Clone + Send + Sync + 'static,
+        Sp: Spawn<Self> + Clone + Send + Sync + 'static,
+    >(
+        subduction: Arc<
+            Subduction<'static, Self, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
+        >,
+        id: SedimentreeId,
+        originator: PeerId,
+        claim: Option<upstream_fetch::FetchToken>,
+    ) -> Self::Future<'static, ()> {
+        Async::from_future(async move {
+            subduction.propagate_subscription(id, originator).await;
+            if let Some(token) = claim {
+                subduction.in_flight_fetches.finish(id, token).await;
+            }
         })
     }
 }
@@ -4009,12 +4055,12 @@ mod tests {
     use crate::{
         collections::bounded_sharded_map::BoundedShardedMap,
         connection::test_utils::{
-            FailingSendMockConnection, InstantTimeout, TestSpawn, test_signer,
+            FailingSendMockConnection, InstantTimeout, TokioSpawn, test_signer,
         },
         handler::sync::SyncHandler,
         nonce_cache::NonceCache,
         policy::open::OpenPolicy,
-        storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
+        storage::memory::MemoryStorage,
     };
     use alloc::collections::BTreeSet;
     use async_lock::Mutex;
@@ -4028,6 +4074,112 @@ mod tests {
         loose_commit::{LooseCommit, id::CommitId},
     };
     use testresult::TestResult;
+
+    type ReconstructionHandler = SyncHandler<
+        Sendable,
+        MemoryStorage,
+        FailingSendMockConnection,
+        OpenPolicy,
+        CountLeadingZeroBytes,
+        TokioSpawn,
+    >;
+
+    /// Keep submitted work unpolled to distinguish handing off cleanup from
+    /// executing it. No scheduler progress is needed for cancellation safety.
+    #[derive(Clone, Default)]
+    struct RecordingSpawn(Arc<std::sync::Mutex<Vec<futures::future::BoxFuture<'static, ()>>>>);
+    impl Spawn<Sendable> for RecordingSpawn {
+        fn spawn(&self, future: futures::future::BoxFuture<'static, ()>) -> AbortHandle {
+            let (handle, registration) = AbortHandle::new_pair();
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(Box::pin(async move {
+                    let _result = Abortable::new(future, registration).await;
+                }));
+            handle
+        }
+    }
+
+    #[tokio::test]
+    async fn connection_changes_notify_on_registration_and_every_removal_path() -> TestResult {
+        use crate::connection::test_utils::{MockConnection, new_test_subduction};
+        use futures::FutureExt;
+
+        let (node, _listener, _manager) = new_test_subduction();
+        for removal in 0..4 {
+            let conn = MockConnection::new().authenticated();
+            let registered = node.connections_changed.listen();
+            assert!(node.add_connection(conn.clone()).await?);
+            assert!(registered.now_or_never().is_some());
+
+            let removed = node.connections_changed.listen();
+            match removal {
+                0 => assert!(node.disconnect(&conn).await?),
+                1 => assert!(node.disconnect_from_peer(&conn.peer_id()).await?),
+                2 => node.disconnect_all().await?,
+                _ => assert_eq!(node.remove_connection(&conn).await, Some(true)),
+            }
+            assert!(
+                removed.now_or_never().is_some(),
+                "removal path {removal} must wake connection observers"
+            );
+            assert!(node.multiplexers.lock().await.snapshot().is_empty());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failure_cleanup_handoff_survives_cancellation() -> TestResult {
+        use crate::connection::test_utils::MockConnection;
+        let spawner = RecordingSpawn::default();
+        let (node, _handler, _listener, _manager) =
+            builder::SubductionBuilder::<_, _, _, _, _, _, 256>::new()
+                .signer(test_signer())
+                .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+                .spawner(spawner.clone())
+                .timer(InstantTimeout)
+                .build::<Sendable, MockConnection>();
+        let conn = MockConnection::new().authenticated();
+        node.add_connection(conn.clone()).await?;
+
+        // Cancellation while acquiring the second map lock cannot detach the
+        // connection before cleanup has somewhere to go.
+        let muxes = node.multiplexers.lock().await;
+        let mut removal = Box::pin(node.remove_connection(&conn));
+        assert!(futures::poll!(&mut removal).is_pending());
+        drop(removal);
+        drop(muxes);
+        assert_eq!(node.connection_count(&conn.peer_id()).await, 1);
+        assert!(
+            spawner
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty()
+        );
+
+        // Force suspension in post-removal subscription bookkeeping. Cleanup
+        // must already be owned by the spawner, outside the cancelled caller.
+        let subscriptions = node.subscriptions.lock().await;
+        let mut removal = Box::pin(node.remove_connection(&conn));
+        assert!(futures::poll!(&mut removal).is_pending());
+        drop(removal);
+        drop(subscriptions);
+        assert_eq!(node.connection_count(&conn.peer_id()).await, 0);
+        assert_eq!(node.remove_connection(&conn).await, None);
+        let work = core::mem::take(
+            &mut *spawner
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        assert_eq!(work.len(), 1, "one handoff, despite repeated removal");
+        for task in work {
+            task.await;
+        }
+        Ok(())
+    }
 
     fn make_commit_parts() -> (CommitId, BTreeSet<CommitId>, Blob) {
         let contents = vec![0u8; 32];
@@ -4067,14 +4219,29 @@ mod tests {
             Arc::new(BoundedShardedMap::with_key(0, 0));
         let connections = Arc::new(Mutex::new(Map::new()));
         let subscriptions = Arc::new(Mutex::new(Map::new()));
-        let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
+        let storage = <Sendable as NodeTasks<
+            'static,
+            MemoryStorage,
+            FailingSendMockConnection,
+            SyncMessage,
+            ReconstructionHandler,
+            OpenPolicy,
+            subduction_crypto::signer::memory::MemorySigner,
+            CountLeadingZeroBytes,
+            256,
+        >>::storage_powerbox(
+            MemoryStorage::new(),
+            Arc::new(OpenPolicy),
+            sedimentrees.clone(),
+            TokioSpawn,
+        );
         let handler = Arc::new(SyncHandler::new(
             sedimentrees.clone(),
             connections.clone(),
             subscriptions.clone(),
             storage.clone(),
             CountLeadingZeroBytes,
-            TestSpawn,
+            TokioSpawn,
         ));
 
         let (subduction, _listener_fut, _actor_fut) = Subduction::<
@@ -4100,7 +4267,7 @@ mod tests {
             InstantTimeout,
             Duration::from_secs(30),
             CountLeadingZeroBytes,
-            TestSpawn,
+            TokioSpawn,
         );
 
         let id = SedimentreeId::new([0x5A; 32]);
@@ -4133,15 +4300,15 @@ mod tests {
         );
 
         // Reconstruct purely from storage, exactly as hydration does.
-        let access = storage.hydration_access();
+        let access = storage.local_fetcher(id);
         let loaded_commits: Vec<LooseCommit> = access
-            .load_loose_commits::<Sendable>(id)
+            .load_loose_commits()
             .await?
             .into_iter()
             .map(|vm| vm.payload().clone())
             .collect();
         let loaded_fragments: Vec<Fragment> = access
-            .load_fragments::<Sendable>(id)
+            .load_fragments()
             .await?
             .into_iter()
             .map(|vm| vm.payload().clone())

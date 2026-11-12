@@ -6,7 +6,7 @@
 //! Enable with the `test_utils` feature flag.
 
 // Test utilities are allowed to panic for clearer test failures
-#![allow(clippy::expect_used, clippy::panic)]
+#![allow(clippy::expect_used, clippy::panic, clippy::missing_panics_doc)]
 
 use alloc::{
     collections::BTreeSet,
@@ -111,7 +111,7 @@ pub fn make_fragment_at_depth(
     let head = commit_id_with_depth(depth, seed);
     let blob = Blob::new(alloc::vec![seed]);
     let blob_meta = BlobMeta::new(&blob);
-    Fragment::new(sedimentree_id, head, boundary, checkpoints, blob_meta)
+    Fragment::new(sedimentree_id, head, boundary, checkpoints, blob_meta).expect("valid metadata")
 }
 
 /// Create a simple fragment with a single boundary commit.
@@ -241,7 +241,8 @@ impl TestGraph {
             let blob = Blob::new(rng.r#gen::<[u8; 16]>().into());
             let blob_meta = BlobMeta::new(&blob);
             let commit_id = *ids.get(*name).expect("id should exist");
-            let commit = LooseCommit::new(sedimentree_id, commit_id, parents, blob_meta);
+            let commit = LooseCommit::new(sedimentree_id, commit_id, parents, blob_meta)
+                .expect("valid metadata");
 
             commits.insert((*name).to_string(), commit);
 
@@ -366,6 +367,7 @@ impl TestGraph {
             .unwrap_or_else(|| panic!("Node not found: {head_node}"));
         let blob_meta = *commit.blob_meta();
         Fragment::new(self.sedimentree_id, head, boundary, &checkpoints, blob_meta)
+            .expect("valid metadata")
     }
 }
 
@@ -431,7 +433,8 @@ impl<'a> arbitrary::Arbitrary<'a> for ArbitraryDag {
             }
 
             let blob_meta = BlobMeta::arbitrary(u)?;
-            fragments.push(Fragment::new(sid, head, boundary, &[], blob_meta));
+            fragments
+                .push(Fragment::new(sid, head, boundary, &[], blob_meta).expect("valid metadata"));
             heads.push(head);
         }
 
@@ -446,7 +449,9 @@ impl<'a> arbitrary::Arbitrary<'a> for ArbitraryDag {
             }
             let blob_meta = BlobMeta::arbitrary(u)?;
             let commit_id = random_commit_id(&mut rng);
-            commits.push(LooseCommit::new(sid, commit_id, parents, blob_meta));
+            commits.push(
+                LooseCommit::new(sid, commit_id, parents, blob_meta).expect("valid metadata"),
+            );
         }
 
         Ok(ArbitraryDag {
@@ -491,7 +496,8 @@ impl<'a> arbitrary::Arbitrary<'a> for CyclicGraph {
                 boundary.insert(prev);
             }
             let blob_meta = BlobMeta::arbitrary(u)?;
-            fragments.push(Fragment::new(sid, head, boundary, &[], blob_meta));
+            fragments
+                .push(Fragment::new(sid, head, boundary, &[], blob_meta).expect("valid metadata"));
             heads.push(head);
         }
 
@@ -503,7 +509,8 @@ impl<'a> arbitrary::Arbitrary<'a> for CyclicGraph {
             let mut new_boundary = fragments[0].boundary().clone();
             new_boundary.insert(last_head);
             let blob_meta = BlobMeta::arbitrary(u)?;
-            fragments[0] = Fragment::new(sid, heads[0], new_boundary, &[], blob_meta);
+            fragments[0] =
+                Fragment::new(sid, heads[0], new_boundary, &[], blob_meta).expect("valid metadata");
         }
 
         Ok(CyclicGraph {

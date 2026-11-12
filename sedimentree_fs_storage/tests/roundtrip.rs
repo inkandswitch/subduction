@@ -41,7 +41,7 @@ async fn save_load_loose_commit_roundtrip() -> testresult::TestResult {
     let verified_blob = VerifiedBlobMeta::new(blob);
     let verified: VerifiedMeta<LooseCommit> =
         VerifiedMeta::seal::<Sendable, _>(&signer, (id, head, BTreeSet::new()), verified_blob)
-            .await;
+            .await?;
 
     let original_signed_bytes = verified.signed().as_bytes().to_vec();
     let original_blob_bytes = verified.blob().contents().clone();
@@ -73,7 +73,7 @@ async fn save_load_loose_commit_roundtrip() -> testresult::TestResult {
             head,
             BTreeSet::new(),
             sedimentree_core::blob::BlobMeta::new(&Blob::new(vec![1, 2, 3, 4, 5])),
-        ),
+        )?,
         "decoded payload must match original"
     );
 
@@ -99,7 +99,7 @@ async fn save_load_loose_commit_with_parents_roundtrip() -> testresult::TestResu
     let verified_blob = VerifiedBlobMeta::new(blob);
     let verified: VerifiedMeta<LooseCommit> =
         VerifiedMeta::seal::<Sendable, _>(&signer, (id, head, parents.clone()), verified_blob)
-            .await;
+            .await?;
 
     let original_signed_bytes = verified.signed().as_bytes().to_vec();
 
@@ -143,7 +143,7 @@ async fn save_load_fragment_roundtrip() -> testresult::TestResult {
         (id, head, boundary, checkpoints),
         verified_blob,
     )
-    .await;
+    .await?;
 
     let original_signed_bytes = verified.signed().as_bytes().to_vec();
     let original_blob_bytes = verified.blob().contents().clone();
@@ -189,7 +189,7 @@ async fn fragment_digest_matches_storage_key() -> testresult::TestResult {
         (id, head, boundary, checkpoints),
         verified_blob,
     )
-    .await;
+    .await?;
 
     let fragment_head = verified.payload().head();
     let digest_from_hash = Digest::hash(verified.payload());
@@ -232,7 +232,7 @@ async fn save_load_multiple_commits_roundtrip() -> testresult::TestResult {
         let verified_blob = VerifiedBlobMeta::new(blob);
         let verified: VerifiedMeta<LooseCommit> =
             VerifiedMeta::seal::<Sendable, _>(&signer, (id, head, BTreeSet::new()), verified_blob)
-                .await;
+                .await?;
         expected_ids.insert(verified.payload().head());
         if let Err(e) = Storage::<Sendable>::save_loose_commit(&storage, id, verified).await {
             eprintln!("save_loose_commit failed: {e:?}");
@@ -322,7 +322,7 @@ async fn commit_readable_after_reopen_under_sharding() -> testresult::TestResult
         let verified_blob = VerifiedBlobMeta::new(blob);
         let verified: VerifiedMeta<LooseCommit> =
             VerifiedMeta::seal::<Sendable, _>(&signer, (id, head, BTreeSet::new()), verified_blob)
-                .await;
+                .await?;
         Storage::<Sendable>::save_sedimentree_id(&storage, id).await?;
         Storage::<Sendable>::save_loose_commit(&storage, id, verified).await?;
     }
@@ -410,6 +410,7 @@ async fn corrupt_meta_self_heals_on_resave() -> testresult::TestResult {
             verified_blob,
         )
         .await
+        .expect("valid metadata")
     };
 
     Storage::<Sendable>::save_sedimentree_id(&storage, id).await?;
@@ -521,6 +522,7 @@ async fn failed_batch_leaves_no_temp_files() -> testresult::TestResult {
                 verified_blob,
             )
             .await
+            .expect("valid metadata")
         }
     };
 
@@ -552,7 +554,7 @@ async fn saves_register_tree_id_conformance() -> testresult::TestResult {
         (commit_tree, CommitId::new([0x10; 32]), BTreeSet::new()),
         VerifiedBlobMeta::new(Blob::new(vec![1; 16])),
     )
-    .await;
+    .await?;
     conformance::assert_commit_save_registers_tree_id::<Sendable, _>(&storage, commit).await;
 
     let fragment_tree = make_sedimentree_id(0x71);
@@ -566,7 +568,7 @@ async fn saves_register_tree_id_conformance() -> testresult::TestResult {
         ),
         VerifiedBlobMeta::new(Blob::new(vec![2; 16])),
     )
-    .await;
+    .await?;
     conformance::assert_fragment_save_registers_tree_id::<Sendable, _>(&storage, fragment).await;
 
     let batch_tree = make_sedimentree_id(0x72);
@@ -575,7 +577,7 @@ async fn saves_register_tree_id_conformance() -> testresult::TestResult {
         (batch_tree, CommitId::new([0x14; 32]), BTreeSet::new()),
         VerifiedBlobMeta::new(Blob::new(vec![3; 16])),
     )
-    .await;
+    .await?;
     conformance::assert_batch_save_registers_tree_id::<Sendable, _>(
         &storage,
         batch_tree,
@@ -615,6 +617,7 @@ async fn missing_blob_self_heals_on_resave() -> testresult::TestResult {
             verified_blob,
         )
         .await
+        .expect("valid metadata")
     };
 
     let original = make().await;
@@ -681,7 +684,7 @@ async fn bulk_load_fans_out_beyond_chunk_size_correctly() -> testresult::TestRes
             (id, CommitId::new(head), BTreeSet::new()),
             VerifiedBlobMeta::new(Blob::new(i.to_le_bytes().to_vec())),
         )
-        .await;
+        .await?;
         expected.insert((
             verified.signed().as_bytes().to_vec(),
             verified.blob().contents().clone(),
@@ -728,7 +731,8 @@ async fn concurrent_saves_through_cloned_handles_all_land() -> testresult::TestR
                 (id, CommitId::new([item; 32]), BTreeSet::new()),
                 VerifiedBlobMeta::new(Blob::new(vec![item; 32])),
             )
-            .await;
+            .await
+            .expect("valid metadata");
             Storage::<Sendable>::save_loose_commit(&storage, id, verified).await
         }));
     }
@@ -782,7 +786,7 @@ async fn equivocating_commits_resolve_to_one_item() -> testresult::TestResult {
             (id, head, BTreeSet::new()),
             VerifiedBlobMeta::new(Blob::new(blob)),
         )
-        .await;
+        .await?;
         Storage::<Sendable>::save_loose_commit(&storage, id, verified).await?;
     }
 
@@ -849,7 +853,7 @@ async fn failed_single_save_does_not_register_tree_id() -> testresult::TestResul
         (id, blocked_head, BTreeSet::new()),
         VerifiedBlobMeta::new(Blob::new(vec![7; 16])),
     )
-    .await;
+    .await?;
 
     conformance::assert_failed_commit_save_does_not_register_tree_id::<Sendable, _>(
         &storage, commit,
@@ -900,7 +904,7 @@ async fn failed_batch_does_not_register_tree_id() -> testresult::TestResult {
         (id, blocked_head, BTreeSet::new()),
         verified_blob,
     )
-    .await;
+    .await?;
 
     let result = Storage::<Sendable>::save_batch(&storage, id, vec![commit], Vec::new()).await;
     assert!(result.is_err(), "batch must fail on the blocked id_dir");
@@ -929,7 +933,7 @@ async fn empty_blob_roundtrips() -> testresult::TestResult {
         (id, head, BTreeSet::new()),
         VerifiedBlobMeta::new(Blob::new(Vec::new())),
     )
-    .await;
+    .await?;
     let original_signed = verified.signed().as_bytes().to_vec();
 
     Storage::<Sendable>::save_loose_commit(&storage, id, verified).await?;
@@ -949,7 +953,7 @@ async fn empty_blob_roundtrips() -> testresult::TestResult {
         (id, head, BTreeSet::new()),
         VerifiedBlobMeta::new(Blob::new(Vec::new())),
     )
-    .await;
+    .await?;
     Storage::<Sendable>::save_loose_commit(&storage, id, again).await?;
     assert_eq!(
         Storage::<Sendable>::load_loose_commits(&storage, id)
@@ -1002,7 +1006,8 @@ fn prop_batch_save_load_roundtrip() {
                         (id, CommitId::new(head), BTreeSet::new()),
                         VerifiedBlobMeta::new(Blob::new(blob)),
                     )
-                    .await;
+                    .await
+                    .expect("valid metadata");
                     expected.insert((
                         verified.signed().as_bytes().to_vec(),
                         verified.blob().contents().clone(),
@@ -1049,7 +1054,7 @@ async fn metas_match_full_load() -> testresult::TestResult {
             (id, head, BTreeSet::new()),
             VerifiedBlobMeta::new(Blob::new(vec![7u8; size])),
         )
-        .await;
+        .await?;
         Storage::<Sendable>::save_loose_commit(&storage, id, verified).await?;
     }
 
@@ -1063,7 +1068,7 @@ async fn metas_match_full_load() -> testresult::TestResult {
         ),
         VerifiedBlobMeta::new(Blob::new(vec![3u8; 2048])),
     )
-    .await;
+    .await?;
     Storage::<Sendable>::save_fragment(&storage, id, fragment).await?;
 
     conformance::assert_metas_match_full_load::<Sendable, _>(&storage, id).await;

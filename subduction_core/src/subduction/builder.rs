@@ -84,14 +84,14 @@ use crate::{
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     remote_heads::{NoRemoteHeadsObserver, RemoteHeadsNotifier, RemoteHeadsObserver},
     spawn::Spawn,
-    storage::{powerbox::StoragePowerbox, traits::Storage},
+    storage::traits::Storage,
     timeout::Timeout,
 };
 use nonempty::NonEmpty;
 use subduction_crypto::signer::Signer;
 
 use super::{
-    StartListener, Subduction, SubductionFutureForm, error::ListenError,
+    NodeTasks, Subduction, SubductionFutureForm, error::ListenError,
     listener_future::ListenerFuture,
 };
 
@@ -307,15 +307,7 @@ impl<Sign, Sp, Timer, Metric, HeadsObserver, const SHARDS: usize>
         self,
         storage: Store,
         policy: Arc<Auth>,
-    ) -> SubductionBuilder<
-        Sign,
-        Sp,
-        StoragePowerbox<Store, Auth>,
-        Timer,
-        Metric,
-        HeadsObserver,
-        SHARDS,
-    > {
+    ) -> SubductionBuilder<Sign, Sp, (Store, Arc<Auth>), Timer, Metric, HeadsObserver, SHARDS> {
         let Self {
             signer,
             spawner,
@@ -334,7 +326,7 @@ impl<Sign, Sp, Timer, Metric, HeadsObserver, const SHARDS: usize>
         SubductionBuilder {
             signer,
             spawner,
-            storage: StoragePowerbox::new(storage, policy),
+            storage: (storage, policy),
             timer,
             heads_observer,
             discovery_id,
@@ -471,6 +463,12 @@ impl<Sign, Sp, Store, Timer, Met, HeadsObserver, const SHARDS: usize>
     /// on transports (e.g. HTTP long-poll) that don't guarantee an eventual
     /// disconnect on a byte-alive but protocol-silent peer.
     ///
+    /// Responding to a subscribing request for a locally missing document
+    /// also waits for upstream fetching, for at most half this duration.
+    /// This bounded responder-side wait breaks relay cycles and leaves time
+    /// to send the response; the fetch can continue in the background.
+    /// A caller's per-request override is not transmitted to the responder.
+    ///
     /// Defaults to [`DEFAULT_ROUNDTRIP_TIMEOUT`] (30 s) if not set. Individual calls can override this per-request via
     /// [`CallTimeout`](crate::timeout::call::CallTimeout).
     #[must_use]
@@ -595,7 +593,7 @@ impl<
     Metric: DepthMetric,
     HeadsObserver: RemoteHeadsObserver,
     const SHARDS: usize,
-> SubductionBuilder<Sign, Sp, StoragePowerbox<Store, Auth>, Timer, Metric, HeadsObserver, SHARDS>
+> SubductionBuilder<Sign, Sp, (Store, Arc<Auth>), Timer, Metric, HeadsObserver, SHARDS>
 {
     /// Build a [`Subduction`] instance with the default [`SyncHandler`].
     ///
@@ -660,7 +658,7 @@ impl<
     where
         Async: SubductionFutureForm<'a, Store, Conn, SyncMessage, Auth, Sign, Metric, SHARDS>
             + 'static,
-        Async: StartListener<
+        Async: NodeTasks<
                 'a,
                 Store,
                 Conn,
@@ -706,11 +704,17 @@ impl<
             Arc::new(Mutex::new(Map::new()));
         let nonce_cache = self.nonce_cache.unwrap_or_default();
 
+        let storage = Async::storage_powerbox(
+            self.storage.0,
+            self.storage.1,
+            sedimentrees.clone(),
+            self.spawner.clone(),
+        );
         let mut handler = SyncHandler::with_remote_heads_observer(
             sedimentrees.clone(),
             connections.clone(),
             subscriptions.clone(),
-            self.storage.clone(),
+            storage.clone(),
             self.depth_metric.clone(),
             self.heads_observer,
             self.spawner.clone(),
@@ -729,7 +733,7 @@ impl<
             sedimentrees,
             connections,
             subscriptions,
-            self.storage,
+            storage,
             send_counter,
             nonce_cache,
             self.timer,
@@ -744,15 +748,7 @@ impl<
 }
 
 impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
-    SubductionBuilder<
-        Sign,
-        Sp,
-        StoragePowerbox<Store, Auth>,
-        Timer,
-        Metric,
-        NoRemoteHeadsObserver,
-        SHARDS,
-    >
+    SubductionBuilder<Sign, Sp, (Store, Arc<Auth>), Timer, Metric, NoRemoteHeadsObserver, SHARDS>
 {
     /// Build a [`Subduction`] instance with a custom [`Handler`].
     ///
@@ -801,7 +797,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
     where
         Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>
             + 'static,
-        Async: StartListener<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
+        Async: NodeTasks<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
         Store: Storage<Async>,
         Conn: Connection<Async, Hdl::Message> + PartialEq + Clone + 'a,
         Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
@@ -833,6 +829,12 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             Arc::new(Mutex::new(Map::new()));
         let nonce_cache = self.nonce_cache.unwrap_or_default();
 
+        let storage = Async::storage_powerbox(
+            self.storage.0,
+            self.storage.1,
+            sedimentrees.clone(),
+            self.spawner.clone(),
+        );
         Subduction::new(
             handler,
             self.discovery_id,
@@ -840,7 +842,7 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
             sedimentrees,
             connections,
             subscriptions,
-            self.storage,
+            storage,
             self.send_counter.unwrap_or_default(),
             nonce_cache,
             self.timer,
@@ -861,7 +863,7 @@ impl<
     Metric: DepthMetric,
     HeadsObserver: RemoteHeadsObserver,
     const SHARDS: usize,
-> SubductionBuilder<Sign, Sp, StoragePowerbox<Store, Auth>, Timer, Metric, HeadsObserver, SHARDS>
+> SubductionBuilder<Sign, Sp, (Store, Arc<Auth>), Timer, Metric, HeadsObserver, SHARDS>
 {
     /// Build a [`Subduction`] instance with a composed [`Handler`].
     ///
@@ -901,7 +903,7 @@ impl<
     where
         Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>
             + 'static,
-        Async: StartListener<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
+        Async: NodeTasks<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
         Store: Storage<Async>,
         Conn: Connection<Async, Hdl::Message>
             + Connection<Async, SyncMessage>
@@ -944,11 +946,17 @@ impl<
             Arc::new(Mutex::new(Map::new()));
         let nonce_cache = self.nonce_cache.unwrap_or_default();
 
+        let storage = Async::storage_powerbox(
+            self.storage.0,
+            self.storage.1,
+            sedimentrees.clone(),
+            self.spawner.clone(),
+        );
         let mut sync_handler = SyncHandler::with_remote_heads_observer(
             sedimentrees.clone(),
             connections.clone(),
             subscriptions.clone(),
-            self.storage.clone(),
+            storage.clone(),
             self.depth_metric.clone(),
             self.heads_observer,
             self.spawner.clone(),
@@ -968,7 +976,7 @@ impl<
             sedimentrees,
             connections,
             subscriptions,
-            self.storage,
+            storage,
             send_counter,
             nonce_cache,
             self.timer,

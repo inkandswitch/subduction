@@ -91,6 +91,7 @@ graph TD
 | `subduction_hyper`         | WebSocket upgrades for servers built on hyper (axum, tower, raw hyper)                |
 | `subduction_iroh`          | Iroh (QUIC) transport for direct peer-to-peer connections                              |
 | `subduction_websocket`     | WebSocket transport layer for peer-to-peer connections                                 |
+| [`subduction_tokio`](subduction_tokio/README.md) | Owned Tokio clients, erased transport connectors, and supervised reconnection |
 
 ### Platform Bindings
 
@@ -225,23 +226,19 @@ let subduction = Subduction::new(storage);
 ```typescript
 import * as subduction from '@automerge/subduction';
 
-// Create a Subduction instance
-const storage = new subduction.MemoryStorage();
-const syncer = new subduction.Subduction(storage);
-
-// Connect to a WebSocket server
-const ws = new WebSocket('ws://localhost:8080');
-const peerId = new subduction.PeerId(new Uint8Array(32)); // Your peer ID
-const subductionWs = await subduction.SubductionWebSocket.connect(
-  new URL('ws://localhost:8080'),
-  peerId,
-  5000
-);
-
-// Register the connection
-await syncer.register(subductionWs);
-
-// Start syncing...
+const syncer = new subduction.Subduction({
+  signer: await subduction.createWebCryptoSigner(),
+  storage: subduction.createMemoryStorage(),
+});
+try {
+  // Discovery authenticates the server without pinning an expected identity.
+  // Use connect(url, expectedPeerIdHex) when its identity is known in advance.
+  const peerId = await syncer.connectDiscover('ws://localhost:8080');
+  console.log(peerId); // Canonical 64-character hex string, not a wrapper.
+  // Publish plain { head, parents, blob } records and consume plain events.
+} finally {
+  try { await syncer.close(); } finally { syncer.free(); }
+}
 ```
 
 ## Development

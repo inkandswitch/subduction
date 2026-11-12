@@ -3,7 +3,14 @@
 #![allow(clippy::panic)]
 
 use core::{convert::Infallible, fmt, time::Duration};
-use std::{collections::BTreeSet, sync::Arc, vec::Vec};
+use std::{
+    collections::BTreeSet,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    vec::Vec,
+};
 
 use future_form::Sendable;
 use futures::{FutureExt, future::BoxFuture};
@@ -16,9 +23,12 @@ use sedimentree_core::{
 };
 use subduction_core::{
     connection::{
-        message::{BatchSyncResponse, SyncMessage, SyncResult},
+        message::{
+            BatchSyncResponse, DataRequestRejected, RequestedData, SyncDiff, SyncMessage,
+            SyncResult,
+        },
         test_utils::{
-            ChannelMockConnection, InstantTimeout, MockConnection, TestSpawn, TokioSpawn,
+            ChannelMockConnection, InstantTimeout, MockConnection, TokioSpawn, TokioTimeout,
             test_signer,
         },
     },
@@ -162,7 +172,7 @@ async fn local_add_sedimentree_bypasses_put_policy() {
         SubductionBuilder::<_, _, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
-            .spawner(TestSpawn)
+            .spawner(TokioSpawn)
             .timer(InstantTimeout)
             .build::<Sendable, MockConnection>();
 
@@ -186,7 +196,7 @@ async fn local_add_commit_bypasses_put_policy() {
         SubductionBuilder::<_, _, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
-            .spawner(TestSpawn)
+            .spawner(TokioSpawn)
             .timer(InstantTimeout)
             .build::<Sendable, MockConnection>();
 
@@ -210,7 +220,7 @@ async fn local_adds_bypass_id_specific_policy() -> TestResult {
                 MemoryStorage::new(),
                 Arc::new(AllowSpecificIdPolicy { allowed_id }),
             )
-            .spawner(TestSpawn)
+            .spawner(TokioSpawn)
             .timer(InstantTimeout)
             .build::<Sendable, MockConnection>();
 
@@ -243,7 +253,7 @@ async fn local_add_stores_data_despite_rejecting_policy() {
         SubductionBuilder::<_, _, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
-            .spawner(TestSpawn)
+            .spawner(TokioSpawn)
             .timer(InstantTimeout)
             .build::<Sendable, MockConnection>();
 
@@ -261,9 +271,12 @@ async fn local_add_stores_data_despite_rejecting_policy() {
     assert!(!ids.is_empty(), "Sedimentree ID should be stored");
 }
 
-/// A policy that rejects all fetches but allows connections and puts.
-#[derive(Clone, Copy)]
-struct RejectFetchPolicy;
+/// A policy that rejects fetches by default but allows connections and puts.
+/// Tests can allow the initial request, then revoke access before its response.
+#[derive(Default)]
+struct RejectFetchPolicy {
+    allow_fetch: AtomicBool,
+}
 
 /// Error returned when a fetch is rejected.
 #[derive(Debug, Clone, Copy)]
@@ -297,7 +310,14 @@ impl StoragePolicy<Sendable> for RejectFetchPolicy {
         _peer: PeerId,
         _sedimentree_id: SedimentreeId,
     ) -> BoxFuture<'_, Result<(), Self::FetchDisallowed>> {
-        async { Err(FetchRejected) }.boxed()
+        async {
+            if self.allow_fetch.load(Ordering::SeqCst) {
+                Ok(())
+            } else {
+                Err(FetchRejected)
+            }
+        }
+        .boxed()
     }
 
     fn authorize_put(
@@ -312,9 +332,16 @@ impl StoragePolicy<Sendable> for RejectFetchPolicy {
     fn filter_authorized_fetch(
         &self,
         _peer: PeerId,
-        _ids: Vec<SedimentreeId>,
+        ids: Vec<SedimentreeId>,
     ) -> BoxFuture<'_, Vec<SedimentreeId>> {
-        async { Vec::new() }.boxed()
+        async move {
+            if self.allow_fetch.load(Ordering::SeqCst) {
+                ids
+            } else {
+                Vec::new()
+            }
+        }
+        .boxed()
     }
 }
 
@@ -324,7 +351,7 @@ async fn multiple_local_adds_succeed_despite_rejecting_policy() {
         SubductionBuilder::<_, _, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
-            .spawner(TestSpawn)
+            .spawner(TokioSpawn)
             .timer(InstantTimeout)
             .build::<Sendable, MockConnection>();
 
@@ -340,6 +367,145 @@ async fn multiple_local_adds_succeed_despite_rejecting_policy() {
 
     let ids = subduction.sedimentree_ids().await;
     assert_eq!(ids.len(), 5, "All 5 sedimentrees should be stored");
+}
+
+/// Both sync entry points must finish processing while telling the responder
+/// why no return-direction data follows its request.
+#[allow(clippy::too_many_lines)]
+async fn requested_data_rejection(all_peers: bool) -> TestResult {
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+    use subduction_core::{metrics::names, remote_heads::RemoteHeads};
+
+    let recorder = DebuggingRecorder::new();
+    let snapshotter = recorder.snapshotter();
+    let _recorder = metrics::set_default_local_recorder(&recorder);
+    metrics::counter!(names::REQUESTED_DATA_SEND_FAILURES_TOTAL).absolute(0);
+
+    let policy = Arc::new(RejectFetchPolicy {
+        allow_fetch: AtomicBool::new(true),
+    });
+    let (node, _, listener, manager) = SubductionBuilder::<_, _, _, _, _, _, 256>::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), policy.clone())
+        .spawner(TokioSpawn)
+        .timer(TokioTimeout)
+        .build::<Sendable, ChannelMockConnection<SyncMessage>>();
+    let id = SedimentreeId::new([73; 32]);
+    node.store_commit(
+        id,
+        CommitId::new([74; 32]),
+        BTreeSet::new(),
+        Blob::new(b"private".to_vec()),
+    )
+    .await?;
+    let peer = PeerId::new([75; 32]);
+    let (conn, remote) = ChannelMockConnection::new_with_handle(peer);
+    node.add_connection(conn.authenticated()).await?;
+    let listener = tokio::spawn(listener);
+    let manager = tokio::spawn(manager);
+
+    let responder = async {
+        let SyncMessage::BatchSyncRequest(request) = remote.outbound_rx.recv().await? else {
+            panic!("expected a sync request");
+        };
+        assert!(!request.fingerprint_summary.commit_fingerprints().is_empty());
+        // The outgoing request was authorized, but access can change before
+        // return-direction data is requested. That send must recheck policy.
+        policy.allow_fetch.store(false, Ordering::SeqCst);
+        remote
+            .inbound_tx
+            .send(SyncMessage::BatchSyncResponse(BatchSyncResponse {
+                id,
+                req_id: request.req_id,
+                result: SyncResult::Ok(SyncDiff {
+                    missing_commits: Vec::new(),
+                    missing_fragments: Vec::new(),
+                    requesting: RequestedData {
+                        commit_fingerprints: request
+                            .fingerprint_summary
+                            .commit_fingerprints()
+                            .iter()
+                            .copied()
+                            .collect(),
+                        fragment_fingerprints: Vec::new(),
+                    },
+                }),
+                responder_heads: RemoteHeads::default(),
+            }))
+            .await?;
+        Ok::<_, Box<dyn std::error::Error>>(())
+    };
+    let syncing = async {
+        let (success, stats, errors) = if all_peers {
+            let mut results = node
+                .sync_with_all_peers(id, false, CallTimeout::Default)
+                .await?
+                .into_map();
+            results.remove(&peer).ok_or("peer result missing")?
+        } else {
+            node.sync_with_peer(&peer, id, false, CallTimeout::Default)
+                .await?
+        };
+        assert!(success, "intentional rejection still completes the round");
+        assert!(errors.is_empty());
+        assert_eq!(stats.commits_sent + stats.fragments_sent, 0);
+        Ok::<_, Box<dyn std::error::Error>>(())
+    };
+    tokio::time::timeout(Duration::from_secs(2), async {
+        let (response, synced) = futures::join!(responder, syncing);
+        response?;
+        synced
+    })
+    .await??;
+
+    // Processing has finished, so all return-direction messages are queued.
+    // Check the whole queue: a rejection plus leaked data must fail too.
+    let messages: Vec<_> = std::iter::from_fn(|| remote.outbound_rx.try_recv().ok()).collect();
+    assert_eq!(
+        messages.len(),
+        1,
+        "only the rejection should be sent: {messages:?}"
+    );
+    assert!(
+        matches!(messages.first(), Some(SyncMessage::DataRequestRejected(DataRequestRejected { id: rejected })) if *rejected == id)
+    );
+    let failed_sends =
+        snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .find_map(|(key, _, _, value)| {
+                let (_, key) = key.into_parts();
+                match value {
+                    DebugValue::Counter(count)
+                        if key.name() == names::REQUESTED_DATA_SEND_FAILURES_TOTAL =>
+                    {
+                        Some(count)
+                    }
+                    DebugValue::Counter(_) | DebugValue::Gauge(_) | DebugValue::Histogram(_) => {
+                        None
+                    }
+                }
+            });
+    assert_eq!(
+        failed_sends,
+        Some(0),
+        "policy rejection is not a send failure"
+    );
+    node.shutdown();
+    listener.await??;
+    manager.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn single_peer_requested_data_rejection_is_reported_without_disclosure() -> TestResult {
+    requested_data_rejection(false).await
+}
+
+#[tokio::test]
+async fn all_peer_requested_data_rejection_is_reported_without_disclosure() -> TestResult {
+    requested_data_rejection(true).await
 }
 
 /// A policy that allows puts only from a specific author (verifying key).
@@ -449,7 +615,7 @@ async fn remote_commit_from_unauthorized_author_is_rejected() -> TestResult {
         CommitId::new([0xBB; 32]),
         BTreeSet::new(),
         blob_meta,
-    );
+    )?;
     let verified =
         subduction_crypto::signed::Signed::seal::<Sendable, _>(&unauthorized_signer, commit).await;
     let signed_commit = verified.into_signed();
@@ -482,7 +648,7 @@ async fn remote_commit_from_unauthorized_author_is_rejected() -> TestResult {
         CommitId::new([0xAA; 32]),
         BTreeSet::new(),
         allowed_blob_meta,
-    );
+    )?;
     let allowed_verified =
         subduction_crypto::signed::Signed::seal::<Sendable, _>(&allowed_signer, allowed_commit)
             .await;
@@ -520,7 +686,7 @@ async fn unauthorized_fetch_returns_unauthorized_result() -> TestResult {
     let (subduction, _handler, listener_fut, actor_fut) =
         SubductionBuilder::<_, _, _, _, _, _, 256>::new()
             .signer(test_signer())
-            .storage(MemoryStorage::new(), Arc::new(RejectFetchPolicy))
+            .storage(MemoryStorage::new(), Arc::new(RejectFetchPolicy::default()))
             .spawner(TokioSpawn)
             .timer(InstantTimeout)
             .build::<Sendable, ChannelMockConnection<SyncMessage>>();

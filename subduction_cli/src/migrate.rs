@@ -314,6 +314,7 @@ fn fsync_dir(dir: &Path) -> io::Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, reason = "bounded test fixtures")]
 mod tests {
     use std::collections::BTreeSet;
 
@@ -344,6 +345,7 @@ mod tests {
             VerifiedBlobMeta::new(Blob::new(vec![head; blob_len])),
         )
         .await
+        .expect("valid metadata")
     }
 
     async fn fragment(
@@ -363,6 +365,7 @@ mod tests {
             VerifiedBlobMeta::new(Blob::new(vec![head; blob_len])),
         )
         .await
+        .expect("valid metadata")
     }
 
     async fn commit_digests<S>(s: &S, id: SedimentreeId) -> Result<BTreeSet<Digest<LooseCommit>>>

@@ -123,7 +123,8 @@ fn make_commit_pair(sed_id: SedimentreeId, seed: u8) -> (LooseCommit, Blob) {
     let blob = make_blob(seed);
     let blob_meta = BlobMeta::new(&blob);
     let head = make_head(seed);
-    let commit = LooseCommit::new(sed_id, head, BTreeSet::new(), blob_meta);
+    let commit =
+        LooseCommit::new(sed_id, head, BTreeSet::new(), blob_meta).expect("valid metadata");
     (commit, blob)
 }
 
@@ -560,15 +561,22 @@ async fn relay_topology_concurrent_add_built_batch_calls_converge() -> TestResul
         h.await??;
     }
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
     assert_eq!(
         a.get_commits(sed_id).await.map(|c| c.len()),
         Some(n as usize)
     );
-    assert_eq!(
-        r.get_commits(sed_id).await.map(|c| c.len()),
-        Some(n as usize)
+    // The sync calls await sending the requested data, not its persistence
+    // at R. In particular, managed mutations yield to a separate task for
+    // each received commit. Wait for convergence rather than assuming the
+    // relay can drain the burst within a fixed wall-clock delay.
+    assert!(
+        wait_until(|| {
+            let r = Arc::clone(&r);
+            async move { r.get_commits(sed_id).await.map(|c| c.len()) == Some(n as usize) }
+        })
+        .await,
+        "R did not receive all {n} commits: {:?}",
+        r.get_commits(sed_id).await.map(|c| c.len())
     );
 
     let (_, stats, _, _) = a.full_sync_with_all_peers(SYNC_TIMEOUT).await;

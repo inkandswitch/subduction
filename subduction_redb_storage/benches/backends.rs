@@ -187,6 +187,7 @@ fn seal_commit(rt: &Runtime, id: SedimentreeId, blob_size: usize) -> VerifiedMet
         (id, head, BTreeSet::new()),
         verified_blob,
     ))
+    .expect("valid metadata")
 }
 
 /// Populate `storage` with `n` unique commits, returning their ids (in

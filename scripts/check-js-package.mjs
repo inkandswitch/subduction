@@ -1,0 +1,81 @@
+// Check the extracted npm tarball, not the working tree's dist/ or node_modules/.
+// Usage: node scripts/check-js-package.mjs /path/to/extracted/package @automerge/<name>
+import assert from "node:assert/strict";
+import { readFileSync, statSync } from "node:fs";
+import { resolve, sep } from "node:path";
+import { spawnSync } from "node:child_process";
+
+assert(process.argv[2], "Expected the extracted package directory");
+assert(process.argv[3], "Expected the npm package name");
+const root = resolve(process.argv[2]);
+const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
+assert.equal(pkg.name, process.argv[3]);
+
+function checkTarget(target) {
+  if (typeof target === "string") {
+    assert(target.startsWith("./dist/"), `Unexpected export target: ${target}`);
+    const path = resolve(root, target);
+    assert(path.startsWith(`${root}${sep}`), `Export escapes package: ${target}`);
+    assert(statSync(path).isFile(), `Missing export: ${target}`);
+  } else {
+    assert(target && typeof target === "object", "Invalid export target");
+    for (const value of Object.values(target)) checkTarget(value);
+  }
+}
+
+for (const field of ["main", "module", "types", "exports"]) {
+  checkTarget(pkg[field]);
+}
+assert(statSync(resolve(root, "README.md")).isFile());
+
+// Exercise actual Wasm initialization and a package-specific API operation
+// through Node's package resolution in both module systems and debug builds.
+assert([
+  "@automerge/sedimentree",
+  "@automerge/subduction",
+  "@automerge/automerge-subduction",
+].includes(pkg.name), `No smoke test defined for ${pkg.name}`);
+
+// Sedimentree provides POJO types and logging controls, not a Subduction node.
+const check = pkg.name === "@automerge/sedimentree" ? `
+  async function check(api) {
+    assert.equal(typeof api.setSubductionLogLevel, "function");
+    assert.equal(typeof api.set_subduction_logger, "function");
+    assert.equal(typeof api.clear_subduction_logger, "function");
+    api.setSubductionLogLevel("error");
+    assert.throws(() => api.setSubductionLogLevel("not-a-log-level"));
+    try {
+      api.set_subduction_logger(() => {});
+    } finally { api.clear_subduction_logger(); }
+  }
+` : `
+  async function check(api) {
+    assert.equal(typeof api.Subduction, "function");
+    const signer = api.createMemorySigner();
+    assert.match(signer.peerId(), /^[0-9a-f]{64}$/);
+    const storage = api.createMemoryStorage();
+    const node = new api.Subduction({ signer, storage });
+    try {
+      const tree = "11".repeat(32), head = "22".repeat(32);
+      await node.storeCommit(tree, { head, parents: [], blob: Uint8Array.of(1) });
+      assert.deepEqual(await node.getHeads(tree), [head]);
+    } finally { await node.close(); node.free(); }
+  }
+`;
+for (const mode of ["module", "commonjs"]) {
+  const prelude = mode === "module"
+    ? 'import assert from "node:assert/strict";'
+    : 'const assert = require("node:assert/strict");';
+  const calls = [pkg.name, `${pkg.name}/debug`].map((name) =>
+    mode === "module"
+      ? `await check(await import(${JSON.stringify(name)}));`
+      : `await check(require(${JSON.stringify(name)}));`
+  ).join("\n");
+  const result = spawnSync(process.execPath, ["--input-type", mode, "--eval", `${prelude}\n${check}\n(async () => { ${calls} })().catch(error => { console.error(error); process.exitCode = 1; });`], {
+    cwd: root,
+    stdio: "inherit",
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, `${mode} package smoke test failed`);
+}
+console.log(`Verified ${pkg.name}@${pkg.version}: export files, Node ESM/CJS and debug builds`);

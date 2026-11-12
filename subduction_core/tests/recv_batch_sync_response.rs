@@ -85,7 +85,7 @@ async fn make_test_commit(id: &SedimentreeId, data: &[u8]) -> (Signed<LooseCommi
         bytes[..n].copy_from_slice(&data[..n]);
         bytes
     });
-    let commit = LooseCommit::new(*id, head, BTreeSet::new(), blob_meta);
+    let commit = LooseCommit::new(*id, head, BTreeSet::new(), blob_meta).expect("valid metadata");
     let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
     (verified.into_signed(), blob)
 }
@@ -94,7 +94,8 @@ async fn make_test_fragment(id: &SedimentreeId, data: &[u8]) -> (Signed<Fragment
     let blob = Blob::new(data.to_vec());
     let blob_meta = BlobMeta::new(&blob);
     let head = CommitId::new([data.first().copied().unwrap_or(0); 32]);
-    let fragment = Fragment::new(*id, head, BTreeSet::new(), &[], blob_meta);
+    let fragment =
+        Fragment::new(*id, head, BTreeSet::new(), &[], blob_meta).expect("valid metadata");
     let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment).await;
     (verified.into_signed(), blob)
 }

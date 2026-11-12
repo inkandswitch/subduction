@@ -157,7 +157,7 @@ async fn mid_flight_close_leaves_peers_consistent() -> TestResult {
             .await
     });
     t_a.close();
-    let _ = commit_handle.await?;
+    let _commit_result = commit_handle.await?;
 
     tokio::time::sleep(PROPAGATION_PAUSE).await;
 

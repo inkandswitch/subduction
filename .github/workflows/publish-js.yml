@@ -1,0 +1,100 @@
+name: Publish JS package
+
+# One workflow for every npm package: npm trusted publishing is registered per
+# package against this filename. Each `run:` step is a single command; release
+# logic lives in scripts/js-release.py and nix/js-package.nix.
+
+on:
+  push:
+    tags:
+      - 'automerge-subduction-js-v*'
+      - 'sedimentree-js-v*'
+      - 'subduction-js-v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-npm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'inkandswitch/subduction'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      package: ${{ steps.release.outputs.package }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Require a commit merged to main
+        run: git merge-base --is-ancestor HEAD origin/main
+
+      - name: Validate release tag and manifests
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 scripts/js-release.py validate "$RELEASE_TAG"
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
+
+      - name: Build and smoke-test the npm package with Nix
+        env:
+          FLAKE_OUTPUT: ${{ steps.release.outputs.flake_output }}
+        run: nix build ".#$FLAKE_OUTPUT" --no-update-lock-file --print-build-logs
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: npm-package
+          path: result/${{ steps.release.outputs.package }}.tgz
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: npm
+    # Different release tags may build concurrently, but registry checks and
+    # publishing must be serialized across all versions of each package.
+    concurrency:
+      group: publish-npm-${{ needs.build.outputs.package }}
+      # Keep pending releases instead of replacing the previous pending job.
+      queue: max
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Check out only the release helper from the tagged commit. Do not rebuild
+      # or install package dependencies; publish the tested tarball unchanged.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/js-release.py
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: npm-package
+          path: npm-artifacts
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install an OIDC-capable npm CLI
+        run: npm install --global npm@11.20.0 --ignore-scripts
+
+      - name: Publish using npm trusted publishing (skipped if already published)
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          TARBALL: npm-artifacts/${{ needs.build.outputs.package }}.tgz
+        run: python3 scripts/js-release.py publish "$RELEASE_TAG" "$TARBALL"

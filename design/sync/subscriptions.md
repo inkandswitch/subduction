@@ -40,9 +40,9 @@ struct BatchSyncRequest {
 ```
 
 When `subscribe: true`:
-1. Server performs normal batch sync
-2. Server adds peer to subscription set for that sedimentree
-3. Peer receives future commits/fragments for that sedimentree
+1. If the document is missing locally, the server first makes a bounded upstream fetch attempt (see [missing-document responses](#missing-document-responses)).
+2. Server adds the peer to the subscription set and responds with a diff of its current local state, including data fetched upstream.
+3. Peer receives future commits/fragments for that sedimentree.
 
 ### Unsubscribe Explicitly
 
@@ -178,12 +178,12 @@ sequenceDiagram
     participant B as Peer B
 
     A->>R: BatchSyncRequest { id: doc-123, subscribe: true }
-    R->>A: BatchSyncResponse { diff }
-    Note over R: A is now subscribed to doc-123
-    Note over R: propagate upstream
+    Note over R: doc-123 is missing locally; fetch upstream first
     R->>B: BatchSyncRequest { id: doc-123, subscribe: true }
     B->>R: BatchSyncResponse { diff }
-    Note over R: R is now subscribed to doc-123 on B
+    Note over R: Ingest data; R is now subscribed to doc-123 on B
+    R->>A: BatchSyncResponse { diff including fetched data }
+    Note over R: A is now subscribed to doc-123
 
     Note over B: B makes a change
     B->>R: LooseCommit { id: doc-123, commit, blob }
@@ -191,14 +191,43 @@ sequenceDiagram
     R->>A: LooseCommit { id: doc-123, commit, blob }
 ```
 
+### Missing-Document Responses
+
+An authorized subscribing request for a document absent from both memory and
+storage waits for upstream propagation **before** the handler computes its
+response. Concurrent requests for the same document share the in-flight fetch,
+including when some upstreams have already supplied partial data. The fetch
+queries eligible dialed peers concurrently, excluding the original requester,
+and retains the usual outgoing-subscription deduplication.
+
+The wait is bounded to **half the node's configured `roundtrip_timeout`**
+(default: 15 seconds), reserving the remainder of the usual roundtrip budget
+for response processing and delivery. The wire protocol carries neither an
+end-to-end deadline nor a traversal ID: a request returning around a relay
+cycle cannot be distinguished from another subscriber. The bounded wait breaks
+such cycles rather than allowing a circular wait forever. A caller with a
+shorter deadline may still time out before the relay responds.
+
+On completion or expiry, the handler computes a fresh diff from local storage
+and cache. An empty `Ok` response means no data was available after this bounded
+attempt, **not** a network-wide proof of absence. The upstream fetch continues
+after a wait expires, subject to the normal per-call deadlines; data arriving
+later is pushed to subscribers. Timing out one waiter never cancels the shared
+fetch or leaves its outgoing claims stranded.
+
+Documents already present locally still receive an immediate local response
+and background propagation. Requests with `subscribe: false` remain local-only.
+
 ### Authorization Gate
 
 Propagation only runs when the originator is _authorized_ to fetch the
-sedimentree. Handler success alone is too permissive: the handler returns
-`Ok` even after sending a `SyncResult::Unauthorized` response. Without
+sedimentree. For a missing document this check precedes the fetch; for background
+propagation it follows the handler. Handler success alone is too permissive:
+the handler returns `Ok` even after sending a `SyncResult::Unauthorized` response. Without
 this gate, an unauthorized peer could cause the relay to enroll in
 upstream subscriptions whose traffic the egress filter would drop on the
-return path — wasted bandwidth and dangling upstream state.
+return path — wasted bandwidth and dangling upstream state. The background
+propagation gate is:
 
 ```rust
 if handler_returned_ok
@@ -236,8 +265,9 @@ other.
 
 Per-peer propagation failures are logged at `debug` and ignored. A
 single peer being unreachable does not prevent the subscription from
-reaching the remaining peers. The local handler-side `BatchSyncResponse`
-to the originator has already been sent before propagation runs.
+reaching the remaining peers. For locally present documents the response has
+already been sent before propagation runs. For missing documents it waits for
+the shared attempt, subject to the bound described above.
 
 ## Message Flow
 

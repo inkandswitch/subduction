@@ -26,6 +26,7 @@ fn commit(seed: u8, parents: &[CommitId]) -> LooseCommit {
         parents.iter().copied().collect::<BTreeSet<_>>(),
         blob_meta,
     )
+    .expect("valid metadata")
 }
 
 const fn head(seed: u8) -> CommitId {

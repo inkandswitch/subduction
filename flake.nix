@@ -74,6 +74,22 @@
           ];
         };
 
+        js-rust-toolchain = pkgs.rust-bin.stable.${rustVersion}.minimal.override {
+          targets = [ "wasm32-unknown-unknown" ];
+        };
+
+        js-rustPlatform = pkgs.makeRustPlatform {
+          cargo = js-rust-toolchain;
+          rustc = js-rust-toolchain;
+        };
+
+        workspaceCargoLock = {
+          lockFile = ./Cargo.lock;
+          outputHashes = {
+            "wasm-tracing-3.0.0-alpha.0" = "sha256-b5XSxRM601ID/uT2aLMb0WrP3lSGALrh0bPB+7Va/6s=";
+          };
+        };
+
         # Nightly rustfmt for unstable formatting options (imports_granularity, etc.)
         # We need a combined nightly toolchain (rustc + rustfmt) because rustfmt
         # links against librustc_driver, which lives in the rustc component.
@@ -175,8 +191,21 @@
           { commands = projectCommands; packages = []; }
         ];
 
+        # Tested npm tarballs. Keys match scripts/js-release.py.
+        jsPackage = key: crate: pkgs.callPackage ./nix/js-package.nix {
+          inherit crate key wasm-bodge;
+          rustPlatform = js-rustPlatform;
+          wasm-bindgen-cli = unstable.wasm-bindgen-cli;
+          nodejs = pkgs.nodejs_24;
+          cargoLock = workspaceCargoLock;
+        };
+
       in rec {
         packages = {
+          automerge-subduction-js = jsPackage "automerge-subduction" "automerge_subduction_wasm";
+          sedimentree-js = jsPackage "sedimentree" "sedimentree_wasm";
+          subduction-js = jsPackage "subduction" "subduction_wasm";
+
           subduction_cli = pkgs.rustPlatform.buildRustPackage {
             pname = "subduction_cli";
             version = (builtins.fromTOML (builtins.readFile ./subduction_cli/Cargo.toml)).package.version;
@@ -200,12 +229,7 @@
 
             src = ./.;
 
-            cargoLock = {
-              lockFile = ./Cargo.lock;
-              outputHashes = {
-                "wasm-tracing-3.0.0-alpha.0" = "sha256-b5XSxRM601ID/uT2aLMb0WrP3lSGALrh0bPB+7Va/6s=";
-              };
-            };
+            cargoLock = workspaceCargoLock;
 
             buildInputs = [ pkgs.openssl ];
             nativeBuildInputs = [ pkgs.pkg-config ];
@@ -253,6 +277,7 @@
               pkgs.playwright-driver
               pkgs.playwright-driver.browsers
               pkgs.prometheus
+              pkgs.python3 # scripts/js-release.py (needs 3.11+ for tomllib)
               pkgs.rust-analyzer
               pkgs.tokio-console
               pkgs.typescript

@@ -8,7 +8,7 @@
 //! - **Equivalence to naive reference**
 //!   ([`loose_commit_pruning_agrees_with_naive`]): the naive impl computes
 //!   the surviving commit set via per-commit DFS toward children
-//!   (production uses reverse-topo accumulation from tips). Different
+//!   (production propagates range heads through parents). Different
 //!   algorithm, same answer.
 //!
 //! - **Coverage preservation** ([`fragment_minimization_preserves_coverage`]):
@@ -69,7 +69,6 @@ fn prune_loose_commits_naive<M: DepthMetric>(
     let mut covered_checkpoints: BTreeSet<Checkpoint> = BTreeSet::new();
     for f in kept_fragments {
         covered_range_heads.insert(f.head());
-        covered_range_heads.extend(f.boundary().iter().copied());
         covered_checkpoints.extend(f.checkpoints().iter().copied());
     }
     let is_covered = |range_head: CommitId| -> bool {
@@ -147,9 +146,8 @@ fn should_keep_naive<M: DepthMetric, F: Fn(CommitId) -> bool>(
 /// The "coverage" of a fragment set: the union of every fragment's head,
 /// boundary commits, and checkpoints (each as `Checkpoint`-truncated values).
 ///
-/// Two fragment sets with equal coverage are functionally equivalent for
-/// the purposes of [`Sedimentree::minimize`]'s loose-commit pruning: any
-/// loose commit dropped under one is also dropped under the other.
+/// This tracks known identifiers, not payload coverage: boundary commits
+/// are referenced by a fragment but their data is not part of its blob.
 fn coverage<'a, I: IntoIterator<Item = &'a Fragment>>(fragments: I) -> BTreeSet<Checkpoint> {
     let mut cov: BTreeSet<Checkpoint> = BTreeSet::new();
     for f in fragments {

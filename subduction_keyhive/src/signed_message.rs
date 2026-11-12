@@ -262,7 +262,7 @@ mod tests {
             )
             .await
             .expect("keyhive");
-            kh.contact_card().await.expect("contact card")
+            kh.generate_contact_card().await.expect("contact card")
         })
     }
 

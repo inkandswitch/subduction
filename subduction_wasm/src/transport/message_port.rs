@@ -1,22 +1,19 @@
 //! [`MessagePort`]-based [`Transport`] adapter.
 //!
-//! Provides [`MessagePortTransport`] — a Wasm-exported class that wraps a
-//! [`MessagePort`] (or any object with the same `postMessage` / `onmessage`
-//! interface) into a `Transport` suitable for peer-to-peer authentication
-//! via [`AuthenticatedTransport.setup`] / `.accept`.
+//! The public `makeMessagePortTransport` factory returns a structural transport.
+//! Its private driver wraps a `MessagePort` (or an object with the same
+//! `postMessage` / `onmessage` / `close` interface). Nodes own authentication and
+//! clean up admitted transports.
 //!
 //! # Example (JavaScript)
 //!
 //! ```js
-//! const { MessagePortTransport, AuthenticatedTransport } = await import("subduction_wasm");
-//!
+//! import { makeMessagePortTransport } from "@automerge/subduction";
+//! // Given two Subduction nodes, nodeA and nodeB:
 //! const channel = new MessageChannel();
-//! const transportA = new MessagePortTransport(channel.port1);
-//! const transportB = new MessagePortTransport(channel.port2);
-//!
-//! const [authA, authB] = await Promise.all([
-//!   AuthenticatedTransport.setup(transportA, signerA, 5000),
-//!   AuthenticatedTransport.accept(transportB, signerB, nonceCache, 5000),
+//! await Promise.all([
+//!   nodeA.connectTransport(makeMessagePortTransport(channel.port1), { serviceName: "local" }),
+//!   nodeB.acceptTransport(makeMessagePortTransport(channel.port2), { serviceName: "local" }),
 //! ]);
 //! ```
 
@@ -42,7 +39,7 @@ extern "C" {
     fn close(this: &Port);
 
     #[wasm_bindgen(method, setter, js_name = onmessage)]
-    fn set_onmessage(this: &Port, handler: &Closure<dyn FnMut(JsValue)>);
+    fn set_onmessage(this: &Port, handler: &JsValue);
 }
 
 // ---------------------------------------------------------------------------
@@ -51,13 +48,20 @@ extern "C" {
 
 struct MessageQueue {
     incoming: Vec<JsValue>,
-    waiters: Vec<Function>,
+    waiters: Vec<(Function, Function)>, // Promise resolve/reject, without leaked closures.
+    closed: bool,
 }
 
 type SharedQueue = Rc<RefCell<MessageQueue>>;
 
 fn resolved_void() -> Promise {
     Promise::resolve(&JsValue::UNDEFINED)
+}
+
+fn closed_error() -> JsValue {
+    let error = js_sys::Error::new("MessagePort transport is closed");
+    error.set_name("MessagePortClosedError");
+    error.into()
 }
 
 // ---------------------------------------------------------------------------
@@ -70,7 +74,7 @@ fn resolved_void() -> Promise {
 /// Implements the byte-oriented `Transport` interface (`sendBytes`,
 /// `recvBytes`, `disconnect`) using the port as the underlying channel.
 /// After the handshake, the [`Authenticated`] wrapper provides the sync API.
-#[wasm_bindgen(js_name = MessagePortTransport)]
+#[wasm_bindgen(js_name = MessagePortTransport, private, skip_typescript)]
 pub struct WasmMessagePortTransport {
     port: Rc<Port>,
     queue: SharedQueue,
@@ -96,6 +100,7 @@ impl WasmMessagePortTransport {
         let queue: SharedQueue = Rc::new(RefCell::new(MessageQueue {
             incoming: Vec::new(),
             waiters: Vec::new(),
+            closed: false,
         }));
 
         let q = Rc::clone(&queue);
@@ -104,16 +109,19 @@ impl WasmMessagePortTransport {
                 .unwrap_or(JsValue::UNDEFINED);
 
             let mut guard = q.borrow_mut();
+            if guard.closed {
+                return;
+            }
             if guard.waiters.is_empty() {
                 guard.incoming.push(data);
             } else {
-                let resolve = guard.waiters.remove(0);
+                let (resolve, _) = guard.waiters.remove(0);
                 drop(guard);
-                drop(resolve.call1(&JsValue::NULL, &data));
+                drop(resolve.call1(&JsValue::NULL, &Uint8Array::new(&data)));
             }
         });
 
-        port.set_onmessage(&onmessage);
+        port.set_onmessage(onmessage.as_ref());
 
         Self {
             port: Rc::new(port),
@@ -123,18 +131,24 @@ impl WasmMessagePortTransport {
         }
     }
 
-    /// Send raw bytes (for the handshake phase).
+    /// Send raw bytes. Rejects the promise if this transport is closed.
     #[wasm_bindgen(js_name = sendBytes)]
     pub fn send_bytes(&self, bytes: &[u8]) -> Promise {
+        if self.queue.borrow().closed {
+            return Promise::reject(&closed_error());
+        }
         let buffer = Uint8Array::from(bytes).buffer();
         self.port.post_message(&buffer);
         resolved_void()
     }
 
-    /// Receive raw bytes (for the handshake phase).
+    /// Receive raw bytes. Pending and subsequent reads reject on disconnect.
     #[wasm_bindgen(js_name = recvBytes)]
     pub fn recv_bytes(&self) -> Promise {
         let mut guard = self.queue.borrow_mut();
+        if guard.closed {
+            return Promise::reject(&closed_error());
+        }
         if !guard.incoming.is_empty() {
             let data = guard.incoming.remove(0);
             let arr: JsValue = Uint8Array::new(&data).into();
@@ -143,27 +157,31 @@ impl WasmMessagePortTransport {
         drop(guard);
 
         let q = Rc::clone(&self.queue);
-        Promise::new(&mut |resolve, _reject| {
-            let resolve_with_u8arr: Closure<dyn FnMut(JsValue)> =
-                Closure::new(move |data: JsValue| {
-                    drop(resolve.call1(&JsValue::NULL, &Uint8Array::new(&data)));
-                });
-            q.borrow_mut().waiters.push(
-                resolve_with_u8arr
-                    .as_ref()
-                    .unchecked_ref::<Function>()
-                    .clone(),
-            );
-            resolve_with_u8arr.forget();
+        Promise::new(&mut |resolve, reject| {
+            q.borrow_mut().waiters.push((resolve, reject));
         })
     }
 
-    /// Disconnect (close the port) and fire the `onDisconnect` callback
+    /// Disconnect, reject pending reads, and fire the `onDisconnect` callback
     /// if registered. The callback is taken out of the cell before
     /// invocation, so it may safely re-enter the transport (e.g. to
     /// register a new callback) without tripping a `BorrowMutError`.
     pub fn disconnect(&self) -> Promise {
+        let waiters = {
+            let mut queue = self.queue.borrow_mut();
+            if queue.closed {
+                return resolved_void();
+            }
+            queue.closed = true;
+            queue.incoming.clear();
+            core::mem::take(&mut queue.waiters)
+        };
+        self.port.set_onmessage(&JsValue::NULL);
         self.port.close();
+        let error = closed_error();
+        for (_, reject) in waiters {
+            drop(reject.call1(&JsValue::NULL, &error));
+        }
         let cb_opt = self.on_disconnect.borrow_mut().take();
         if let Some(cb) = cb_opt
             && let Err(e) = cb.call0(&JsValue::NULL)
@@ -181,9 +199,9 @@ impl WasmMessagePortTransport {
     }
 }
 
-/// Convenience factory — equivalent to `new MessagePortTransport(port)`.
+/// Create a structural `Transport` backed by a message port.
 #[must_use]
 #[wasm_bindgen(js_name = makeMessagePortTransport)]
-pub fn make_message_port_transport(port: JsValue) -> WasmMessagePortTransport {
-    WasmMessagePortTransport::new(port)
+pub fn make_message_port_transport(port: JsValue) -> super::JsTransport {
+    crate::factories::message_port(port)
 }

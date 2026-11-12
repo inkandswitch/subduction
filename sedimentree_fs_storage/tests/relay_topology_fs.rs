@@ -70,7 +70,8 @@ fn make_commit_pair(sed_id: SedimentreeId, seed: u8) -> (LooseCommit, Blob) {
     let blob = make_blob(seed);
     let blob_meta = BlobMeta::new(&blob);
     let head = make_head(seed);
-    let commit = LooseCommit::new(sed_id, head, BTreeSet::new(), blob_meta);
+    let commit =
+        LooseCommit::new(sed_id, head, BTreeSet::new(), blob_meta).expect("valid metadata");
     (commit, blob)
 }
 

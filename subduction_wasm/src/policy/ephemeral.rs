@@ -10,13 +10,13 @@ use alloc::{collections::BTreeSet, format, string::String, vec::Vec};
 
 use future_form::Local;
 use futures::FutureExt;
-use js_sys::{Promise, Uint8Array};
+use js_sys::Promise;
 use subduction_core::peer::id::PeerId;
 use subduction_ephemeral::{policy::EphemeralPolicy, topic::Topic};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
-use crate::{peer_id::WasmPeerId, topic::WasmTopic};
+use sedimentree_wasm::pojo::{hex, unhex};
 
 // ── TypeScript interface ────────────────────────────────────────────────
 
@@ -49,22 +49,22 @@ extern "C" {
     #[wasm_bindgen(method, catch, js_name = authorizeSubscribe)]
     fn js_authorize_subscribe(
         this: &JsEphemeralPolicy,
-        peer_id: WasmPeerId,
-        topic: WasmTopic,
+        peer_id: String,
+        topic: String,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = authorizePublish)]
     fn js_authorize_publish(
         this: &JsEphemeralPolicy,
-        peer_id: WasmPeerId,
-        topic: WasmTopic,
+        peer_id: String,
+        topic: String,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = filterAuthorizedSubscribers)]
     fn js_filter_authorized_subscribers(
         this: &JsEphemeralPolicy,
-        topic: WasmTopic,
-        peers: Vec<WasmPeerId>,
+        topic: String,
+        peers: Vec<String>,
     ) -> Result<Promise, JsValue>;
 }
 
@@ -135,7 +135,7 @@ impl EphemeralPolicy<Local> for JsEphemeralPolicy {
         peer: PeerId,
         id: Topic,
     ) -> <Local as future_form::FutureForm>::Future<'_, Result<(), Self::SubscribeDisallowed>> {
-        let result = self.js_authorize_subscribe(WasmPeerId::from(peer), WasmTopic::from(id));
+        let result = self.js_authorize_subscribe(hex(peer.as_bytes()), hex(id.as_bytes()));
         async move { await_void_promise(result).await }.boxed_local()
     }
 
@@ -144,7 +144,7 @@ impl EphemeralPolicy<Local> for JsEphemeralPolicy {
         peer: PeerId,
         id: Topic,
     ) -> <Local as future_form::FutureForm>::Future<'_, Result<(), Self::PublishDisallowed>> {
-        let result = self.js_authorize_publish(WasmPeerId::from(peer), WasmTopic::from(id));
+        let result = self.js_authorize_publish(hex(peer.as_bytes()), hex(id.as_bytes()));
         async move { await_void_promise(result).await }.boxed_local()
     }
 
@@ -153,8 +153,8 @@ impl EphemeralPolicy<Local> for JsEphemeralPolicy {
         id: Topic,
         peers: Vec<PeerId>,
     ) -> <Local as future_form::FutureForm>::Future<'_, Vec<PeerId>> {
-        let wasm_peers: Vec<WasmPeerId> = peers.iter().copied().map(WasmPeerId::from).collect();
-        let result = self.js_filter_authorized_subscribers(WasmTopic::from(id), wasm_peers);
+        let js_peers = peers.iter().map(|peer| hex(peer.as_bytes())).collect();
+        let result = self.js_filter_authorized_subscribers(hex(id.as_bytes()), js_peers);
         async move {
             let Ok(promise) = result else {
                 return Vec::new();
@@ -164,24 +164,19 @@ impl EphemeralPolicy<Local> for JsEphemeralPolicy {
                 return Vec::new();
             };
 
-            let Ok(arr) = resolved.dyn_into::<js_sys::Array>() else {
+            let Ok(arr) = sedimentree_wasm::pojo::array(
+                &resolved,
+                "filterAuthorizedSubscribers return value",
+            ) else {
                 return Vec::new();
             };
 
             // Intersect with the original list to prevent a buggy/malicious
             // policy from expanding the authorized set.
             let allowed: BTreeSet<PeerId> = peers.into_iter().collect();
-            arr.iter()
+            arr.into_iter()
                 .filter_map(|item| {
-                    // The returned items are WasmPeerId objects;
-                    // extract bytes via their toBytes() method.
-                    let to_bytes = js_sys::Reflect::get(&item, &"toBytes".into()).ok()?;
-                    let func: js_sys::Function = to_bytes.dyn_into().ok()?;
-                    let bytes_val = func.call0(&item).ok()?;
-                    let bytes: Uint8Array = bytes_val.dyn_into().ok()?;
-                    let vec = bytes.to_vec();
-                    let arr: [u8; 32] = vec.try_into().ok()?;
-                    let peer = PeerId::new(arr);
+                    let peer = PeerId::new(unhex(&item, "filterAuthorizedSubscribers[]").ok()?);
                     allowed.contains(&peer).then_some(peer)
                 })
                 .collect()

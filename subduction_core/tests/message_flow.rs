@@ -7,6 +7,8 @@
 //! Tests run for both `Sendable` and `Local` future kinds to ensure
 //! behavior is consistent across native and Wasm-like environments.
 
+#![allow(clippy::expect_used, reason = "bounded test fixtures")]
+
 use std::{collections::BTreeSet, sync::Arc};
 
 use core::time::Duration;
@@ -43,7 +45,7 @@ async fn make_test_commit_with_data(
         bytes[..len].copy_from_slice(&data[..len]);
         bytes
     });
-    let commit = LooseCommit::new(*id, head, BTreeSet::new(), blob_meta);
+    let commit = LooseCommit::new(*id, head, BTreeSet::new(), blob_meta).expect("valid metadata");
     let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
     (verified.into_signed(), blob)
 }

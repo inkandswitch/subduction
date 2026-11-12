@@ -1,158 +1,64 @@
-import { test, expect } from "@playwright/test";
-import { URL } from "./config";
+import { test, expect } from '@playwright/test';
+import { URL } from './config';
 
 test.beforeEach(async ({ page }) => {
   await page.goto(URL);
-  const wasmTimeout = process.env.CI ? 30000 : 10000;
-  await page.waitForFunction(() => window.subductionReady === true, { timeout: wasmTimeout });
+  await page.waitForFunction(() => window.subductionReady);
 });
 
-test.describe("MessageChannel Connection Tests", () => {
-  test("should authenticate two peers via MessageChannel", async ({ page }) => {
-    const result = await page.evaluate(async () => {
-      const { AuthenticatedTransport, MemorySigner, makeMessagePortTransport } = window.subduction;
-
+for (const mode of ['known', 'discovery', 'link'] as const) {
+  test(`MessageChannel ${mode}: authentication and replication`, async ({ page }) => {
+    const result = await page.evaluate(async mode => {
+      const api = window.subduction;
+      const sa = api.createMemorySigner(), sb = api.createMemorySigner();
+      const a = new api.Subduction({ signer: sa, storage: api.createMemoryStorage() });
+      const b = new api.Subduction({ signer: sb, storage: api.createMemoryStorage() });
       try {
-        const signerA = MemorySigner.generate();
-        const signerB = MemorySigner.generate();
-
-        const peerIdA = signerA.peerId();
-        const peerIdB = signerB.peerId();
-
-        const channel = new MessageChannel();
-        channel.port1.start();
-        channel.port2.start();
-
-        const [authA, authB] = await Promise.all([
-          AuthenticatedTransport.setup(makeMessagePortTransport(channel.port1), signerA, peerIdB),
-          AuthenticatedTransport.accept(makeMessagePortTransport(channel.port2), signerB),
-        ]);
-
-        return {
-          authenticated: true,
-          distinctPeers: peerIdA.toString() !== peerIdB.toString(),
-          peerA_seesPeerB: authA.peerId.toString() === peerIdB.toString(),
-          peerB_seesPeerA: authB.peerId.toString() === peerIdA.toString(),
-          error: null,
-        };
-      } catch (error) {
-        return {
-          authenticated: false,
-          distinctPeers: false,
-          peerA_seesPeerB: false,
-          peerB_seesPeerA: false,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    });
-
-    expect(result.error).toBeNull();
-    expect(result.authenticated).toBe(true);
-    expect(result.distinctPeers).toBe(true);
-    expect(result.peerA_seesPeerB).toBe(true);
-    expect(result.peerB_seesPeerA).toBe(true);
+        if (mode === 'link') await api.Subduction.link(a, b);
+        else {
+          const channel = new MessageChannel();
+          const ta = api.makeMessagePortTransport(channel.port1), tb = api.makeMessagePortTransport(channel.port2);
+          await Promise.all([
+            a.connectTransport(ta, mode === 'known' ? { expectedPeerId: sb.peerId() } : { serviceName: 'pojo-test' }),
+            b.acceptTransport(tb, mode === 'known' ? { expectedPeerId: sa.peerId() } : { serviceName: 'pojo-test' }),
+          ]);
+        }
+        const tree = '11'.repeat(32), head = '22'.repeat(32);
+        await a.storeCommit(tree, { head, parents: [], blob: Uint8Array.of(1, 2, 3) });
+        const stream = b.loadAndWatch(tree, { signal: AbortSignal.timeout(10000) });
+        let received;
+        for await (const event of stream) {
+          if (event.type === 'commit') { received = { head: event.metadata.head, blob: Array.from(event.blob) }; break; }
+        }
+        const peers = [await a.getConnectedPeerIds(), await b.getConnectedPeerIds()];
+        await a.disconnectFromPeer(sb.peerId());
+        return { received, peers, expected: [sb.peerId(), sa.peerId()], disconnected: await a.getConnectedPeerIds() };
+      } finally { await Promise.all([a.close(), b.close()]); a.free(); b.free(); }
+    }, mode);
+    expect(result.received).toEqual({ head: '22'.repeat(32), blob: [1, 2, 3] });
+    expect(result.peers).toEqual(result.expected.map(peer => [peer]));
+    expect(result.disconnected).toEqual([]);
   });
+}
 
-  test("should onboard both peers via MessageChannel", async ({ page }) => {
-    const result = await page.evaluate(async () => {
-      const {
-        AuthenticatedTransport, Subduction, MemoryStorage, MemorySigner,
-        makeMessagePortTransport,
-      } = window.subduction;
-
-      try {
-        const signerA = MemorySigner.generate();
-        const signerB = MemorySigner.generate();
-
-        const peerIdA = signerA.peerId();
-        const peerIdB = signerB.peerId();
-
-        const channel = new MessageChannel();
-        channel.port1.start();
-        channel.port2.start();
-
-        const [authA, authB] = await Promise.all([
-          AuthenticatedTransport.setup(makeMessagePortTransport(channel.port1), signerA, peerIdB),
-          AuthenticatedTransport.accept(makeMessagePortTransport(channel.port2), signerB),
-        ]);
-
-        const syncerA = new Subduction({ signer: signerA, storage: new MemoryStorage() });
-        const syncerB = new Subduction({ signer: signerB, storage: new MemoryStorage() });
-
-        const [isNewA, isNewB] = await Promise.all([
-          syncerA.addConnection(authA),
-          syncerB.addConnection(authB),
-        ]);
-
-        const peersA = await syncerA.getConnectedPeerIds();
-        const peersB = await syncerB.getConnectedPeerIds();
-
-        return {
-          onboarded: true,
-          isNewA,
-          isNewB,
-          distinctPeers: peerIdA.toString() !== peerIdB.toString(),
-          peerCountA: peersA.length,
-          peerCountB: peersB.length,
-          a_sees_b: peersA.length > 0 && peersA[0].toString() === peerIdB.toString(),
-          b_sees_a: peersB.length > 0 && peersB[0].toString() === peerIdA.toString(),
-          error: null,
-        };
-      } catch (error) {
-        return {
-          onboarded: false,
-          isNewA: false,
-          isNewB: false,
-          distinctPeers: false,
-          peerCountA: 0,
-          peerCountB: 0,
-          a_sees_b: false,
-          b_sees_a: false,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    });
-
-    expect(result.error).toBeNull();
-    expect(result.onboarded).toBe(true);
-    expect(result.distinctPeers).toBe(true);
-    expect(result.isNewA).toBe(true);
-    expect(result.isNewB).toBe(true);
-    expect(result.peerCountA).toBe(1);
-    expect(result.peerCountB).toBe(1);
-    expect(result.a_sees_b).toBe(true);
-    expect(result.b_sees_a).toBe(true);
+test('wrong expected identity is rejected before registration and closes the transport', async ({ page }) => {
+  const result = await page.evaluate(async () => {
+    const api = window.subduction;
+    const sa = api.createMemorySigner(), sb = api.createMemorySigner(), wrong = api.createMemorySigner();
+    const a = new api.Subduction({ signer: sa, storage: api.createMemoryStorage() });
+    const b = new api.Subduction({ signer: sb, storage: api.createMemoryStorage() });
+    const channel = new MessageChannel();
+    const ta = api.makeMessagePortTransport(channel.port1), tb = api.makeMessagePortTransport(channel.port2);
+    let closed = 0;
+    const disconnect = ta.disconnect;
+    ta.disconnect = () => { closed++; return disconnect(); };
+    try {
+      const [result] = await Promise.allSettled([
+        a.connectTransport(ta, { expectedPeerId: wrong.peerId() }),
+        b.acceptTransport(tb, { expectedPeerId: sa.peerId() }),
+      ]);
+      return { rejected: result.status === 'rejected', peers: await a.getConnectedPeerIds(), closed };
+    } finally { await Promise.all([a.close(), b.close()]); a.free(); b.free(); }
   });
-
-  test("should reject handshake with wrong expected peer ID", async ({ page }) => {
-    const result = await page.evaluate(async () => {
-      const { AuthenticatedTransport, MemorySigner, PeerId, makeMessagePortTransport } = window.subduction;
-
-      try {
-        const signerA = MemorySigner.generate();
-        const signerB = MemorySigner.generate();
-
-        const wrongPeerId = new PeerId(new Uint8Array(32).fill(0xff));
-
-        const channel = new MessageChannel();
-        channel.port1.start();
-        channel.port2.start();
-
-        await Promise.all([
-          AuthenticatedTransport.setup(makeMessagePortTransport(channel.port1), signerA, wrongPeerId),
-          AuthenticatedTransport.accept(makeMessagePortTransport(channel.port2), signerB),
-        ]);
-
-        return { rejected: false, error: null };
-      } catch (error) {
-        return {
-          rejected: true,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    });
-
-    expect(result.rejected).toBe(true);
-    expect(result.error).toBeTruthy();
-  });
+  expect(result.rejected).toBe(true); expect(result.peers).toEqual([]); expect(result.closed).toBeGreaterThan(0);
 });

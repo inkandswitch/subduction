@@ -3,6 +3,7 @@
 //! commits per tree, Byzantine duplicates, batch saves, and reopen.
 
 #![allow(clippy::indexing_slicing)]
+#![allow(clippy::expect_used, reason = "bounded test fixtures")]
 
 use std::collections::BTreeSet;
 
@@ -27,7 +28,9 @@ async fn seal_commit(
     blob: Vec<u8>,
 ) -> VerifiedMeta<LooseCommit> {
     let verified_blob = VerifiedBlobMeta::new(Blob::new(blob));
-    VerifiedMeta::seal::<Sendable, _>(signer, (id, head, BTreeSet::new()), verified_blob).await
+    VerifiedMeta::seal::<Sendable, _>(signer, (id, head, BTreeSet::new()), verified_blob)
+        .await
+        .expect("valid metadata")
 }
 
 async fn seal_fragment(
@@ -48,6 +51,7 @@ async fn seal_fragment(
         verified_blob,
     )
     .await
+    .expect("valid metadata")
 }
 
 /// Many concurrent writes are coalesced by the group-commit writer into shared
@@ -864,7 +868,7 @@ async fn saves_register_tree_id_conformance() -> testresult::TestResult {
         ),
         VerifiedBlobMeta::new(Blob::new(vec![2; 16])),
     )
-    .await;
+    .await?;
     conformance::assert_fragment_save_registers_tree_id::<Sendable, _>(&storage, fragment).await;
 
     let batch_tree = SedimentreeId::new([0x72; 32]);

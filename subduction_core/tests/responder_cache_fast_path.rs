@@ -309,8 +309,7 @@ async fn responder_serves_resident_tree_without_bulk_scans() -> TestResult {
 
     let sed_id = SedimentreeId::new([0x77; 32]);
 
-    // Both sides hold one commit the other lacks. `add_commit` writes
-    // through the sedimentree cache, so the tree is resident on both nodes.
+    // Both sides hold one commit the other lacks.
     alice
         .add_commit(
             sed_id,
@@ -326,6 +325,11 @@ async fn responder_serves_resident_tree_without_bulk_scans() -> TestResult {
         Blob::new(vec![2; 64]),
     )
     .await?;
+
+    // Writes need not populate the cache. Warm it before measuring the
+    // resident-tree fast path, rather than measuring the first cold read.
+    assert!(alice.get_commits(sed_id).await.is_some());
+    assert!(bob.get_commits(sed_id).await.is_some());
 
     connect_pair(&alice, &alice_signer, &bob, &bob_signer).await?;
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -478,7 +482,8 @@ async fn slow_path_warms_cache_for_subsequent_requests() -> TestResult {
             (sed_id, CommitId::new([i; 32]), BTreeSet::new()),
             sedimentree_core::blob::verified::VerifiedBlobMeta::new(Blob::new(vec![i; 32])),
         )
-        .await;
+        .await
+        .expect("valid metadata");
         Storage::<Sendable>::save_loose_commit(&bob_storage, sed_id, verified).await?;
     }
 

@@ -3,6 +3,7 @@
 //! equivocation, and cross-tree head lookup.
 
 #![allow(clippy::indexing_slicing)]
+#![allow(clippy::expect_used, reason = "bounded test fixtures")]
 
 use std::collections::BTreeSet;
 
@@ -35,6 +36,7 @@ async fn commit(
         VerifiedBlobMeta::new(Blob::new(blob)),
     )
     .await
+    .expect("valid metadata")
 }
 
 async fn fragment(
@@ -54,6 +56,7 @@ async fn fragment(
         VerifiedBlobMeta::new(Blob::new(blob)),
     )
     .await
+    .expect("valid metadata")
 }
 
 /// Build a two-tree store. Tree A holds an equivocating commit head (`0x01`,

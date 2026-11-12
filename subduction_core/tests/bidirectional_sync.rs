@@ -96,7 +96,7 @@ async fn make_test_commit(
         bytes[..n].copy_from_slice(&data[..n]);
         bytes
     });
-    let commit = LooseCommit::new(*id, head, BTreeSet::new(), blob_meta);
+    let commit = LooseCommit::new(*id, head, BTreeSet::new(), blob_meta).expect("valid metadata");
     let verified = Signed::seal::<Sendable, _>(&test_signer(), commit.clone()).await;
     (verified.into_signed(), blob, commit)
 }
@@ -109,7 +109,8 @@ async fn make_test_fragment(
     let blob_meta = BlobMeta::new(&blob);
     // Fragment head - use a deterministic value for tests
     let head = CommitId::new([data.first().copied().unwrap_or(0); 32]);
-    let fragment = Fragment::new(*id, head, BTreeSet::new(), &[], blob_meta);
+    let fragment =
+        Fragment::new(*id, head, BTreeSet::new(), &[], blob_meta).expect("valid metadata");
     let summary = fragment.summary().clone();
     let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment).await;
     (verified.into_signed(), blob, summary)

@@ -78,7 +78,7 @@ fn blob(seed: u32) -> Blob {
     Blob::new((0..48).map(|i| base.wrapping_add(i)).collect::<Vec<u8>>())
 }
 
-/// Store a single commit in tree `id`, returning its head.
+/// Store a single commit and read the tree into the cache, returning its head.
 async fn store_one_commit(
     sd: &TestSubduction,
     id: SedimentreeId,
@@ -87,6 +87,8 @@ async fn store_one_commit(
     let head_id = commit_id(head_seed);
     sd.store_commit(id, head_id, BTreeSet::new(), blob(head_seed))
         .await?;
+    // Ensure the eviction tests fill the cache even though writes no longer do.
+    assert!(sd.get_commits(id).await.is_some());
     Ok(head_id)
 }
 

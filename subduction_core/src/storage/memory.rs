@@ -87,7 +87,22 @@ pub struct MemoryStorage {
     ids: Arc<Mutex<Set<SedimentreeId>>>,
     commits: Arc<Sharded<Digest<LooseCommit>, LooseCommit>>,
     fragments: Arc<Sharded<Digest<Fragment>, Fragment>>,
+    #[cfg(test)]
+    commit_settlement: Arc<spin::Mutex<Option<TestGate>>>,
+    #[cfg(test)]
+    scan_settlement: Arc<spin::Mutex<Option<TestGate>>>,
 }
+#[cfg(test)]
+type TestGate = (
+    async_channel::Sender<()>,
+    async_channel::Receiver<Result<(), MemoryStorageError>>,
+);
+
+#[cfg(test)]
+type TestControl = (
+    async_channel::Receiver<()>,
+    async_channel::Sender<Result<(), MemoryStorageError>>,
+);
 
 impl Default for MemoryStorage {
     fn default() -> Self {
@@ -104,7 +119,40 @@ impl MemoryStorage {
             ids: Arc::new(Mutex::new(Set::new())),
             commits: Arc::new(Sharded::new()),
             fragments: Arc::new(Sharded::new()),
+            #[cfg(test)]
+            commit_settlement: Arc::new(spin::Mutex::new(None)),
+            #[cfg(test)]
+            scan_settlement: Arc::new(spin::Mutex::new(None)),
         }
+    }
+}
+
+#[cfg(test)]
+impl MemoryStorage {
+    // Test the real capability/runner boundary without a second storage wrapper.
+    pub(crate) fn gate_next_commit(&self) -> TestControl {
+        Self::prepare_test_gate(&self.commit_settlement)
+    }
+    pub(crate) fn gate_next_scan(&self) -> TestControl {
+        Self::prepare_test_gate(&self.scan_settlement)
+    }
+    fn prepare_test_gate(slot: &spin::Mutex<Option<TestGate>>) -> TestControl {
+        let (started, receiver) = async_channel::bounded(1);
+        let (release, released) = async_channel::bounded(1);
+        *slot.lock() = Some((started, released));
+        (receiver, release)
+    }
+    async fn settle_test_gate(
+        slot: &spin::Mutex<Option<TestGate>>,
+    ) -> Result<(), MemoryStorageError> {
+        let gate = slot.lock().take();
+        if let Some((started, released)) = gate {
+            let _ = started.try_send(());
+            if let Ok(result) = released.recv().await {
+                return result;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -184,6 +232,8 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
                 .or_default()
                 .entry(digest)
                 .or_insert((commit_id, signed, blob));
+            #[cfg(test)]
+            Self::settle_test_gate(&self.commit_settlement).await?;
             Ok(())
         })
     }
@@ -218,6 +268,8 @@ impl<Async: FutureForm> Storage<Async> for MemoryStorage {
                         .collect()
                 })
             };
+            #[cfg(test)]
+            Self::settle_test_gate(&self.scan_settlement).await?;
             raw.into_iter()
                 .map(|(signed, blob)| VerifiedMeta::try_from_trusted(signed, blob))
                 .collect::<Result<Vec<_>, _>>()
@@ -593,7 +645,8 @@ mod tests {
             (sid(0x21), CommitId::new([1; 32]), BTreeSet::new()),
             VerifiedBlobMeta::new(Blob::new(vec![1, 2, 3])),
         )
-        .await;
+        .await
+        .expect("valid metadata");
         conformance::assert_commit_save_registers_tree_id::<Sendable, _>(&store, commit).await;
 
         let fragment = VerifiedMeta::<Fragment>::seal::<Sendable, _>(
@@ -606,7 +659,8 @@ mod tests {
             ),
             VerifiedBlobMeta::new(Blob::new(vec![4, 5, 6])),
         )
-        .await;
+        .await
+        .expect("valid metadata");
         conformance::assert_fragment_save_registers_tree_id::<Sendable, _>(&store, fragment).await;
 
         let batch_commit = VerifiedMeta::<LooseCommit>::seal::<Sendable, _>(
@@ -614,7 +668,8 @@ mod tests {
             (sid(0x23), CommitId::new([5; 32]), BTreeSet::new()),
             VerifiedBlobMeta::new(Blob::new(vec![7, 8, 9])),
         )
-        .await;
+        .await
+        .expect("valid metadata");
         conformance::assert_batch_save_registers_tree_id::<Sendable, _>(
             &store,
             sid(0x23),
@@ -645,7 +700,8 @@ mod tests {
                 (id, CommitId::new([i; 32]), BTreeSet::new()),
                 VerifiedBlobMeta::new(Blob::new(vec![i; 64])),
             )
-            .await;
+            .await
+            .expect("valid metadata");
             Storage::<Sendable>::save_loose_commit(&store, id, commit)
                 .await
                 .expect("save commit");
@@ -660,7 +716,8 @@ mod tests {
             ),
             VerifiedBlobMeta::new(Blob::new(vec![9; 128])),
         )
-        .await;
+        .await
+        .expect("valid metadata");
         Storage::<Sendable>::save_fragment(&store, id, fragment)
             .await
             .expect("save fragment");
@@ -715,7 +772,8 @@ mod tests {
             let mut head_bytes = [0u8; 32];
             head_bytes[..2].copy_from_slice(&data_seed.to_le_bytes());
             let head = CommitId::new(head_bytes);
-            let commit = LooseCommit::new(sed_id, head, BTreeSet::new(), blob_meta);
+            let commit =
+                LooseCommit::new(sed_id, head, BTreeSet::new(), blob_meta).expect("valid metadata");
             let sealed = Signed::seal::<Sendable, _>(signer, commit).await;
             let verified = sealed
                 .into_signed()

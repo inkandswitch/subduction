@@ -89,7 +89,7 @@ pub struct SyncHandler<
     sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
     connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
     subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
-    storage: StoragePowerbox<Store, Auth>,
+    storage: StoragePowerbox<Store, Auth, Async>,
     depth_metric: Metric,
     heads_notifier: FilteredHeadsNotifier<R>,
     send_counter: PeerCounter,
@@ -166,7 +166,7 @@ impl<
         sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
-        storage: StoragePowerbox<Store, Auth>,
+        storage: StoragePowerbox<Store, Auth, Async>,
         depth_metric: Metric,
         spawner: Sp,
     ) -> Self {
@@ -202,7 +202,7 @@ impl<
         sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
-        storage: StoragePowerbox<Store, Auth>,
+        storage: StoragePowerbox<Store, Auth, Async>,
         depth_metric: Metric,
         remote_heads_observer: R,
         spawner: Sp,
@@ -581,7 +581,7 @@ impl<
             "receiving commit"
         );
 
-        let putter = match self.storage.get_putter::<Async>(*from, author, id).await {
+        let putter = match self.storage.get_putter(*from, author, id).await {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(
@@ -620,7 +620,7 @@ impl<
         let was_new = self
             .insert_commit_locally(&putter, verified_meta)
             .await
-            .map_err(IoError::Storage)?;
+            .map_err(IoError::from)?;
 
         let fanout = if was_new {
             let heads = self.heads_for(id).await;
@@ -733,7 +733,7 @@ impl<
             "receiving fragment"
         );
 
-        let putter = match self.storage.get_putter::<Async>(*from, author, id).await {
+        let putter = match self.storage.get_putter(*from, author, id).await {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(
@@ -769,7 +769,7 @@ impl<
         let was_new = self
             .insert_fragment_locally(&putter, verified_meta)
             .await
-            .map_err(IoError::Storage)?;
+            .map_err(IoError::from)?;
 
         let fanout = if was_new {
             let heads = self.heads_for(id).await;
@@ -811,7 +811,7 @@ impl<
         #[cfg(feature = "metrics")]
         self.requestor_tally.record(peer_id).await;
 
-        let fetcher = match self.storage.get_fetcher::<Async>(peer_id, id).await {
+        let fetcher = match self.storage.get_fetcher(peer_id, id).await {
             Ok(f) => f,
             Err(e) => {
                 tracing::debug!(
@@ -986,89 +986,102 @@ impl<
             #[cfg(feature = "metrics")]
             crate::metrics::sedimentree_cache_miss();
 
-            // Slow path (cache miss): full storage scan, which also warms
-            // the cache so subsequent requests for this tree take the
-            // fast path.
-            // Cache miss warms the whole tree, so load both tables at once.
-            // redb allows concurrent readers (MVCC), so the two scans overlap
-            // on the blocking pool instead of running back-to-back.
-            let (verified_commits, verified_fragments) =
-                futures::future::try_join(fetcher.load_loose_commits(), fetcher.load_fragments())
-                    .await
-                    .map_err(IoError::Storage)?;
+            // Retry the full read if a mutation invalidated its cache handoff.
+            loop {
+                let read = fetcher
+                    .coordination()
+                    .prepare_cache_read(&self.sedimentrees)
+                    .await;
+                // Slow path (cache miss): full storage scan, which also warms
+                // the cache so subsequent requests for this tree take the
+                // fast path.
+                // Cache miss warms the whole tree, so load both tables at once.
+                // redb allows concurrent readers (MVCC), so the two scans overlap
+                // on the blocking pool instead of running back-to-back.
+                let (verified_commits, verified_fragments) = futures::future::try_join(
+                    fetcher.load_loose_commits(),
+                    fetcher.load_fragments(),
+                )
+                .await
+                .map_err(IoError::Storage)?;
 
-            // Byzantine duplicates (multiple payloads per id) resolve
-            // first-loaded-wins — the same policy for commits and
-            // fragments, in both the crossover and slow paths.
-            let mut commit_by_id: Map<CommitId, VerifiedMeta<LooseCommit>> = Map::new();
-            for vm in verified_commits {
-                commit_by_id.entry(vm.payload().head()).or_insert(vm);
+                // Byzantine duplicates (multiple payloads per id) resolve
+                // first-loaded-wins — the same policy for commits and
+                // fragments, in both the crossover and slow paths.
+                let mut commit_by_id: Map<CommitId, VerifiedMeta<LooseCommit>> = Map::new();
+                for vm in verified_commits {
+                    commit_by_id.entry(vm.payload().head()).or_insert(vm);
+                }
+                let mut fragment_by_id: Map<CommitId, VerifiedMeta<Fragment>> = Map::new();
+                for vm in verified_fragments {
+                    fragment_by_id.entry(vm.payload().head()).or_insert(vm);
+                }
+
+                // Build the resident tree from the data we just loaded
+                // (reusing the fetcher reads above — no second storage
+                // round-trip).
+                let loose_commits: Vec<_> = commit_by_id
+                    .values()
+                    .map(|vm| vm.payload().clone())
+                    .collect();
+                let fragments: Vec<_> = fragment_by_id
+                    .values()
+                    .map(|vm| vm.payload().clone())
+                    .collect();
+
+                // Only install into the cache when there is actual stored
+                // data.
+                //
+                // Caching an empty tree for a never-stored id would make a
+                // later `get_or_hydrate(id)` return `Some(empty)` instead of
+                // `None`, corrupting the exists-vs-nonexistent contract
+                // eviction relies on — and would let any authorized peer
+                // pollute the cache by requesting arbitrary ids
+                // (`get_fetcher` gates on policy, not existence). When there
+                // is no data we diff against an ephemeral empty tree and
+                // cache nothing; the response correctly advertises no local
+                // items.
+                //
+                // The read handle adopts a concurrently-installed value
+                // if one appeared and records an LRU access; the built tree
+                // is already minimal, so it is wrapped clean.
+                let loaded = if loose_commits.is_empty() && fragments.is_empty() {
+                    None
+                } else {
+                    let built =
+                        Sedimentree::new(fragments, loose_commits).minimize(&self.depth_metric);
+                    Some(MinimizedSedimentree::already_minimal(built))
+                };
+                let Some(adopted) = read.install(loaded, |tree| tree.clone()).await else {
+                    crate::spawn::yield_once().await;
+                    continue;
+                };
+                let mut sedimentree = adopted.unwrap_or_default();
+
+                // The wire diff requires the minimal form. A freshly built
+                // value is already minimal, but an adopted
+                // concurrently-installed value may be dirty, so minimize once
+                // here.
+                let diff = ResponderDiff::new(
+                    sedimentree.minimized(&self.depth_metric),
+                    their_fingerprints,
+                );
+
+                let commits = diff
+                    .local_commit_ids
+                    .iter()
+                    .filter_map(|commit_id| commit_by_id.get(commit_id))
+                    .map(|vm| (vm.signed().clone(), vm.blob().clone()))
+                    .collect();
+                let fragments = diff
+                    .local_fragment_ids
+                    .iter()
+                    .filter_map(|fragment_id| fragment_by_id.get(fragment_id))
+                    .map(|vm| (vm.signed().clone(), vm.blob().clone()))
+                    .collect();
+
+                break (diff, commits, fragments);
             }
-            let mut fragment_by_id: Map<CommitId, VerifiedMeta<Fragment>> = Map::new();
-            for vm in verified_fragments {
-                fragment_by_id.entry(vm.payload().head()).or_insert(vm);
-            }
-
-            // Build the resident tree from the data we just loaded
-            // (reusing the fetcher reads above — no second storage
-            // round-trip).
-            let loose_commits: Vec<_> = commit_by_id
-                .values()
-                .map(|vm| vm.payload().clone())
-                .collect();
-            let fragments: Vec<_> = fragment_by_id
-                .values()
-                .map(|vm| vm.payload().clone())
-                .collect();
-
-            // Only install into the cache when there is actual stored
-            // data.
-            //
-            // Caching an empty tree for a never-stored id would make a
-            // later `get_or_hydrate(id)` return `Some(empty)` instead of
-            // `None`, corrupting the exists-vs-nonexistent contract
-            // eviction relies on — and would let any authorized peer
-            // pollute the cache by requesting arbitrary ids
-            // (`get_fetcher` gates on policy, not existence). When there
-            // is no data we diff against an ephemeral empty tree and
-            // cache nothing; the response correctly advertises no local
-            // items.
-            //
-            // `get_or_insert_with` adopts a concurrently-installed value
-            // if one appeared and records an LRU access; the built tree
-            // is already minimal, so it is wrapped clean.
-            let mut sedimentree = if loose_commits.is_empty() && fragments.is_empty() {
-                MinimizedSedimentree::already_minimal(Sedimentree::default())
-            } else {
-                let built = Sedimentree::new(fragments, loose_commits).minimize(&self.depth_metric);
-                self.sedimentrees
-                    .get_or_insert_with(id, || MinimizedSedimentree::already_minimal(built))
-                    .await
-            };
-
-            // The wire diff requires the minimal form. A freshly built
-            // value is already minimal, but an adopted
-            // concurrently-installed value may be dirty, so minimize once
-            // here.
-            let diff = ResponderDiff::new(
-                sedimentree.minimized(&self.depth_metric),
-                their_fingerprints,
-            );
-
-            let commits = diff
-                .local_commit_ids
-                .iter()
-                .filter_map(|commit_id| commit_by_id.get(commit_id))
-                .map(|vm| (vm.signed().clone(), vm.blob().clone()))
-                .collect();
-            let fragments = diff
-                .local_fragment_ids
-                .iter()
-                .filter_map(|fragment_id| fragment_by_id.get(fragment_id))
-                .map(|vm| (vm.signed().clone(), vm.blob().clone()))
-                .collect();
-
-            (diff, commits, fragments)
         };
 
         let ResponderDiff {
@@ -1150,7 +1163,7 @@ impl<
         &self,
         putter: &Putter<Async, Store>,
         verified_meta: VerifiedMeta<LooseCommit>,
-    ) -> Result<bool, Store::Error> {
+    ) -> Result<bool, crate::storage::mutation::MutationError<Store::Error>> {
         ingest::insert_commit_locally(&self.sedimentrees, putter, verified_meta).await
     }
 
@@ -1158,7 +1171,7 @@ impl<
         &self,
         putter: &Putter<Async, Store>,
         verified_meta: VerifiedMeta<Fragment>,
-    ) -> Result<bool, Store::Error> {
+    ) -> Result<bool, crate::storage::mutation::MutationError<Store::Error>> {
         ingest::insert_fragment_locally(&self.sedimentrees, putter, verified_meta).await
     }
 
@@ -1177,7 +1190,7 @@ impl<
         match ingest::heads_or_hydrate(&self.sedimentrees, &self.storage, &self.depth_metric, id)
             .await
         {
-            Ok(heads) => heads,
+            Ok(heads) => heads.unwrap_or_default(),
             Err(e) => {
                 tracing::warn!(tree = ?id, error = %e, "heads_for: hydration failed");
                 Vec::new()

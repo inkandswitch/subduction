@@ -13,31 +13,18 @@
 //!
 //! # Soundness rule
 //!
-//! `remote.commit_fingerprints` is a union of three populations:
-//!
-//!   - **Fragment head** on remote → remote holds head, checkpoints,
-//!     and boundaries (sound up to the boundary horizon).
-//!   - **Fragment boundary** on remote → remote holds the boundary
-//!     commit, but **not** its parents (boundary is the horizon).
-//!   - **Loose-commit head** on remote → no transitive guarantee
-//!     about parents at all.
-//!
-//! Only fragment heads carry a transitive guarantee, and only down to
-//! their boundaries. The pruning treats a local commit/fragment as a
-//! walk root iff its head appears in `remote.fragment_fingerprints`,
-//! walks the local loose-commit DAG in both directions from each
-//! root, and stops at any non-root commit whose fingerprint is in
-//! `remote.commit_fingerprints` (a boundary horizon, or a loose-commit
-//! head we can't extend through).
+//! `remote.commit_fingerprints` advertises held loose commits and fragment
+//! heads, not excluded boundaries. Ancestry pruning requires a shared
+//! fragment: its head is in `remote.fragment_fingerprints`, and its metadata
+//! is available locally. Each walk follows parents and stops before covering
+//! that fragment's boundaries. A matching loose head alone is insufficient
+//! because the wire summary does not tell us where the fragment stops.
 //!
 //! # Bandwidth trade-off
 //!
-//! When one peer has the fragment metadata and the other has neither
-//! the fragment nor a matching head, the pruning falls back to "send
-//! everything in `local_only_commits`" — duplicates that the receiver
-//! has via the fragment blob. The cost is bounded by the fragment's
-//! member count and is one-time: after the next sync both peers have
-//! the fragment.
+//! Without local metadata for a remote fragment, send all unadvertised
+//! loose commits, even if some are already in the remote's fragment blob.
+//! This trades redundant sends for correctness without changing the wire format.
 
 #![allow(
     clippy::byte_char_slices,
@@ -72,7 +59,7 @@ fn commit_id(seed: u8) -> CommitId {
 fn loose(head: u8, parents: &[u8]) -> LooseCommit {
     let blob_meta = BlobMeta::new(&Blob::new(vec![head; 16]));
     let parent_set: BTreeSet<CommitId> = parents.iter().copied().map(commit_id).collect();
-    LooseCommit::new(sed_id(), commit_id(head), parent_set, blob_meta)
+    LooseCommit::new(sed_id(), commit_id(head), parent_set, blob_meta).expect("valid metadata")
 }
 
 fn fragment(head: u8, boundary: &[u8], checkpoints: &[u8], blob_bytes: u8) -> Fragment {
@@ -86,6 +73,7 @@ fn fragment(head: u8, boundary: &[u8], checkpoints: &[u8], blob_bytes: u8) -> Fr
         &checkpoint_vec,
         blob_meta,
     )
+    .expect("valid metadata")
 }
 
 fn seed() -> FingerprintSeed {
@@ -230,7 +218,7 @@ fn shared_fragment_with_loose_commits_diff_is_empty() {
 /// checkpoints={B,C}). Remote has only the fragment (no loose
 /// commits). B and C fall inside F's range and get pruned because
 /// the walk from D (matched fragment head) stops at boundary A
-/// (which is in `remote.commit_fingerprints`).
+/// (known from the shared fragment's local metadata).
 #[test]
 fn fragment_aware_walk_prunes_commits_inside_fragment_range() {
     let a = loose(b'A', &[]);
@@ -246,11 +234,10 @@ fn fragment_aware_walk_prunes_commits_inside_fragment_range() {
     let remote_summary = remote.fingerprint_summarize(&seed());
     let diff = server.diff_remote_fingerprints(&remote_summary);
 
-    // A is in remote.commit_fingerprints (boundary), so it's already
-    // not in `local_only_commits` after the first filter. D is in
-    // there too (head). B and C are only excluded if the fragment-aware
-    // walk reaches them.
+    // D is advertised as held. B and C are excluded only if the walk
+    // reaches them. A is an excluded boundary and must still be sent.
     let ids: BTreeSet<CommitId> = diff.local_only_commits.iter().map(|(id, _)| **id).collect();
+    assert!(ids.contains(&commit_id(b'A')));
     assert!(
         !ids.contains(&commit_id(b'B')),
         "B is inside fragment range (head=D, boundary=A); walk from D \
@@ -267,9 +254,8 @@ fn fragment_aware_walk_prunes_commits_inside_fragment_range() {
 /// has fragment F + loose B. P is older than the fragment boundary
 /// so the remote doesn't have it. P must be sent.
 ///
-/// The walk from H stops at B (which is in
-/// `remote.commit_fingerprints` as the fragment boundary), so P is
-/// never marked covered.
+/// The walk from H stops at B using the shared fragment's metadata.
+/// Even though remote holds loose B, its parent P is not covered.
 #[test]
 fn does_not_prune_commit_past_fragment_boundary() {
     let p = loose(b'P', &[]);
@@ -291,15 +277,10 @@ fn does_not_prune_commit_past_fragment_boundary() {
     );
 }
 
-/// Asymmetric fragment with local matching the head: even though the
-/// local doesn't have the fragment object, it has a loose commit D
-/// whose head equals the remote's fragment head. The fragment-aware
-/// walk uses D as a root, traverses through C → B and stops at A
-/// (which is the remote's fragment boundary, in
-/// `remote.commit_fingerprints`). Optimization preserved without
-/// requiring the local to hold the fragment metadata.
+/// A matching loose head D does not reveal the remote fragment's boundary.
+/// Without local fragment metadata, send A, B and C conservatively.
 #[test]
-fn asymmetric_fragment_optimization_via_matching_local_head() {
+fn asymmetric_fragment_matching_loose_head_sends_conservatively() {
     let a = loose(b'A', &[]);
     let b = loose(b'B', &[b'A']);
     let c = loose(b'C', &[b'B']);
@@ -315,10 +296,12 @@ fn asymmetric_fragment_optimization_via_matching_local_head() {
     let diff = local.diff_remote_fingerprints(&remote_summary);
 
     assert_eq!(
-        diff.local_only_commits.len(),
-        0,
-        "local's loose D matches the remote's fragment head; the walk \
-         covers B and C en route to boundary A — no duplicate sends"
+        diff.local_only_commits
+            .iter()
+            .map(|(id, _)| **id)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([commit_id(b'A'), commit_id(b'B'), commit_id(b'C')]),
+        "a matching loose head alone does not justify pruning its ancestors"
     );
 }
 
@@ -349,5 +332,120 @@ fn asymmetric_fragment_no_matching_head_does_send_duplicates() {
         "no walk root (local has neither fragment F nor a loose commit \
          with head=D); local sends B and/or C as duplicates that the \
          remote already has via the fragment"
+    );
+}
+
+// ============================================================================
+// Descendants beyond a fragment's head are not covered and must be sent.
+// ============================================================================
+
+fn sent(server: &Sedimentree, requester: &Sedimentree) -> BTreeSet<CommitId> {
+    let summary = requester.fingerprint_summarize(&seed());
+    let diff = server.diff_remote_fingerprints(&summary);
+    diff.local_only_commits.iter().map(|(id, _)| **id).collect()
+}
+
+/// Linear A → B → C → D → E (oldest → newest). The requester holds
+/// fragment F(head=D, boundary={A}, checkpoints={B,C}) and nothing newer.
+/// The server holds the same history as loose commits, plus E, a new
+/// commit on top of D. E must be sent.
+#[test]
+fn sends_commit_built_on_remote_fragment_head() {
+    let frag = fragment(b'D', &[b'A'], &[b'B', b'C'], 1);
+    let server = Sedimentree::new(
+        Vec::new(),
+        vec![
+            loose(b'A', &[]),
+            loose(b'B', &[b'A']),
+            loose(b'C', &[b'B']),
+            loose(b'D', &[b'C']),
+            loose(b'E', &[b'D']),
+        ],
+    );
+    let requester = Sedimentree::new(vec![frag], Vec::new());
+
+    let ids = sent(&server, &requester);
+    assert!(
+        ids.contains(&commit_id(b'E')),
+        "E is newer than the requester's fragment and the requester does \
+         not have it, so it must be sent; got {ids:?}"
+    );
+}
+
+/// The same, when the server also holds the fragment, and the new work is
+/// a chain of two commits. Both must be sent.
+#[test]
+fn sends_chain_built_on_shared_fragment_head() {
+    let frag = fragment(b'D', &[b'A'], &[b'B', b'C'], 1);
+    let server = Sedimentree::new(
+        vec![frag.clone()],
+        vec![
+            loose(b'A', &[]),
+            loose(b'B', &[b'A']),
+            loose(b'C', &[b'B']),
+            loose(b'D', &[b'C']),
+            loose(b'E', &[b'D']),
+            loose(b'G', &[b'E']),
+        ],
+    );
+    let requester = Sedimentree::new(vec![frag], Vec::new());
+
+    let ids = sent(&server, &requester);
+    assert!(
+        ids.contains(&commit_id(b'E')) && ids.contains(&commit_id(b'G')),
+        "E and G are newer than the shared fragment and the requester has \
+         neither, so both must be sent; got {ids:?}"
+    );
+}
+
+/// Control: the requester holds the fragment and loose E; the server holds
+/// the history plus E and G. G is missing and must be sent even though E
+/// is already advertised. Without fragment metadata, duplicates are allowed.
+#[test]
+fn sends_commit_beyond_one_the_requester_has() {
+    let frag = fragment(b'D', &[b'A'], &[b'B', b'C'], 1);
+    let server = Sedimentree::new(
+        Vec::new(),
+        vec![
+            loose(b'A', &[]),
+            loose(b'B', &[b'A']),
+            loose(b'C', &[b'B']),
+            loose(b'D', &[b'C']),
+            loose(b'E', &[b'D']),
+            loose(b'G', &[b'E']),
+        ],
+    );
+    let requester = Sedimentree::new(vec![frag], vec![loose(b'E', &[b'D'])]);
+
+    let ids = sent(&server, &requester);
+    assert!(
+        ids.contains(&commit_id(b'G')),
+        "G is newer than everything the requester has, so it must be sent; \
+         got {ids:?}"
+    );
+}
+
+/// A → B → C → D is covered by the requester's fragment, but a sibling
+/// branch E built on B is not. Walking children from B would incorrectly
+/// cross into E even if children of the fragment head D were skipped.
+#[test]
+fn sends_sibling_branch_outside_remote_fragment() {
+    let frag = fragment(b'D', &[b'A'], &[b'B', b'C'], 1);
+    let server = Sedimentree::new(
+        vec![frag.clone()],
+        vec![
+            loose(b'A', &[]),
+            loose(b'B', &[b'A']),
+            loose(b'C', &[b'B']),
+            loose(b'D', &[b'C']),
+            loose(b'E', &[b'B']),
+        ],
+    );
+    let requester = Sedimentree::new(vec![frag], Vec::new());
+
+    assert_eq!(
+        sent(&server, &requester),
+        BTreeSet::from([commit_id(b'A'), commit_id(b'E')]),
+        "send the boundary and sibling branch, but not fragment members"
     );
 }

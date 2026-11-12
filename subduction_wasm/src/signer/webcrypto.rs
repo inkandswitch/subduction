@@ -17,8 +17,6 @@ use subduction_crypto::signer::Signer;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
-use crate::peer_id::WasmPeerId;
-
 /// Get the `SubtleCrypto` object from the global scope.
 ///
 /// Works in both window and Web Worker contexts.
@@ -74,7 +72,7 @@ const KEY_ID: &str = "default";
 /// const signer = await WebCryptoSigner.setup();
 /// console.log("Peer ID:", signer.peerId().toString());
 /// ```
-#[wasm_bindgen(js_name = WebCryptoSigner)]
+#[wasm_bindgen(js_name = WebCryptoSigner, private, skip_typescript)]
 #[derive(Debug)]
 pub struct WebCryptoSigner {
     private_key: web_sys::CryptoKey,
@@ -281,21 +279,6 @@ impl WebCryptoSigner {
     #[must_use]
     pub fn verifying_key(&self) -> Uint8Array {
         Uint8Array::from(self.public_key_bytes.as_slice())
-    }
-
-    /// Get the peer ID derived from this signer's verifying key.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the stored public key bytes are invalid (should never happen).
-    #[wasm_bindgen(js_name = peerId)]
-    #[must_use]
-    #[allow(clippy::expect_used)]
-    pub fn peer_id(&self) -> WasmPeerId {
-        let vk = VerifyingKey::from_bytes(&self.public_key_bytes).expect(
-            "WebCryptoSigner::peer_id: stored public key bytes are not a valid Ed25519 key",
-        );
-        WasmPeerId::from(subduction_core::peer::id::PeerId::from(vk))
     }
 }
 

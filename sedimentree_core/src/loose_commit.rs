@@ -32,12 +32,8 @@ use crate::{
 /// # Wire Format Limits
 ///
 /// The parent count is encoded as a `u8`, limiting commits to **255 parents**.
-/// This is sufficient for any realistic workload — hitting this limit would require
-/// 255+ peers making concurrent changes without seeing each other's updates.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct LooseCommit {
     sedimentree_id: SedimentreeId,
     head: CommitId,
@@ -45,21 +41,43 @@ pub struct LooseCommit {
     blob_meta: BlobMeta,
 }
 
+/// Maximum number of unique parents representable by the wire format.
+pub const MAX_PARENTS: usize = u8::MAX as usize;
+
+/// A commit's metadata exceeds a wire-format count limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum InvalidLooseCommit {
+    /// The parent count must fit in one byte.
+    #[error("expected at most {MAX_PARENTS} unique parents, got {actual}")]
+    TooManyParents {
+        /// Number of unique parents supplied.
+        actual: usize,
+    },
+}
+
 impl LooseCommit {
     /// Constructor for a [`LooseCommit`].
-    #[must_use]
-    pub const fn new(
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidLooseCommit`] if there are more than [`MAX_PARENTS`] parents.
+    pub fn new(
         sedimentree_id: SedimentreeId,
         head: CommitId,
         parents: BTreeSet<CommitId>,
         blob_meta: BlobMeta,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, InvalidLooseCommit> {
+        if parents.len() > MAX_PARENTS {
+            return Err(InvalidLooseCommit::TooManyParents {
+                actual: parents.len(),
+            });
+        }
+        Ok(Self {
             sedimentree_id,
             head,
             parents,
             blob_meta,
-        }
+        })
     }
 
     /// The user-supplied identifier for this commit.
@@ -89,13 +107,60 @@ impl LooseCommit {
 
 impl HasBlobMeta for LooseCommit {
     type Args = (SedimentreeId, CommitId, BTreeSet<CommitId>);
+    type Error = InvalidLooseCommit;
 
     fn blob_meta(&self) -> BlobMeta {
         self.blob_meta
     }
 
-    fn from_args((sedimentree_id, head, parents): Self::Args, blob_meta: BlobMeta) -> Self {
+    fn from_args(
+        (sedimentree_id, head, parents): Self::Args,
+        blob_meta: BlobMeta,
+    ) -> Result<Self, Self::Error> {
         Self::new(sedimentree_id, head, parents, blob_meta)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for LooseCommit {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        #[serde(rename = "LooseCommit")]
+        struct Fields {
+            sedimentree_id: SedimentreeId,
+            head: CommitId,
+            parents: BTreeSet<CommitId>,
+            blob_meta: BlobMeta,
+        }
+        let fields = Fields::deserialize(deserializer)?;
+        Self::new(
+            fields.sedimentree_id,
+            fields.head,
+            fields.parents,
+            fields.blob_meta,
+        )
+        .map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(feature = "arbitrary")]
+impl<'a> arbitrary::Arbitrary<'a> for LooseCommit {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        Self::new(
+            u.arbitrary()?,
+            u.arbitrary()?,
+            u.arbitrary()?,
+            u.arbitrary()?,
+        )
+        .map_err(|_| arbitrary::Error::IncorrectFormat)
+    }
+}
+
+#[cfg(feature = "bolero")]
+impl bolero::generator::TypeGenerator for LooseCommit {
+    fn generate<D: bolero::Driver>(driver: &mut D) -> Option<Self> {
+        use bolero::generator::ValueGenerator;
+        bolero::generator::gen_arbitrary::<Self>().generate(driver)
     }
 }
 
@@ -116,13 +181,19 @@ impl Schema for LooseCommit {
 }
 
 impl EncodeFields for LooseCommit {
+    #[allow(
+        clippy::expect_used,
+        reason = "all construction paths validate the parent count"
+    )]
     fn encode_fields(&self, buf: &mut Vec<u8>) {
         encode::array(self.sedimentree_id.as_bytes(), buf);
         encode::array(self.head.as_bytes(), buf);
         encode::array(self.blob_meta().digest().as_bytes(), buf);
 
-        #[allow(clippy::cast_possible_truncation)]
-        encode::u8(self.parents().len() as u8, buf);
+        encode::u8(
+            u8::try_from(self.parents().len()).expect("validated parent count"),
+            buf,
+        );
 
         bijoux::u64::encode(self.blob_meta().size_bytes(), buf);
 
@@ -141,6 +212,10 @@ impl EncodeFields for LooseCommit {
 impl DecodeFields for LooseCommit {
     const MIN_SIGNED_SIZE: usize = CODEC_MIN_SIZE;
 
+    #[allow(
+        clippy::expect_used,
+        reason = "decoded u8 count cannot exceed the constructor limit"
+    )]
     fn try_decode_fields(buf: &[u8]) -> Result<(Self, usize), DecodeError> {
         if buf.len() < CODEC_MIN_FIELDS_SIZE {
             return Err(DecodeError::MessageTooShort {
@@ -196,7 +271,8 @@ impl DecodeFields for LooseCommit {
         let blob_meta = BlobMeta::from_digest_size(blob_digest, blob_size);
 
         Ok((
-            LooseCommit::new(sedimentree_id, head, parents, blob_meta),
+            LooseCommit::new(sedimentree_id, head, parents, blob_meta)
+                .expect("decoded parent count fits u8"),
             offset,
         ))
     }

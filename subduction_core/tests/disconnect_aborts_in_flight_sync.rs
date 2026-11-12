@@ -116,6 +116,53 @@ async fn connect_pair(
 const LONG_PER_CALL_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(60_000);
 const BOUND: Duration = Duration::from_secs(3);
 
+/// Removing one physical connection must cancel its mux even if another
+/// connection to the same peer remains, then permit fallback to that connection.
+#[tokio::test(flavor = "current_thread")]
+async fn disconnect_one_of_two_connections_cancels_only_its_pending_calls() -> TestResult {
+    let a_signer = make_signer(41);
+    let b_signer = make_signer(42);
+    let a = make_node(a_signer.clone());
+    let b = make_node(b_signer.clone());
+    let peer_b = PeerId::from(b_signer.verifying_key());
+    let (_first_a, first_b) = connect_pair(&a, &a_signer, &b, &b_signer).await?;
+    let first = single_conn(&a, peer_b).await;
+    let (_second_a, _second_b) = connect_pair(&a, &a_signer, &b, &b_signer).await?;
+    let id = SedimentreeId::new([43; 32]);
+    b.store_commits_batch(
+        id,
+        vec![(
+            CommitId::new([44; 32]),
+            BTreeSet::new(),
+            Blob::new(b"two connections".to_vec()),
+        )],
+    )
+    .await?;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    first_b.pause();
+    let syncing = a.clone();
+    let sync = tokio::spawn(async move {
+        syncing
+            .sync_with_peer(&peer_b, id, false, LONG_PER_CALL_TIMEOUT)
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    a.disconnect(&first).await?;
+    let (success, _, errors) = tokio::time::timeout(BOUND, sync).await???;
+    assert!(
+        success,
+        "must fall back to the still-live physical connection"
+    );
+    assert!(matches!(
+        errors.first().map(|e| &e.1),
+        Some(CallError::ResponseDropped)
+    ));
+    assert_eq!(a.mux_count(&peer_b).await, 1);
+    a.shutdown();
+    b.shutdown();
+    Ok(())
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn disconnect_from_peer_cancels_in_flight_sync_with_all_peers() -> TestResult {
     let a_signer = make_signer(10);

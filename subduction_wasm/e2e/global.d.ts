@@ -1,4 +1,4 @@
-import type * as Subduction from "../pkg/subduction_wasm";
+import type * as Subduction from "../dist/wrapper/index";
 
 declare global {
   interface Window {

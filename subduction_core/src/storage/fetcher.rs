@@ -25,6 +25,7 @@ use super::traits::Storage;
 pub struct Fetcher<Async: FutureForm, Store: Storage<Async>> {
     storage: Arc<Store>,
     sedimentree_id: SedimentreeId,
+    coordination: super::state::TreeCoordination,
     _marker: PhantomData<Async>,
 }
 
@@ -32,18 +33,41 @@ impl<Async: FutureForm, Store: Storage<Async>> Fetcher<Async, Store> {
     /// Create a new fetcher capability.
     ///
     /// This should only be called after authorization has been verified.
-    pub(super) const fn new(storage: Arc<Store>, sedimentree_id: SedimentreeId) -> Self {
+    pub(super) const fn new(
+        storage: Arc<Store>,
+        sedimentree_id: SedimentreeId,
+        coordination: super::state::TreeCoordination,
+    ) -> Self {
         Self {
             storage,
             sedimentree_id,
+            coordination,
             _marker: PhantomData,
         }
+    }
+
+    /// Coordinate storage reads with writes and deletes for this tree.
+    /// This is internal bookkeeping, not permission to mutate storage.
+    pub(crate) const fn coordination(&self) -> &super::state::TreeCoordination {
+        &self.coordination
+    }
+
+    pub(crate) fn storage(&self) -> &Store {
+        &self.storage
     }
 
     /// Get the sedimentree ID this capability grants access to.
     #[must_use]
     pub const fn sedimentree_id(&self) -> SedimentreeId {
         self.sedimentree_id
+    }
+
+    /// Whether this sedimentree is registered in storage, including an
+    /// explicitly registered empty tree. This is a single-key lookup, not
+    /// a hydration scan.
+    #[must_use]
+    pub fn contains_sedimentree_id(&self) -> Async::Future<'_, Result<bool, Store::Error>> {
+        self.storage.contains_sedimentree_id(self.sedimentree_id)
     }
 
     // ==================== Commits ====================
@@ -124,6 +148,7 @@ impl<Async: FutureForm, Store: Storage<Async>> Clone for Fetcher<Async, Store> {
         Self {
             storage: self.storage.clone(),
             sedimentree_id: self.sedimentree_id,
+            coordination: self.coordination.clone(),
             _marker: PhantomData,
         }
     }

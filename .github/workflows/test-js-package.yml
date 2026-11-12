@@ -1,0 +1,58 @@
+name: Test JS package
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-js-package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-script:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Test scripts/js-release.py
+        run: python3 scripts/test_js_release.py
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+
+      - name: Test package smoke checker
+        run: node --test scripts/check-js-package.test.mjs
+
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - automerge-subduction-js
+          - sedimentree-js
+          - subduction-js
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
+
+      # Exercise exactly the derivation used by the release workflow, including
+      # smoke tests of the packed release/debug entrypoints, not the Wasm suite.
+      - name: Build and smoke-test the npm package with Nix
+        env:
+          FLAKE_OUTPUT: ${{ matrix.package }}
+        run: nix build ".#$FLAKE_OUTPUT" --no-update-lock-file --print-build-logs

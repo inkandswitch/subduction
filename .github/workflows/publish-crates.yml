@@ -1,0 +1,119 @@
+name: Publish crates
+
+# Pushing `<crate>-v<version>` at a commit on main releases that crate. A run
+# publishes every crate tagged at its commit that crates.io does not have yet,
+# in dependency order, after cargo-semver-checks and `crates-io` environment
+# approval. Each `run:` step is one command; release logic lives in
+# `cargo xtask crates` (xtask/).
+#
+# setup-rust-toolchain's cache is off in every job: caches are writable from
+# other workflows, and `publish` holds a crates.io token. The semver job, which
+# holds no token, keeps cargo-semver-checks' own baseline cache; a poisoned
+# cache could at worst make that check pass.
+
+on:
+  push:
+    tags:
+      - '*-v[0-9]*'
+      - '!*-js-v*'
+
+permissions:
+  contents: read
+
+# Tags pushed together at one commit share a group. While one run waits for
+# approval, a newer run for the same commit queues behind it; a still newer one
+# replaces that queued run. Each run plans every tag at the commit, so nothing
+# replaced is lost.
+concurrency:
+  group: publish-crates-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RELEASE_TAG: ${{ github.ref_name }}
+
+jobs:
+  plan:
+    if: github.repository == 'inkandswitch/subduction'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      publish: ${{ steps.plan.outputs.publish }}
+      packages: ${{ steps.plan.outputs.packages }}
+    steps:
+      # Full history and all tags: for the main check and `git tag --points-at`.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Require a commit merged to main
+        run: git merge-base --is-ancestor HEAD origin/main
+
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+
+      - name: Check Cargo.lock and internal dependency requirements
+        run: cargo xtask crates validate
+
+      - name: Plan the release
+        id: plan
+        run: cargo xtask crates plan "$RELEASE_TAG"
+
+  semver:
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      # Fails if a planned crate's version bump is too small for its API
+      # changes since its latest crates.io release. The action always installs
+      # the latest cargo-semver-checks, which needs a newer rustc than
+      # rust-toolchain.toml pins, so it uses current stable.
+      - name: Check semver against crates.io
+        uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2.9
+        with:
+          rust-toolchain: stable
+          package: ${{ needs.plan.outputs.packages }}
+
+  publish:
+    needs: [plan, semver]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: crates-io
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+
+      # Build the release tool before the crates.io token exists, so xtask's
+      # own build scripts never see CARGO_REGISTRY_TOKEN. `cargo publish` still
+      # builds each published crate, and its dependencies, with the token set.
+      - name: Build the release tool
+        run: cargo build --locked --package xtask
+
+      - name: Get a short-lived crates.io token (trusted publishing)
+        id: auth
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
+      # Publishes only the crates the approved plan listed. Skips versions
+      # already on crates.io, so re-running finishes a partial release.
+      - name: Publish the planned crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          PACKAGES: ${{ needs.plan.outputs.packages }}
+        run: cargo xtask crates publish "$RELEASE_TAG" --only "$PACKAGES"

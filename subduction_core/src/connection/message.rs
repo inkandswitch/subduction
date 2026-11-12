@@ -1167,6 +1167,7 @@ fn read_bijou64_as_usize(buf: &[u8], offset: &mut usize) -> Result<usize, Decode
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, reason = "bounded test fixtures")]
 mod tests {
     use super::*;
     use alloc::vec;
@@ -1190,7 +1191,8 @@ mod tests {
                 CommitId::new([0x42; 32]),
                 BTreeSet::new(),
                 sedimentree_core::blob::BlobMeta::new(&blob),
-            );
+            )
+            .expect("valid metadata");
             let signed_commit = Signed::seal::<Sendable, _>(&signer, commit)
                 .await
                 .into_signed();
@@ -1214,7 +1216,8 @@ mod tests {
                 BTreeSet::new(),
                 &[],
                 sedimentree_core::blob::BlobMeta::new(&blob),
-            );
+            )
+            .expect("valid metadata");
             let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment)
                 .await
                 .into_signed();
@@ -1289,9 +1292,10 @@ mod tests {
                 BTreeSet::new(),
                 sedimentree_core::blob::BlobMeta::new(&blob),
             );
-            let signed_commit = Signed::seal::<Sendable, _>(&signer, commit)
-                .await
-                .into_signed();
+            let signed_commit =
+                Signed::seal::<Sendable, _>(&signer, commit.expect("valid metadata"))
+                    .await
+                    .into_signed();
             let msg = SyncMessage::LooseCommit {
                 id,
                 commit: signed_commit,
@@ -1313,9 +1317,10 @@ mod tests {
                 &[],
                 sedimentree_core::blob::BlobMeta::new(&blob),
             );
-            let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment)
-                .await
-                .into_signed();
+            let signed_fragment =
+                Signed::seal::<Sendable, _>(&signer, fragment.expect("valid metadata"))
+                    .await
+                    .into_signed();
             let msg = SyncMessage::Fragment {
                 id,
                 fragment: signed_fragment,
@@ -1413,9 +1418,10 @@ mod tests {
                 BTreeSet::new(),
                 sedimentree_core::blob::BlobMeta::new(&blob),
             );
-            let signed_commit = Signed::seal::<Sendable, _>(&signer, commit)
-                .await
-                .into_signed();
+            let signed_commit =
+                Signed::seal::<Sendable, _>(&signer, commit.expect("valid metadata"))
+                    .await
+                    .into_signed();
             let msg = SyncMessage::LooseCommit {
                 id,
                 commit: signed_commit,
@@ -1437,9 +1443,10 @@ mod tests {
                 &[],
                 sedimentree_core::blob::BlobMeta::new(&blob),
             );
-            let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment)
-                .await
-                .into_signed();
+            let signed_fragment =
+                Signed::seal::<Sendable, _>(&signer, fragment.expect("valid metadata"))
+                    .await
+                    .into_signed();
             let msg = SyncMessage::Fragment {
                 id,
                 fragment: signed_fragment,

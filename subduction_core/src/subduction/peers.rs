@@ -69,7 +69,7 @@ pub(crate) async fn get_authorized_subscriber_conns<
     Auth: StoragePolicy<Async>,
 >(
     subscriptions: &Mutex<Map<SedimentreeId, Set<PeerId>>>,
-    storage: &StoragePowerbox<Store, Auth>,
+    storage: &StoragePowerbox<Store, Auth, Async>,
     connections: &Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>,
     sedimentree_id: SedimentreeId,
     exclude_peer: &PeerId,
@@ -242,7 +242,8 @@ mod tests {
             CommitId::new([head; 32]),
             alloc::collections::BTreeSet::default(),
             BlobMeta::new(&blob),
-        );
+        )
+        .expect("valid metadata");
         let signed = futures::executor::block_on(Signed::seal::<Sendable, _>(
             &MemorySigner::from_bytes(&[7u8; 32]),
             commit,
@@ -275,6 +276,7 @@ mod tests {
                 let ingested = Ingested {
                     commits: pool[..n_items].to_vec(),
                     fragments: Vec::new(),
+                    ..Ingested::default()
                 };
                 let conns: Vec<Authenticated<MockConnection, Sendable>> = peers
                     .iter()

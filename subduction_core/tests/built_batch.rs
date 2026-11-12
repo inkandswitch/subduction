@@ -5,6 +5,8 @@
 //! - happy path with mixed commits + fragments stores everything
 //! - blob-mismatch is rejected as `WriteError::Io(IoError::BlobMismatch(_))`
 
+#![allow(clippy::expect_used, reason = "bounded test fixtures")]
+
 use std::collections::BTreeSet;
 
 use sedimentree_core::{
@@ -29,7 +31,8 @@ fn make_blob(seed: u8) -> Blob {
 fn make_commit(id: SedimentreeId, head: u8, blob_seed: u8) -> (LooseCommit, Blob) {
     let blob = make_blob(blob_seed);
     let blob_meta = BlobMeta::new(&blob);
-    let commit = LooseCommit::new(id, CommitId::new([head; 32]), BTreeSet::new(), blob_meta);
+    let commit = LooseCommit::new(id, CommitId::new([head; 32]), BTreeSet::new(), blob_meta)
+        .expect("valid metadata");
     (commit, blob)
 }
 
@@ -44,7 +47,7 @@ fn make_fragment(
     let blob_meta = BlobMeta::new(&blob);
     let head = CommitId::new([head; 32]);
     let boundary = BTreeSet::from([CommitId::new([boundary_byte; 32])]);
-    let fragment = Fragment::new(id, head, boundary, &[], blob_meta);
+    let fragment = Fragment::new(id, head, boundary, &[], blob_meta).expect("valid metadata");
     (fragment, blob)
 }
 
@@ -123,7 +126,8 @@ async fn store_built_batch_rejects_mismatched_commit_blob() -> TestResult {
         CommitId::new([0xC1u8; 32]),
         BTreeSet::new(),
         blob_meta,
-    );
+    )
+    .expect("valid metadata");
     let actual = make_blob(0xBB); // different bytes -> different digest
 
     let result = sd
@@ -153,7 +157,7 @@ async fn store_built_batch_rejects_mismatched_fragment_blob() -> TestResult {
     let blob_meta = BlobMeta::new(&claimed);
     let head = CommitId::new([0xF1u8; 32]);
     let boundary = BTreeSet::from([CommitId::new([0xF2u8; 32])]);
-    let fragment = Fragment::new(sed_id, head, boundary, &[], blob_meta);
+    let fragment = Fragment::new(sed_id, head, boundary, &[], blob_meta).expect("valid metadata");
     let actual = make_blob(0xDD);
 
     let result = sd

@@ -10,6 +10,33 @@
 //! Sedimentree tracks just enough metadata to allow efficient diffing and synchronization
 //! of these fragments.
 //!
+//! # Wire-format validity
+//!
+//! Commit and fragment metadata must fit the counts encoded by the wire format:
+//!
+//! | Metadata | Count encoding | Maximum unique entries |
+//! | --- | --- | --- |
+//! | Commit parents | `u8` | [`255`](loose_commit::MAX_PARENTS) |
+//! | Fragment boundary IDs | `u8` | [`255`](fragment::MAX_BOUNDARIES) |
+//! | Fragment checkpoints | `u16` | [`65,535`](fragment::MAX_CHECKPOINTS) |
+//!
+//! Counts apply to deduplicated sets. Full checkpoint IDs are first truncated to
+//! 12-byte prefixes, then deduplicated; IDs sharing a prefix count as one checkpoint.
+//! This normalization only affects transport metadata, never opaque blob bytes.
+//!
+//! [`LooseCommit::new`](loose_commit::LooseCommit::new),
+//! [`Fragment::new`](fragment::Fragment::new), and
+//! [`Fragment::from_parts`](fragment::Fragment::from_parts) reject oversized sets
+//! with [`InvalidLooseCommit`](loose_commit::InvalidLooseCommit) or
+//! [`InvalidFragment`](fragment::InvalidFragment). Serde deserialization and
+//! [`HasBlobMeta::from_args`](blob::has_meta::HasBlobMeta::from_args) enforce the
+//! same limits, so successfully constructed values have representable wire counts.
+//!
+//! Wire-format validity does not establish application-level validity. In
+//! particular, it does not verify that a fragment describes the claimed history
+//! or belongs at the claimed depth. The application remains responsible for
+//! interpreting and validating its opaque payloads.
+//!
 //! [Sedimentree]: https://github.com/inkandswitch/keyhive/blob/main/design/sedimentree.md
 
 #![cfg_attr(not(feature = "std"), no_std)]

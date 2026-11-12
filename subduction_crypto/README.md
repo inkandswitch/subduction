@@ -58,8 +58,17 @@ When _authoring_ locally, `VerifiedMeta::seal` takes the blob and computes its m
 ```rust
 let verified_blob = VerifiedBlobMeta::new(blob);
 let verified: VerifiedMeta<LooseCommit> =
-    VerifiedMeta::seal(&signer, (digest, parents), verified_blob).await;
+    VerifiedMeta::seal(&signer, (tree_id, head, parents), verified_blob).await?;
 ```
+
+Commit and fragment metadata must fit Sedimentree's wire format: parent and
+boundary counts use `u8` (at most 255 unique entries), and checkpoint counts use
+`u16` (at most 65,535 unique 12-byte prefixes). Counts are checked after
+truncating full checkpoint IDs and deduplicating the metadata sets; blob bytes
+are unchanged. See [wire-count validation](../sedimentree_core/README.md#wire-count-validation).
+
+`seal` returns the payload's construction error if these limits are exceeded,
+before signing anything.
 
 When _receiving_ from a peer, `VerifiedMeta::new` validates that the claimed metadata matches the actual blob:
 

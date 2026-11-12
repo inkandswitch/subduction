@@ -48,7 +48,7 @@ const WIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Everything on `rx` up to the response for `sentinel`.
 ///
-/// The hub answers every `BatchSyncRequest`, so subscribing to an unrelated
+/// The hub answers every `BatchSyncRequest`, so querying an unrelated
 /// tree and reading until its response arrives flushes the wire: whatever the
 /// hub was going to send about the tree under test is already in `frames`.
 /// A timer would only guess at that.
@@ -57,8 +57,13 @@ async fn drain_until_answered(
     peer: PeerId,
     sentinel: SedimentreeId,
 ) -> Vec<SyncMessage> {
+    // A non-subscribing sentinel never starts an upstream fetch of its own.
+    let mut request = subscribe_request(peer, sentinel);
+    if let SyncMessage::BatchSyncRequest(req) = &mut request {
+        req.subscribe = false;
+    }
     mock.inbound_tx
-        .send(subscribe_request(peer, sentinel))
+        .send(request)
         .await
         .expect("mock inbound is open");
 
@@ -126,9 +131,10 @@ async fn subscribe_is_not_forwarded_to_other_downstreams() -> TestResult {
     // The hub dials U, so propagation has somewhere legitimate to go. Without
     // it there would be nothing to wait *for*, and the assertion below would
     // pass on any machine slow enough.
-    let _up = attach_mock(&hub, up_peer, Direction::Dialed).await;
+    let up = attach_mock(&hub, up_peer, Direction::Dialed).await;
     let x = SedimentreeId::new([9u8; 32]);
     let a_requests = answer_and_count(a, x);
+    let _up_requests = answer_and_count(up, x);
 
     b.inbound_tx.send(subscribe_request(b_peer, x)).await?;
     assert!(
@@ -155,8 +161,8 @@ async fn subscribe_is_not_forwarded_to_other_downstreams() -> TestResult {
     );
     assert_eq!(
         hub.get_subscribers(x).await,
-        BTreeSet::from([b_peer]).into_iter().collect(),
-        "only B asked for X"
+        BTreeSet::from([b_peer, up_peer]).into_iter().collect(),
+        "B subscribed, and the upstream has a mutual subscription"
     );
     Ok(())
 }
@@ -261,9 +267,9 @@ async fn client_does_not_receive_documents_it_never_asked_for() -> TestResult {
     Ok(())
 }
 
-/// A relay forwards data it learns *as a requester*. Here R pulls X from
-/// its dialed upstream B (via propagation of A's subscribe) and must push
-/// it to A, who subscribed to R, without A opening another sync round.
+/// A relay returns data it learns *as a requester*. Here R pulls X from
+/// its dialed upstream B (via propagation of A's subscribe) and includes
+/// it in A's initial response, without A opening another sync round.
 ///
 /// ```text
 ///   A ──dials──▸ R ──dials──▸ B (holds X)
@@ -281,13 +287,13 @@ async fn relay_forwards_data_it_pulled_from_upstream() -> TestResult {
     b.store_commit(x, make_head(1), BTreeSet::new(), make_blob(1))
         .await?;
 
-    // A asks R for X. R has nothing, propagates upstream to B, pulls X in
-    // the response, and must forward it to A.
-    a.sync_with_peer(&r_peer, x, true, SYNC_TIMEOUT).await?;
-    assert!(wait_until(|| has(&r, x)).await, "R should pull X from B");
+    // The initial response must include X, not complete empty and push later.
+    let (success, _, _) = a.sync_with_peer(&r_peer, x, true, SYNC_TIMEOUT).await?;
+    assert!(success);
+    assert!(has(&r, x).await, "R should pull X from B");
     assert!(
-        wait_until(|| has(&a, x)).await,
-        "R must forward to A what it pulled from B; A has {:?}",
+        has(&a, x).await,
+        "R's response must include what it pulled from B; A has {:?}",
         a.get_commits(x).await.map(|c| c.len())
     );
     Ok(())
@@ -305,9 +311,15 @@ async fn duplicate_items_in_a_response_are_pushed_once() -> TestResult {
     let up = attach_mock(&hub, up_peer, Direction::Dialed).await;
     let x = SedimentreeId::new([9u8; 32]);
 
+    // Keep this a push-path test: a locally present tree is answered before
+    // background propagation, so B is subscribed when U's data arrives.
+    hub.store_commit(x, make_head(2), BTreeSet::new(), make_blob(2))
+        .await?;
+
     // U answers the hub's propagated request with commit C, listed twice.
     let blob = make_blob(1);
-    let commit = LooseCommit::new(x, make_head(1), BTreeSet::new(), BlobMeta::new(&blob));
+    let commit = LooseCommit::new(x, make_head(1), BTreeSet::new(), BlobMeta::new(&blob))
+        .expect("valid metadata");
     let signed = Signed::seal::<Sendable, _>(&make_signer(200), commit)
         .await
         .into_signed();
@@ -341,7 +353,7 @@ async fn duplicate_items_in_a_response_are_pushed_once() -> TestResult {
     // Wait for the hub to have ingested U's response, then drain B's wire
     // until quiet and count LooseCommit frames.
     assert!(
-        wait_until(|| async { hub.get_commits(x).await.is_some() }).await,
+        wait_until(|| async { hub.get_commits(x).await.map(|c| c.len()) == Some(2) }).await,
         "hub should ingest U's response"
     );
     let frames = drain_until_answered(&b, b_peer, SedimentreeId::new([0xEE; 32])).await;
@@ -355,8 +367,8 @@ async fn duplicate_items_in_a_response_are_pushed_once() -> TestResult {
     );
     assert_eq!(
         hub.get_commits(x).await.map(|c| c.len()),
-        Some(1),
-        "the hub stores the commit once"
+        Some(2),
+        "the hub stores each commit once"
     );
     Ok(())
 }
@@ -381,14 +393,15 @@ async fn relay_forwards_fragments_it_pulled_from_upstream() -> TestResult {
     )
     .await?;
 
-    a.sync_with_peer(&r_peer, x, true, SYNC_TIMEOUT).await?;
+    let (success, _, _) = a.sync_with_peer(&r_peer, x, true, SYNC_TIMEOUT).await?;
+    assert!(success);
     assert!(
-        wait_until(|| has_fragment(&r, x)).await,
+        has_fragment(&r, x).await,
         "R should pull the fragment from B"
     );
     assert!(
-        wait_until(|| has_fragment(&a, x)).await,
-        "R must forward the fragment to A"
+        has_fragment(&a, x).await,
+        "R's response must include the fragment"
     );
     Ok(())
 }
@@ -404,9 +417,12 @@ async fn already_known_items_are_not_re_pushed() -> TestResult {
     let b = attach_mock(&hub, b_peer, Direction::Accepted).await;
     let up = attach_mock(&hub, up_peer, Direction::Dialed).await;
     let x = SedimentreeId::new([12u8; 32]);
+    hub.store_commit(x, make_head(2), BTreeSet::new(), make_blob(2))
+        .await?;
 
     let blob = make_blob(1);
-    let commit = LooseCommit::new(x, make_head(1), BTreeSet::new(), BlobMeta::new(&blob));
+    let commit = LooseCommit::new(x, make_head(1), BTreeSet::new(), BlobMeta::new(&blob))
+        .expect("valid metadata");
     let signed = Signed::seal::<Sendable, _>(&make_signer(201), commit)
         .await
         .into_signed();
@@ -443,7 +459,7 @@ async fn already_known_items_are_not_re_pushed() -> TestResult {
 
     // First pull: B subscribes, hub propagates to U, gets X, pushes to B.
     b.inbound_tx.send(subscribe_request(b_peer, x)).await?;
-    assert!(wait_until(|| async { hub.get_commits(x).await.is_some() }).await);
+    assert!(wait_until(|| async { hub.get_commits(x).await.map(|c| c.len()) == Some(2) }).await);
     assert_eq!(pushes(0xE1).await, 1, "first pull pushes X to B once");
 
     // Second pull: the hub asks U again and gets the same X back.

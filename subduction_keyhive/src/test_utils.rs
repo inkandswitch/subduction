@@ -8,11 +8,8 @@ use async_lock::Mutex;
 use future_form::Local;
 use futures::{FutureExt, future::LocalBoxFuture};
 use keyhive_core::{
-    access::Access,
-    keyhive::Keyhive,
-    listener::no_listener::NoListener,
-    principal::{group::id::GroupId, membered::Membered},
-    store::ciphertext::memory::MemoryCiphertextStore,
+    access::Access, keyhive::Keyhive, listener::no_listener::NoListener,
+    principal::group::id::GroupId, store::ciphertext::memory::MemoryCiphertextStore,
 };
 use keyhive_crypto::signer::memory::MemorySigner;
 use rand::rngs::OsRng;
@@ -153,7 +150,7 @@ pub async fn make_protocol_with_shared_keyhive(
 ) {
     let peer_id = keyhive_peer_id(&keyhive);
     let cc = keyhive
-        .contact_card()
+        .generate_contact_card()
         .await
         .expect("failed to get contact card");
     let storage = MemoryKeyhiveStorage::new();
@@ -279,10 +276,13 @@ pub async fn exchange_contact_cards_and_setup() -> TwoPeerHarness {
 
     // Exchange contact cards at the keyhive level
     let alice_cc = alice_keyhive
-        .contact_card()
+        .generate_contact_card()
         .await
         .expect("alice contact card");
-    let bob_cc = bob_keyhive.contact_card().await.expect("bob contact card");
+    let bob_cc = bob_keyhive
+        .generate_contact_card()
+        .await
+        .expect("bob contact card");
     alice_keyhive
         .receive_contact_card(&bob_cc)
         .await
@@ -321,7 +321,7 @@ pub async fn exchange_contact_cards_and_setup() -> TwoPeerHarness {
 pub async fn exchange_all_contact_cards(keyhives: &[&SimpleKeyhive]) {
     let mut cards = Vec::new();
     for kh in keyhives {
-        cards.push(kh.contact_card().await.expect("contact_card"));
+        cards.push(kh.generate_contact_card().await.expect("contact_card"));
     }
     for (i, kh) in keyhives.iter().enumerate() {
         for (j, cc) in cards.iter().enumerate() {
@@ -339,19 +339,12 @@ pub async fn create_group_with_read_members(
     kh: &SimpleKeyhive,
     member_ids: &[&KeyhivePeerId],
 ) -> GroupId {
-    let group = kh.generate_group(vec![]).await.expect("generate_group");
-    let group_id = group.lock().await.group_id();
+    let group_id = kh.generate_group(vec![]).await.expect("generate_group");
     for member_id in member_ids {
         let identifier = member_id.to_identifier().expect("to_identifier");
-        let agent = kh.get_agent(identifier).await.expect("get_agent");
-        kh.add_member(
-            agent,
-            &Membered::Group(group_id, group.clone()),
-            Access::Read,
-            &[],
-        )
-        .await
-        .expect("add_member");
+        kh.add_member(identifier, group_id, Access::Read, &[])
+            .await
+            .expect("add_member");
     }
     group_id
 }

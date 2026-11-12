@@ -455,8 +455,15 @@ impl<T> FragmentState<T> {
     }
 
     /// Converts into a [`Fragment`] with the given [`BlobMeta`].
-    #[must_use]
-    pub fn to_fragment(self, sedimentree_id: SedimentreeId, blob_meta: BlobMeta) -> Fragment {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if normalized boundary or checkpoint counts exceed wire limits.
+    pub fn to_fragment(
+        self,
+        sedimentree_id: SedimentreeId,
+        blob_meta: BlobMeta,
+    ) -> Result<Fragment, crate::fragment::InvalidFragment> {
         let checkpoints: Vec<_> = self.checkpoints.iter().copied().collect();
         Fragment::new(
             sedimentree_id,
