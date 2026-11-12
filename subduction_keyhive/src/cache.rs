@@ -14,18 +14,10 @@ use alloc::{
 };
 
 use dupe::Dupe;
-use keyhive_content::{
-    reference::ContentRef,
-    store::{CiphertextStore, CiphertextStoreExt},
-};
-use keyhive_core::{
-    content::heads::ContentHeads, keyhive::Keyhive, listener::membership::MembershipListener,
-};
-use keyhive_crypto::signer::async_signer::AsyncSigner;
-use keyline::contract::Keyline;
 
 use crate::{
     KeyhivePeerId, KeyhiveProtocol, ProtocolError,
+    access::KeyhiveAccess,
     connection::KeyhiveConnection,
     message::{AgentHashMap, EventHash},
     storage::KeyhiveStorage,
@@ -49,7 +41,7 @@ pub(crate) struct PeriodicEventCache {
     /// The public set materialized as an `AgentHashMap`.
     public_map: Arc<AgentHashMap>,
 
-    /// Hash -> `Arc`-shared bincode event bytes. Monotonic growth across
+    /// Hash -> `Arc`-shared encoded event bytes. Monotonic growth across
     /// refreshes. Events are immutable, so entries are never invalidated.
     /// Served responses clone the `Arc`s, not the bytes, so concurrent
     /// responses share this one copy.
@@ -73,26 +65,26 @@ impl PeriodicEventCache {
     }
 
     /// Whether the cache has no agent entries and no public hashes.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "test-utils"))]
     pub(crate) fn is_empty(&self) -> bool {
         self.agent_hashes.is_empty() && self.public_hashes.is_empty()
     }
 
     /// Total number of tracked agents (excluding the public agent,
     /// which lives in its own field).
-    #[cfg(test)]
+    #[cfg(all(test, feature = "test-utils"))]
     pub(crate) fn agent_count(&self) -> usize {
         self.agent_hashes.len()
     }
 
     /// Cached hashes accessible to the public agent.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "test-utils"))]
     pub(crate) const fn public_hashes(&self) -> &BTreeSet<EventHash> {
         &self.public_hashes
     }
 
     /// Last observed keyhive total-ops count.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "test-utils"))]
     pub(crate) const fn last_total_ops(&self) -> Option<u64> {
         self.last_total_ops
     }
@@ -145,52 +137,20 @@ impl PeriodicEventCache {
     ///
     /// # Errors
     ///
-    /// Returns [`ProtocolError`] if event serialization fails.
-    pub(crate) async fn refresh<
-        Signer,
-        CRef,
-        Plaintext,
-        CipherStore,
-        Listener,
-        Rng,
-        KeylineStore,
-        Conn,
-        Store,
-        Async,
-    >(
+    /// Returns [`ProtocolError`] if keyhive cannot count or list its events.
+    pub(crate) async fn refresh<K, Conn, Store, Async>(
         &mut self,
-        protocol: &KeyhiveProtocol<
-            Signer,
-            CRef,
-            Plaintext,
-            CipherStore,
-            Listener,
-            Rng,
-            KeylineStore,
-            Conn,
-            Store,
-            Async,
-        >,
+        protocol: &KeyhiveProtocol<K, Conn, Store, Async>,
     ) -> Result<bool, ProtocolError<Conn::SendError>>
     where
-        Signer: AsyncSigner<Async> + Clone,
-        CRef: ContentRef,
-        Plaintext: keyhive_codec::traits::Decode,
-        CipherStore: CiphertextStore<Async, CRef, Plaintext>
-            + CiphertextStoreExt<Async, CRef, Plaintext>
-            + Clone,
-        Listener: MembershipListener<Async, CRef>,
-        Rng: rand::CryptoRng + rand::RngCore,
-        KeylineStore: Keyline<Async, RetentionWatermark = ContentHeads<CRef>>,
-        KeylineStore::Error: Send + Sync + 'static,
+        K: KeyhiveAccess<Async> + Dupe,
         Conn: KeyhiveConnection<Async>,
         Conn::SendError: 'static,
         Conn::DisconnectError: 'static,
         Store: KeyhiveStorage<Async>,
         Async: future_form::FutureForm,
-        Keyhive<Async, Signer, CRef, Plaintext, CipherStore, Listener, Rng, KeylineStore>: Dupe,
     {
-        let total = protocol.total_ops().await;
+        let total = protocol.total_ops().await?;
         if self.last_total_ops == Some(total) {
             return Ok(false);
         }

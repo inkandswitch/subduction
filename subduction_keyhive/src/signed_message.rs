@@ -14,7 +14,6 @@ use crate::peer_id::KeyhivePeerId;
 use alloc::string::ToString;
 #[cfg(all(feature = "serde", feature = "std"))]
 use keyhive_codec::traits::Decode;
-use keyhive_core::contact_card::ContactCard;
 #[cfg(all(feature = "serde", feature = "std"))]
 use keyhive_crypto::{bytes::Bytes, verified::Signed};
 
@@ -46,13 +45,14 @@ impl std::error::Error for CborError {}
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SignedMessage {
-    /// Contact card sent alongside this message (introduces the sender to
-    /// the recipient when the recipient hasn't seen them before).
+    /// The `KH` frame of a contact card sent alongside this message
+    /// (introduces the sender to the recipient when the recipient hasn't seen
+    /// them before).
     #[cfg_attr(
         all(feature = "serde", feature = "std"),
         serde(rename = "contactCard", with = "contact_card_serde")
     )]
-    contact_card: Option<ContactCard>,
+    contact_card: Option<Vec<u8>>,
 
     /// The `KH` frame of a `Signed<Bytes>`.
     #[cfg_attr(feature = "serde", serde(with = "serde_bytes"))]
@@ -61,35 +61,27 @@ pub struct SignedMessage {
 
 #[cfg(all(feature = "serde", feature = "std"))]
 mod contact_card_serde {
-    //! Maps `Option<ContactCard>` to a CBOR byte string: the card's `KH`
-    //! frame, or empty for `None`.
-    use alloc::{string::ToString, vec::Vec};
-    use keyhive_core::contact_card::ContactCard;
+    //! Maps `Option<Vec<u8>>` to a CBOR byte string: the card's `KH` frame,
+    //! or empty for `None`.
+    use alloc::vec::Vec;
     use serde::{Deserializer, Serializer};
 
     #[allow(clippy::ref_option)]
     pub(super) fn serialize<S: Serializer>(
-        value: &Option<ContactCard>,
+        value: &Option<Vec<u8>>,
         ser: S,
     ) -> Result<S::Ok, S::Error> {
-        let bytes = value
-            .as_ref()
-            .map(ContactCard::to_bytes)
-            .unwrap_or_default();
-        ser.serialize_bytes(&bytes)
+        ser.serialize_bytes(value.as_deref().unwrap_or_default())
     }
 
     pub(super) fn deserialize<'de, D: Deserializer<'de>>(
         de: D,
-    ) -> Result<Option<ContactCard>, D::Error> {
+    ) -> Result<Option<Vec<u8>>, D::Error> {
         let bytes: Vec<u8> = serde_bytes::deserialize(de)?;
         if bytes.is_empty() {
-            Ok(None)
-        } else {
-            ContactCard::from_bytes(&bytes)
-                .map(Some)
-                .map_err(|e| serde::de::Error::custom(e.to_string()))
+            return Ok(None);
         }
+        Ok(Some(bytes))
     }
 }
 
@@ -111,9 +103,9 @@ impl SignedMessage {
         }
     }
 
-    /// Create a new signed message with a contact card.
+    /// Create a new signed message with a contact card's `KH` frame.
     #[must_use]
-    pub const fn with_contact_card(signed: Vec<u8>, contact_card: ContactCard) -> Self {
+    pub const fn with_contact_card(signed: Vec<u8>, contact_card: Vec<u8>) -> Self {
         Self {
             contact_card: Some(contact_card),
             signed,
@@ -166,10 +158,9 @@ impl SignedMessage {
 
     /// Get a mutable reference to the signed bytes (for testing tamper scenarios).
     ///
-    /// Only used from `protocol`'s tamper-detection tests; `protocol` itself
-    /// is `serde`-gated, so this method matches that gate to stay alive only
-    /// when there's actually a caller.
-    #[cfg(all(test, feature = "serde"))]
+    /// Only used from `protocol`'s tamper-detection tests, so it has the same
+    /// gate as they do.
+    #[cfg(all(test, feature = "test-utils"))]
     pub(crate) const fn signed_bytes_mut(&mut self) -> &mut Vec<u8> {
         &mut self.signed
     }
@@ -208,9 +199,9 @@ pub struct VerifiedMessage {
     /// The verified payload bytes.
     pub payload: Vec<u8>,
 
-    /// The contact card, if included.
+    /// The contact card's `KH` frame, if included.
     #[cfg(all(feature = "serde", feature = "std"))]
-    pub contact_card: Option<ContactCard>,
+    pub contact_card: Option<Vec<u8>>,
 }
 
 impl VerifiedMessage {
@@ -220,7 +211,7 @@ impl VerifiedMessage {
     pub const fn new(
         sender_id: KeyhivePeerId,
         payload: Vec<u8>,
-        contact_card: Option<ContactCard>,
+        contact_card: Option<Vec<u8>>,
     ) -> Self {
         Self {
             sender_id,
@@ -237,50 +228,14 @@ mod tests {
     use super::*;
 
     #[cfg(all(feature = "serde", feature = "std"))]
-    fn fake_contact_card() -> ContactCard {
-        // Build a real ContactCard by spinning up a small keyhive in a
-        // current-thread runtime so the test stays sync.
-        use keyhive_content::store::memory::MemoryCiphertextStore;
-        use keyhive_core::{keyhive::Keyhive, listener::no_listener::NoListener};
-        use keyhive_crypto::signer::memory::MemorySigner;
-
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .expect("runtime");
-        rt.block_on(async {
-            let signer = MemorySigner::generate(&mut rand::rngs::OsRng);
-            let kh: keyhive_core::keyhive::Keyhive<
-                future_form::Local,
-                MemorySigner,
-                [u8; 32],
-                Vec<u8>,
-                MemoryCiphertextStore<[u8; 32], Vec<u8>>,
-                NoListener,
-                rand::rngs::OsRng,
-                crate::test_utils::TestKeyline,
-            > = Keyhive::generate(
-                signer,
-                MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),
-                NoListener,
-                crate::test_utils::TestKeyline::new(),
-                rand::rngs::OsRng,
-            )
-            .await
-            .expect("keyhive");
-            kh.generate_contact_card().await.expect("contact card")
-        })
-    }
-
-    #[cfg(all(feature = "serde", feature = "std"))]
     #[test]
-    fn cbor_roundtrip_preserves_contact_card_as_its_frame() {
-        let cc = fake_contact_card();
-        let msg = SignedMessage::with_contact_card(vec![1, 2, 3, 4], cc.clone());
+    fn cbor_roundtrip_preserves_contact_card_bytes() {
+        let card = vec![0x4b, 0x48, 0x50, 0x00, 7];
+        let msg = SignedMessage::with_contact_card(vec![1, 2, 3, 4], card.clone());
         let cbor = msg.to_cbor().expect("serialize");
         let decoded = SignedMessage::from_cbor(&cbor).expect("deserialize");
 
-        let recovered = decoded.contact_card.as_ref().expect("contact card present");
-        assert_eq!(recovered.to_bytes(), cc.to_bytes());
+        assert_eq!(decoded.contact_card, Some(card));
     }
 
     #[cfg(all(feature = "serde", feature = "std"))]

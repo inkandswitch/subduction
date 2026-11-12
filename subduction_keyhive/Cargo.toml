@@ -25,11 +25,11 @@ future_form = { workspace = true }
 subduction_core = { workspace = true }
 subduction_crypto = { workspace = true, optional = true }
 dhat = { workspace = true, optional = true }
-keyhive_core = { workspace = true }
+keyhive_core = { workspace = true, optional = true }
 keyhive_crypto = { workspace = true, features = ["std"] }
 keyhive_codec = { workspace = true, features = ["std"] }
-keyhive_content = { workspace = true, features = ["std"] }
-keyline = { workspace = true, features = ["std"] }
+keyhive_content = { workspace = true, optional = true, features = ["std"] }
+keyline = { workspace = true, optional = true, features = ["std"] }
 keyline_memory = { workspace = true, optional = true, features = ["std"] }
 sedimentree_core = { workspace = true }
 rand = "0.8.5"
@@ -47,14 +47,18 @@ handler = [
   "dep:async-channel",
   "dep:keyline_memory",
   "dep:subduction_crypto",
+  "native",
   "std",
 ]
+# Implements the protocol's keyhive traits for `keyhive_core`'s `Keyhive`.
+native = ["dep:keyhive_content", "dep:keyhive_core", "dep:keyline"]
 runtime = ["handler", "serde", "dep:tokio", "dep:tokio-util"]
 serde = ["dep:serde", "dep:serde_bytes", "dep:dupe", "std"]
 std = ["thiserror/std"]
 test-utils = [
   "dep:async-channel",
   "dep:keyline_memory",
+  "native",
   "serde",
   "subduction_core/test_utils",
 ]

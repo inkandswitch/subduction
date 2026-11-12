@@ -323,7 +323,7 @@ async fn run_with_keyhive(args: ServerArgs, token: CancellationToken) -> Result<
         Arc::clone(&shared_keyhive),
         fs_keyhive_storage,
         kh_peer_id,
-        contact_card,
+        contact_card.to_bytes(),
     ));
 
     if let Err(e) = keyhive_protocol.ingest_from_storage().await {
@@ -1182,7 +1182,7 @@ async fn handle_contact_card(
     addr: SocketAddr,
     keyhive_proto: Option<&CliKeyhiveProtocol>,
 ) {
-    let card = keyhive_proto.map(|proto| Bytes::from(proto.contact_card().to_bytes()));
+    let card = keyhive_proto.map(|proto| Bytes::copy_from_slice(proto.contact_card()));
     let service = hyper::service::service_fn(move |req| {
         let card = card
             .clone()

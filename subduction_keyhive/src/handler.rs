@@ -258,7 +258,9 @@ use crate::{
 };
 
 use keyhive_content::store::memory::MemoryCiphertextStore;
-use keyhive_core::{content::heads::ContentHeads, listener::no_listener::NoListener};
+use keyhive_core::{
+    content::heads::ContentHeads, keyhive::Keyhive, listener::no_listener::NoListener,
+};
 use keyhive_crypto::signer::memory::MemorySigner;
 use keyline_memory::MemoryKeyline;
 
@@ -271,13 +273,16 @@ pub type RuntimeKeyline = MemoryKeyline<ContentHeads<ChangeId>>;
 /// concrete types, generic only over
 /// the connection and storage backends.
 pub type SendableRuntimeProtocol<Conn, Store> = crate::KeyhiveProtocol<
-    MemorySigner,
-    ChangeId,
-    Vec<u8>,
-    MemoryCiphertextStore<ChangeId, Vec<u8>>,
-    NoListener,
-    OsRng,
-    RuntimeKeyline,
+    Keyhive<
+        future_form::Sendable,
+        MemorySigner,
+        ChangeId,
+        Vec<u8>,
+        MemoryCiphertextStore<ChangeId, Vec<u8>>,
+        NoListener,
+        OsRng,
+        RuntimeKeyline,
+    >,
     Conn,
     Store,
     future_form::Sendable,
@@ -355,6 +360,7 @@ where
                 .handle_message(&kh_peer, signed_msg, Some(adapter))
                 .await
                 .map_err(|e| HandleError::Protocol(e.to_string()))
+                .map(|_outcome| ())
         })
     }
 

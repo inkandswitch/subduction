@@ -1,0 +1,109 @@
+{
+  "name": "@automerge/subduction-keyhive",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Subduction's keyhive sync protocol over a separately loaded @keyhive/keyhive (Wasm bindings)",
+  "keywords": [
+    "keyhive",
+    "subduction",
+    "wasm"
+  ],
+  "author": "Ink & Switch",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/inkandswitch/subduction",
+    "directory": "subduction_keyhive_wasm"
+  },
+  "type": "module",
+  "main": "./dist/wrapper/cjs/node.cjs",
+  "module": "./dist/wrapper/esm/bundler.js",
+  "types": "./dist/wrapper/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/wrapper/index.d.ts",
+      "workerd": {
+        "import": "./dist/wrapper/esm/workerd.js",
+        "require": "./dist/wrapper/cjs/web.cjs"
+      },
+      "node": {
+        "import": "./dist/wrapper/esm/node.js",
+        "require": "./dist/wrapper/cjs/node.cjs"
+      },
+      "browser": {
+        "import": "./dist/wrapper/esm/bundler.js",
+        "require": "./dist/wrapper/cjs/web.cjs"
+      },
+      "import": "./dist/wrapper/esm/web.js",
+      "require": "./dist/wrapper/cjs/web.cjs"
+    },
+    "./slim": {
+      "types": "./dist/wrapper/slim.d.ts",
+      "import": "./dist/wrapper/esm/slim.js",
+      "require": "./dist/wrapper/cjs/slim.cjs"
+    },
+    "./wasm": "./dist/subduction-keyhive.wasm",
+    "./wasm-base64": {
+      "import": "./dist/esm/wasm-base64.js",
+      "require": "./dist/cjs/wasm-base64.cjs"
+    },
+    "./iife": "./dist/wrapper/iife/index.js"
+  },
+  "imports": {
+    "#wasm-bodge/bindings": {
+      "types": "./dist/index.d.ts",
+      "workerd": {
+        "import": "./dist/esm/workerd.js",
+        "require": "./dist/cjs/web.cjs"
+      },
+      "node": {
+        "import": "./dist/esm/node.js",
+        "require": "./dist/cjs/node.cjs"
+      },
+      "browser": {
+        "import": "./dist/esm/bundler.js",
+        "require": "./dist/cjs/web.cjs"
+      },
+      "import": "./dist/esm/web.js",
+      "require": "./dist/cjs/web.cjs"
+    },
+    "#wasm-bodge/bindings/slim": {
+      "types": "./dist/wasm_bindgen/web/subduction_keyhive_wasm.d.ts",
+      "import": "./dist/esm/slim.js",
+      "require": "./dist/cjs/slim.cjs"
+    }
+  },
+  "sideEffects": [
+    "./dist/esm/bundler.js",
+    "./dist/esm/node.js",
+    "./dist/esm/web.js",
+    "./dist/esm/workerd.js",
+    "./dist/wrapper/esm/bundler.js",
+    "./dist/wrapper/esm/node.js",
+    "./dist/wrapper/esm/web.js",
+    "./dist/wrapper/esm/workerd.js"
+  ],
+  "wasm-bodge": {
+    "wrapper": {
+      "entry": "./js/index.ts",
+      "tsconfig": "./tsconfig.json",
+      "exposeBindings": false,
+      "externals": [
+        "@keyhive/keyhive/slim"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "wasm-bodge build --panic abort"
+  },
+  "peerDependencies": {
+    "@keyhive/keyhive": "^0.8.0"
+  },
+  "devDependencies": {
+    "@keyhive/keyhive": "^0.8.0",
+    "typescript": "^5.9.2"
+  }
+}

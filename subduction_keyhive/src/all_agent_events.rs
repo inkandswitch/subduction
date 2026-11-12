@@ -14,8 +14,8 @@ use crate::{message::EventHash, peer_id::KeyhivePeerId};
 pub struct AllAgentEvents {
     /// Per-agent reachable hash sets.
     pub agent_hashes: BTreeMap<KeyhivePeerId, BTreeSet<EventHash>>,
-    /// Bincode-serialized `StaticEvent` bytes, [`Arc`](alloc::sync::Arc)-shared
-    /// so the cache and every served response reference one copy.
+    /// Encoded event bytes, `Arc`-shared so the cache and every
+    /// served response reference one copy.
     pub event_data: BTreeMap<EventHash, Arc<[u8]>>,
 }
 

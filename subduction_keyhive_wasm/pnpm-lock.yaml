@@ -1,0 +1,32 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    devDependencies:
+      '@keyhive/keyhive':
+        specifier: ^0.8.0
+        version: 0.8.0
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+
+packages:
+
+  '@keyhive/keyhive@0.8.0':
+    resolution: {integrity: sha512-EDajTnnU53c4qAhZxBpOQT0nzXDcS3sZRXY6PfNwzjdI/uMTKZpbdDo7fGpG4Ftud5LqPb+F4HLFM+ijIAqlfQ==}
+
+  typescript@5.9.3:
+    resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
+    engines: {node: '>=14.17'}
+    hasBin: true
+
+snapshots:
+
+  '@keyhive/keyhive@0.8.0': {}
+
+  typescript@5.9.3: {}
