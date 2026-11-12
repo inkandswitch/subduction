@@ -99,7 +99,7 @@ hyper-util = { version = "0.1", default-features = false }
 js-sys = { version = "=0.3.98", default-features = false }
 keyhive_codec = { version = "0.1.0", default-features = false }
 keyhive_content = { version = "0.4.0", default-features = false }
-keyhive_core = "0.12.0"
+keyhive_core = "0.12.3"
 keyhive_crypto = { version = "0.6.0", default-features = false }
 keyline = { version = "0.4.0", default-features = false }
 keyline_memory = { version = "0.4.0", default-features = false }

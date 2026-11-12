@@ -24,6 +24,7 @@ use sedimentree_core::{
 use sedimentree_wasm::pojo as p;
 use subduction_core::{connection::stats::SyncStats, peer::id::PeerId, timeout::call::CallTimeout};
 use subduction_ephemeral::topic::Topic;
+use subduction_keyhive::SyncMode;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 
@@ -308,6 +309,22 @@ impl SubductionApi {
     }
 }
 
+/// The methods of the `KeyhiveAccess` interface.
+const KEYHIVE_ACCESS_METHODS: &[&str] = &[
+    "id",
+    "contactCard",
+    "totalOps",
+    "pendingEventHashes",
+    "isKnownAgent",
+    "eventsForAgent",
+    "allAgentEvents",
+    "signBytes",
+    "ingestEvents",
+    "receiveContactCard",
+    "toArchive",
+    "ingestArchive",
+];
+
 #[wasm_bindgen(js_class = Subduction)]
 impl SubductionApi {
     /// Construct a node from structural services and snapshotted scalar options.
@@ -362,6 +379,8 @@ impl SubductionApi {
             "ephemeralPolicy",
             "onRemoteHeads",
             "onEphemeral",
+            "keyhive",
+            "onKeyhiveOutcome",
             "defaultTimeoutMilliseconds",
         ] {
             let value = p::field(options, key)?;
@@ -373,7 +392,7 @@ impl SubductionApi {
                     "maxResidentTrees" | "defaultTimeoutMilliseconds" => {
                         p::u32_value(&value, key)?;
                     }
-                    "hashMetricOverride" | "onRemoteHeads" | "onEphemeral" => {
+                    "hashMetricOverride" | "onRemoteHeads" | "onEphemeral" | "onKeyhiveOutcome" => {
                         if !value.is_function() {
                             return Err(p::invalid(key, "expected a function"));
                         }
@@ -388,6 +407,7 @@ impl SubductionApi {
                             "filterAuthorizedFetch",
                         ],
                     )?,
+                    "keyhive" => require_methods(&value, key, KEYHIVE_ACCESS_METHODS)?,
                     "ephemeralPolicy" => require_methods(
                         &value,
                         key,
@@ -779,6 +799,30 @@ impl SubductionApi {
                 Ok(handler)
             },
             |node, handler| async move { node.register_frame_handler(handler).await },
+        )
+    }
+    /// Start a keyhive sync round with a connected peer.
+    #[wasm_bindgen(js_name = syncKeyhiveWithPeer)]
+    pub fn sync_keyhive_with_peer(&self, peer: &JsValue) -> js_sys::Promise {
+        self.admit(
+            || read_peer(peer),
+            |node, peer| async move { node.sync_keyhive_with_peer(&peer, SyncMode::Check).await },
+        )
+    }
+    /// Start a keyhive sync round with a connected peer from a full comparison.
+    #[wasm_bindgen(js_name = fullSyncKeyhiveWithPeer)]
+    pub fn full_sync_keyhive_with_peer(&self, peer: &JsValue) -> js_sys::Promise {
+        self.admit(
+            || read_peer(peer),
+            |node, peer| async move { node.sync_keyhive_with_peer(&peer, SyncMode::Full).await },
+        )
+    }
+    /// Rebuild the keyhive event cache if keyhive's op count has changed.
+    #[wasm_bindgen(js_name = refreshKeyhiveCache)]
+    pub fn refresh_keyhive_cache(&self) -> js_sys::Promise {
+        self.admit(
+            || Ok(()),
+            |node, ()| async move { node.refresh_keyhive_cache().await },
         )
     }
     /// Send opaque keyhive frame contents to a connected peer.

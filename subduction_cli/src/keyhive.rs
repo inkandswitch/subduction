@@ -1,26 +1,14 @@
 //! Keyhive setup for the CLI.
 //!
-//! CLI-specific types: filesystem storage ([`FsKeyhiveStorage`]) and
-//! connection adapter ([`CliConnKeyhiveAdapter`]).
+//! CLI-specific types: filesystem storage ([`FsKeyhiveStorage`]).
 
-use core::{
-    convert::Infallible,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use core::sync::atomic::{AtomicU64, Ordering};
 use std::{io, path::PathBuf};
 
 use future_form::Sendable;
 use futures::{FutureExt, future::BoxFuture};
 
-use subduction_core::{authenticated::Authenticated, connection::Connection};
-use subduction_keyhive::{
-    KeyhiveMessage, KeyhivePeerId, SignedMessage,
-    connection::KeyhiveConnection,
-    signed_message::CborError,
-    storage::{KeyhiveStorage, StorageHash},
-};
-
-use crate::{handler::CliConn, transport::TransportSendError, wire::CliWireMessage};
+use subduction_keyhive::storage::{KeyhiveStorage, StorageHash};
 
 /// Subdirectory of the server data dir holding keyhive state.
 pub(crate) const KEYHIVE_DIR: &str = ".keyhive";
@@ -184,58 +172,6 @@ impl KeyhiveStorage<Sendable> for FsKeyhiveStorage {
     fn delete_event(&self, hash: StorageHash) -> BoxFuture<'_, Result<(), Self::Error>> {
         let dir = self.event_dir();
         async move { Self::delete_file(dir, hash).await.map_err(Into::into) }.boxed()
-    }
-}
-
-/// Errors from [`CliConnKeyhiveAdapter::send`].
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum CliConnKeyhiveSendError {
-    /// Serializing the [`SignedMessage`] to CBOR failed.
-    #[error("serialize signed message: {0}")]
-    Serialize(#[from] CborError),
-    /// The underlying subduction transport failed to send.
-    #[error("send via cli conn: {0}")]
-    Transport(#[from] TransportSendError),
-}
-
-/// Wraps an [`Authenticated`] [`CliConn`] as a [`KeyhiveConnection`], framing
-/// outbound keyhive messages as [`CliWireMessage::Keyhive`].
-#[derive(Debug, Clone)]
-pub(crate) struct CliConnKeyhiveAdapter {
-    auth: Authenticated<CliConn, Sendable>,
-}
-
-impl CliConnKeyhiveAdapter {
-    pub(crate) const fn new(auth: Authenticated<CliConn, Sendable>) -> Self {
-        Self { auth }
-    }
-}
-
-impl KeyhiveConnection<Sendable> for CliConnKeyhiveAdapter {
-    type SendError = CliConnKeyhiveSendError;
-    type RecvError = Infallible;
-    type DisconnectError = Infallible;
-
-    fn peer_id(&self) -> KeyhivePeerId {
-        KeyhivePeerId::from_bytes(*self.auth.peer_id().as_bytes())
-    }
-
-    fn send(&self, message: SignedMessage) -> BoxFuture<'_, Result<(), Self::SendError>> {
-        async move {
-            let msg = CliWireMessage::Keyhive(KeyhiveMessage::from_signed(&message)?);
-            <CliConn as Connection<Sendable, CliWireMessage>>::send(self.auth.inner(), &msg)
-                .await?;
-            Ok(())
-        }
-        .boxed()
-    }
-
-    fn recv(&self) -> BoxFuture<'_, Result<SignedMessage, Self::RecvError>> {
-        futures::future::pending().boxed()
-    }
-
-    fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectError>> {
-        futures::future::ready(Ok(())).boxed()
     }
 }
 

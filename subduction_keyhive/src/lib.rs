@@ -15,11 +15,14 @@ static DHAT_ALLOC: dhat::Alloc = dhat::Alloc;
 
 mod collections;
 
+pub mod access;
 pub mod connection;
 pub mod error;
-#[cfg(feature = "handler")]
+#[cfg(feature = "serde")]
 pub mod handler;
 pub mod message;
+#[cfg(feature = "native")]
+pub mod native;
 pub mod peer_id;
 #[cfg(feature = "handler")]
 pub mod policy;
@@ -32,6 +35,8 @@ pub mod wire;
 #[cfg(feature = "serde")]
 pub mod all_agent_events;
 #[cfg(feature = "serde")]
+mod awaiting_confirmation;
+#[cfg(feature = "serde")]
 mod cache;
 pub mod change_id;
 #[cfg(feature = "serde")]
@@ -43,12 +48,8 @@ pub mod storage_ops;
 #[cfg(feature = "serde")]
 mod syncpoints;
 
-// `test_utils` imports from `crate::protocol`, which is `serde`-gated.
-// The `test-utils` feature already pulls in `serde` transitively, so the
-// `serde` predicate here only governs the plain `cargo test` path (no
-// explicit features), preventing `test_utils` from being compiled before
-// `protocol` exists.
-#[cfg(any(all(test, feature = "serde"), feature = "test-utils"))]
+// Tests that build `keyhive_core` keyhives need `--features test-utils`.
+#[cfg(feature = "test-utils")]
 #[allow(
     clippy::expect_used,
     clippy::indexing_slicing,
@@ -59,11 +60,14 @@ mod syncpoints;
 )]
 pub mod test_utils;
 
+pub use access::{AgentEventIndex, AgentId, ArchiveBytes, KeyhiveAccess, NotIngested, Undecodable};
 pub use connection::KeyhiveConnection;
 pub use error::StorageError;
 #[cfg(feature = "std")]
 pub use error::{ProtocolError, SigningError, VerificationError};
 pub use message::Message;
+#[cfg(feature = "native")]
+pub use native::NativeKeyhiveError;
 pub use peer_id::KeyhivePeerId;
 pub use signed_message::{SignedMessage, VerifiedMessage};
 pub use storage::{KeyhiveStorage, MemoryKeyhiveStorage, StorageHash};
@@ -72,9 +76,9 @@ pub use wire::{KEYHIVE_SCHEMA, KeyhiveMessage};
 #[cfg(feature = "serde")]
 pub use all_agent_events::AllAgentEvents;
 #[cfg(feature = "serde")]
-pub use protocol::KeyhiveProtocol;
+pub use protocol::{KeyhiveProtocol, KeyhiveProtocolError, MessageOutcome, SyncMode};
 #[cfg(feature = "serde")]
 pub use storage_ops::{
-    compact, hash_event_bytes, ingest_from_storage, load_archives, load_event_bytes, load_events,
-    save_event, save_event_bytes, save_keyhive_archive,
+    compact, hash_event_bytes, ingest_from_storage, load_archives, load_event_bytes,
+    save_event_bytes, save_keyhive_archive,
 };
