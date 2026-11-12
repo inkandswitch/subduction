@@ -235,13 +235,12 @@ async fn run_local_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
 
     let shared = Arc::new(AsyncMutex::new(keyhive));
     let policy_keyhive = Arc::clone(&shared);
-    let mut protocol =
-        KeyhiveProtocol::<_, ChangeId, Vec<u8>, _, _, _, _, Conn, Store, future_form::Local>::new(
-            shared,
-            storage,
-            peer_id,
-            contact_card,
-        );
+    let mut protocol = KeyhiveProtocol::<_, Conn, Store, future_form::Local>::new(
+        shared,
+        storage,
+        peer_id,
+        contact_card.to_bytes(),
+    );
     if config.attempt_storage_recovery {
         protocol = protocol.with_storage_recovery();
     }
@@ -267,6 +266,7 @@ async fn run_local_keyhive<C, Conn, Store, ConnAdapter, PolicySetup>(
                     .handle_message(&keyhive_peer, msg, Some(conn))
                     .await
                     .map_err(|e| e.to_string())
+                    .map(|_outcome| ())
             }
         },
         move |_peer, conn| {

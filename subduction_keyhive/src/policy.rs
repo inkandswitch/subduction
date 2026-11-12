@@ -609,7 +609,7 @@ mod tests {
     }
 
     /// The authorization rules, against a real [`Keyhive`].
-    #[cfg(feature = "serde")]
+    #[cfg(feature = "test-utils")]
     mod with_keyhive {
         use super::*;
 

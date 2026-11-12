@@ -18,8 +18,11 @@ use keyline_memory::MemoryKeyline;
 use rand::rngs::OsRng;
 
 use crate::{
-    connection::KeyhiveConnection, peer_id::KeyhivePeerId, protocol::KeyhiveProtocol,
-    signed_message::SignedMessage, storage::MemoryKeyhiveStorage,
+    connection::KeyhiveConnection,
+    peer_id::KeyhivePeerId,
+    protocol::{KeyhiveProtocol, MessageOutcome},
+    signed_message::SignedMessage,
+    storage::MemoryKeyhiveStorage,
 };
 
 #[cfg(all(feature = "runtime", feature = "test-utils"))]
@@ -139,18 +142,8 @@ pub fn keyhive_peer_id(keyhive: &SimpleKeyhive) -> KeyhivePeerId {
 }
 
 /// Type alias for the test protocol type.
-pub type TestProtocol = KeyhiveProtocol<
-    MemorySigner,
-    [u8; 32],
-    Vec<u8>,
-    MemoryCiphertextStore<[u8; 32], Vec<u8>>,
-    NoListener,
-    OsRng,
-    TestKeyline,
-    ChannelConnection,
-    MemoryKeyhiveStorage,
-    Local,
->;
+pub type TestProtocol =
+    KeyhiveProtocol<SimpleKeyhive, ChannelConnection, MemoryKeyhiveStorage, Local>;
 
 /// Create a test protocol with a shared keyhive reference.
 ///
@@ -172,7 +165,7 @@ pub async fn make_protocol_with_shared_keyhive(
         .expect("failed to get contact card");
     let storage = MemoryKeyhiveStorage::new();
     let shared = Arc::new(Mutex::new(keyhive));
-    let protocol = TestProtocol::new(shared.clone(), storage.clone(), peer_id, cc);
+    let protocol = TestProtocol::new(shared.clone(), storage.clone(), peer_id, cc.to_bytes());
     (protocol, shared, storage)
 }
 
@@ -183,6 +176,9 @@ pub async fn make_protocol_with_shared_keyhive(
 /// 2. Responder replies with `SyncResponse`
 /// 3. Initiator sends `SyncOps` (if any were requested)
 /// 4. Confirmation messages are forwarded and handled
+///
+/// Returns the outcome of handling messages at each side, as
+/// `(at_initiator, at_responder)`.
 pub async fn run_sync_round(
     initiator_proto: &TestProtocol,
     responder_proto: &TestProtocol,
@@ -190,7 +186,7 @@ pub async fn run_sync_round(
     responder_id: &KeyhivePeerId,
     initiator_conn: &ChannelConnection,
     responder_conn: &ChannelConnection,
-) {
+) -> (MessageOutcome, MessageOutcome) {
     // 1. Initiator sends SyncRequest
     initiator_proto
         .sync_keyhive(Some(responder_id))
@@ -203,7 +199,7 @@ pub async fn run_sync_round(
         .recv()
         .await
         .expect("failed to receive sync request");
-    responder_proto
+    let mut at_responder = responder_proto
         .handle_message(initiator_id, sync_request, None)
         .await
         .expect("responder failed to handle sync request");
@@ -214,7 +210,7 @@ pub async fn run_sync_round(
         .recv()
         .await
         .expect("failed to receive sync response");
-    initiator_proto
+    let mut at_initiator = initiator_proto
         .handle_message(responder_id, sync_response, None)
         .await
         .expect("initiator failed to handle sync response");
@@ -225,24 +221,36 @@ pub async fn run_sync_round(
         let mut handled = false;
 
         if let Ok(msg) = responder_conn.inbound_rx.try_recv() {
-            responder_proto
+            let outcome = responder_proto
                 .handle_message(initiator_id, msg, None)
                 .await
                 .expect("responder failed to handle message");
+            at_responder = either(at_responder, outcome);
             handled = true;
         }
 
         if let Ok(msg) = initiator_conn.inbound_rx.try_recv() {
-            initiator_proto
+            let outcome = initiator_proto
                 .handle_message(responder_id, msg, None)
                 .await
                 .expect("initiator failed to handle message");
+            at_initiator = either(at_initiator, outcome);
             handled = true;
         }
 
         if !handled {
             break;
         }
+    }
+
+    (at_initiator, at_responder)
+}
+
+/// The outcome of either of two handled messages.
+const fn either(a: MessageOutcome, b: MessageOutcome) -> MessageOutcome {
+    MessageOutcome {
+        ingested: a.ingested || b.ingested,
+        confirmed: a.confirmed || b.confirmed,
     }
 }
 

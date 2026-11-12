@@ -304,6 +304,14 @@ test('constructor validates numeric options and initial signer identity', () => 
     assert.throws(() => new Subduction({ signer: { sign() {}, verifyingKey() { throw reason; } }, storage }), e => e === reason);
 });
 
+test('keyhive methods require a keyhive option with every KeyhiveAccess method', async t => {
+    const signer = createMemorySigner(), storage = createMemoryStorage();
+    assert.throws(() => new Subduction({ signer, storage, keyhive: { id() {} } }), /contactCard/);
+    const n = node(t);
+    await assert.rejects(n.refreshKeyhiveCache(), /without a keyhive/);
+    await assert.rejects(n.syncKeyhiveWithPeer(id(1)), /without a keyhive/);
+});
+
 test('admitted custom transports are owned even when close precedes the first poll', async t => {
     const n = node(t);
     let closes = 0;

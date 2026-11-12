@@ -1,7 +1,14 @@
-//! Composed handler that dispatches wire messages to sub-handlers,
-//! forwarding keyhive-protocol frames to a registered JS handler.
+//! Composed handler that dispatches wire messages to sub-handlers. Keyhive
+//! frames go to the built-in keyhive protocol when one is configured and to
+//! a registered JS handler otherwise.
 
-use alloc::{boxed::Box, format, string::String, sync::Arc};
+use alloc::{
+    boxed::Box,
+    format,
+    rc::Rc,
+    string::{String, ToString},
+    sync::Arc,
+};
 
 use async_lock::Mutex;
 use future_form::Local;
@@ -23,6 +30,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::{
     clock::JsClock,
+    keyhive::KeyhiveSync,
     policy::{JsPolicy, ephemeral::JsEphemeralPolicy},
     remote_heads::JsRemoteHeadsObserver,
     runtime::ManagedTransport,
@@ -39,7 +47,9 @@ const TS_FRAME_HANDLER: &str = r#"
  * Handler for keyhive (SUK) protocol frames.
  *
  * Register via `Subduction.registerFrameHandler()`. The two methods
- * mirror the Rust `Handler` trait's `handle` / `on_peer_disconnect`.
+ * mirror the Rust `Handler` trait's `handle` / `on_peer_disconnect`. A
+ * Subduction constructed with a `keyhive` option handles keyhive frames
+ * itself and does not call this handler.
  */
 export interface FrameHandler {
     /** Called with the CBOR payload (no SUK envelope) for each inbound keyhive frame. */
@@ -86,10 +96,12 @@ type WasmConn = MessageTransport<ManagedTransport>;
 #[error("keyhive frame handler error: {0}")]
 pub(crate) struct WasmKeyhiveHandlerError(String);
 
-/// Keyhive frame handler that forwards decoded SUK payloads to a
-/// registered JS [`FrameHandler`](JsFrameHandler).
+/// Keyhive frame handler. It passes decoded SUK payloads to the built-in
+/// keyhive protocol if there is one and to a registered JS
+/// [`FrameHandler`](JsFrameHandler) otherwise.
 pub(crate) struct WasmKeyhiveHandler {
     handler: Arc<Mutex<Option<JsFrameHandler>>>,
+    builtin: Option<Rc<KeyhiveSync>>,
 }
 
 impl core::fmt::Debug for WasmKeyhiveHandler {
@@ -99,8 +111,11 @@ impl core::fmt::Debug for WasmKeyhiveHandler {
 }
 
 impl WasmKeyhiveHandler {
-    pub(crate) fn new(handler: Arc<Mutex<Option<JsFrameHandler>>>) -> Self {
-        Self { handler }
+    pub(crate) fn new(
+        handler: Arc<Mutex<Option<JsFrameHandler>>>,
+        builtin: Option<Rc<KeyhiveSync>>,
+    ) -> Self {
+        Self { handler, builtin }
     }
 }
 
@@ -114,6 +129,12 @@ impl Handler<Local, WasmConn> for WasmKeyhiveHandler {
         message: KeyhiveMessage,
     ) -> LocalBoxFuture<'a, Result<(), Self::HandlerError>> {
         Box::pin(async move {
+            if let Some(builtin) = &self.builtin {
+                return builtin
+                    .handle_frame(conn, message.payload())
+                    .await
+                    .map_err(|e| WasmKeyhiveHandlerError(e.to_string()));
+            }
             let guard = self.handler.lock().await;
             if let Some(ref handler) = *guard {
                 let payload = Uint8Array::from(message.payload());
@@ -128,6 +149,10 @@ impl Handler<Local, WasmConn> for WasmKeyhiveHandler {
 
     fn on_peer_disconnect(&self, peer: PeerId) -> LocalBoxFuture<'_, ()> {
         Box::pin(async move {
+            if let Some(builtin) = &self.builtin {
+                builtin.remove_peer(peer).await;
+                return;
+            }
             let guard = self.handler.lock().await;
             if let Some(ref handler) = *guard {
                 let peer_id = sedimentree_wasm::pojo::hex(peer.as_bytes());

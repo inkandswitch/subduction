@@ -188,7 +188,7 @@ impl<T: NodeTransport> Node<T> {
             Arc::new(Mutex::new(keyhive.dupe())),
             MemoryKeyhiveStorage::new(),
             keyhive_peer_id,
-            contact_card,
+            contact_card.to_bytes(),
         ));
 
         let policy = Arc::new(SubductionKeyhive::new(keyhive.dupe()));

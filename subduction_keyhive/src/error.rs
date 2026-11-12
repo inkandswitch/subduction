@@ -1,5 +1,7 @@
 //! Error types for the keyhive protocol.
 
+#[cfg(feature = "std")]
+use alloc::boxed::Box;
 use alloc::string::String;
 
 use thiserror::Error;
@@ -17,7 +19,7 @@ pub enum SigningError {
 
     /// The signing operation failed.
     #[error("signing failed")]
-    SigningFailed(#[source] keyhive_crypto::verified::SignError),
+    SigningFailed(#[source] Box<dyn core::error::Error + Send + Sync + 'static>),
 }
 
 /// Errors that can occur during message verification.
@@ -75,16 +77,16 @@ pub enum ProtocolError<SendErr: core::error::Error + 'static> {
     #[error("failed to convert peer ID")]
     InvalidIdentifier(#[source] keyhive_crypto::identifier::InvalidIdentifier),
 
-    /// A Keyhive operation failed in its Keyline store, or otherwise.
+    /// A keyhive operation failed.
     ///
-    /// Boxed so `ProtocolError` needs no type parameter for the store's
+    /// Boxed so `ProtocolError` needs no type parameter for the keyhive's
     /// error. The source chain is kept.
     #[error("keyhive operation failed")]
     Keyhive(#[source] alloc::boxed::Box<dyn core::error::Error + Send + Sync + 'static>),
 
     /// Failed to receive contact card.
     #[error("failed to receive contact card")]
-    ReceiveContactCard(#[source] keyhive_core::principal::individual::ReceivePrekeyOpError),
+    ReceiveContactCard(#[source] Box<dyn core::error::Error + Send + Sync + 'static>),
 
     /// Serialization failed.
     #[error("serialization error: {0}")]
