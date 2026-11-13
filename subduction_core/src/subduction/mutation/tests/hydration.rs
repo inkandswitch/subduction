@@ -72,7 +72,7 @@ async fn cold_minimization_leaves_other_trees_in_the_shard_accessible() {
     assert!(calls.get() > 0, "fixture must exercise minimization");
     assert_eq!(tree.fragments().count(), 1);
     assert_eq!(tree.loose_commits().count(), 0);
-    assert!(!cache.get_cloned(ID).await.expect("installed").is_dirty());
+    assert!(!cache.get_cloned(ID).await.expect("populated").is_dirty());
 
     let before = calls.get();
     let resident = ingest::get_or_hydrate(&cache, &storage, &metric, ID)
@@ -80,7 +80,7 @@ async fn cold_minimization_leaves_other_trees_in_the_shard_accessible() {
         .expect("resident read")
         .expect("exists");
     assert_eq!(resident, tree);
-    assert_eq!(calls.get(), before, "installed tree is already minimal");
+    assert_eq!(calls.get(), before, "populated tree is already minimal");
 }
 
 #[tokio::test]
@@ -92,7 +92,7 @@ async fn mutation_during_cold_minimization_forces_a_reload() {
     let metric = InspectDepth(|| {
         if first.replace(false) {
             // Deterministically interleave a partial write and invalidation
-            // between the scan and installation, while minimization runs.
+            // between the scan and populating the store, while minimization runs.
             let result = complete(
                 &cache,
                 &fetcher,
@@ -121,7 +121,7 @@ async fn mutation_during_cold_minimization_forces_a_reload() {
         1,
         "covered commit stays minimized"
     );
-    let resident = cache.get_cloned(ID).await.expect("installed");
+    let resident = cache.get_cloned(ID).await.expect("populated");
     assert_eq!(resident.tree(), &tree);
     assert!(!resident.is_dirty());
 }
@@ -148,7 +148,7 @@ async fn cold_minimization_adopts_and_minimizes_a_newer_resident_entry() {
             .now_or_never()
             .expect("mutation must not wait on the cache lock")
             .expect("write");
-            // Another reader installs the newer full history, still dirty.
+            // Another reader populates the newer full history, still dirty.
             let newer = ingest::load_tree(&fetcher)
                 .now_or_never()
                 .expect("in-memory scan is ready")
@@ -158,7 +158,7 @@ async fn cold_minimization_adopts_and_minimizes_a_newer_resident_entry() {
             cache
                 .insert_if_absent(ID, newer)
                 .now_or_never()
-                .expect("concurrent installation must not wait on the cache lock");
+                .expect("a concurrent populate must not wait on the store lock");
         }
     });
     let tree = ingest::get_or_hydrate(&cache, &storage, &metric, ID)

@@ -7,10 +7,17 @@
 //! storage read and a minimization pass to build. A [`MinimizedTreeStore`]
 //! keeps those built trees so that hot reads skip both.
 //!
-//! The stock [`memory::MemoryMinimizedTreeStore`] keeps them in this
-//! process's memory. Implement the trait to keep them elsewhere: a shared
-//! store in front of many nodes, a key-value service, or nothing at all
-//! ([`noop::NoopMinimizedTreeStore`]).
+//! Three stores ship with the crate:
+//!
+//! - [`memory::MemoryMinimizedTreeStore`] keeps trees in this process's
+//!   memory, for one node. It is the default.
+//! - [`shared::SharedMemoryMinimizedTreeStore`] keeps them in memory for
+//!   several nodes in one process, following every rule for a shared store
+//!   below. Start from it when writing a networked store.
+//! - [`noop::NoopMinimizedTreeStore`] keeps nothing.
+//!
+//! Implement the trait to keep trees elsewhere: a shared store in front of
+//! many nodes, or a key-value service.
 //!
 //! # The contract
 //!
@@ -24,7 +31,7 @@
 //! | Operation | When | What it must do |
 //! |-----------|------|-----------------|
 //! | [`get`](MinimizedTreeStore::get) | Every read | Check out the resident tree, or report a miss with the tree's current [generation] |
-//! | [`install`](MinimizedTreeStore::install) | After a miss, once the tree is rebuilt from storage | Keep the tree, unless its generation moved since the miss |
+//! | [`populate`](MinimizedTreeStore::populate) | After a miss, once the tree is rebuilt from storage | Keep the tree, unless its generation moved since the miss |
 //! | [`merge`](MinimizedTreeStore::merge) | After a successful write | Merge the new data into a resident tree, and change the generation |
 //! | [`remove`](MinimizedTreeStore::remove) | After a failed write or a deletion | Drop the tree, and change the generation |
 //!
@@ -32,9 +39,10 @@
 //!
 //! # Generations
 //!
-//! Between a reader's storage read and its `install`, another writer can
-//! change the tree. Installing the reader's copy would then hide that write.
-//! A generation lets the store detect this and reject the install:
+//! Between a reader's storage read and its `populate`, another writer can
+//! change the tree. Populating the store with the reader's copy would then
+//! hide that write. A generation lets the store detect this and reject the
+//! populate:
 //!
 //! ```text
 //! node A                                   store                 node B
@@ -42,12 +50,12 @@
 //! read storage (old)
 //!                                                                write a commit
 //!                                            (absent, g1) ◀───── merge on a miss: g0 → g1
-//! install(old, seen: g0) ──────────────────▶ Stale (g1 ≠ g0) → re-read, retry
+//! populate(old, seen: g0) ─────────────────▶ Stale (g1 ≠ g0) → re-read, retry
 //! ```
 //!
 //! Within one process, the node's own coordination already orders these
 //! steps, so a store that only one node uses can set
-//! `type Generation = ()` and always report [`Install::Current`]. Both stock
+//! `type Generation = ()` and always report [`Populate::Populated`]. Both stock
 //! stores do.
 //!
 //! # Sharing a store between nodes
@@ -57,47 +65,38 @@
 //! > rules below itself. If it does not, it **loses updates and hides
 //! > commits** that are in storage, and nothing in the node can detect it.
 //!
-//! 1. **`install` is a compare-and-set.** Checking `seen` against the
+//! 1. **`populate` is a compare-and-set.** Checking `seen` against the
 //!    current generation and writing the tree must happen as one atomic
 //!    step.
 //! 2. **`merge` and `remove` change the generation even on a miss.** Leave
-//!    a marker with no tree, so an in-flight reader's install collides with
+//!    a marker with no tree, so an in-flight reader's populate collides with
 //!    it.
 //! 3. **A generation never repeats for a tree.** If the store forgets a
 //!    marker, the tree's generation must not return to a value an in-flight
-//!    reader may hold. Random 128-bit tokens with a store-wide epoch bumped
-//!    on marker eviction work, as do markers that outlive any hydration.
-//! 4. **`merge` is atomic against other `merge`s.** Merging is a set union,
-//!    so a retry loop is trivially correct.
+//!    reader may hold.
+//! 4. **All four operations are serialized per tree.** A read-modify-write
+//!    `merge` racing a `remove` can otherwise bring back a tree that storage
+//!    no longer matches.
 //!
-//! These rules need an atomic conditional write. Durable Objects provide one
-//! for free, since each is single-threaded. Redis provides one through a Lua
-//! script or `WATCH`/`MULTI`. **Cloudflare KV does not**: it has no
-//! conditional writes and is eventually consistent, so it is unsafe as a
-//! writable shared store.
+//! An entry must never be written back: a `Hit` carries no generation, so
+//! a write-back can overwrite another node's merge. Store calls must time
+//! out, since the node holds a per-tree lock across store maintenance.
 //!
-//! A per-node in-memory store over storage that _other_ nodes write to never
-//! sees their writes, so it goes stale. Several nodes sharing storage must
-//! also share a store, or accept that staleness.
+//! [`shared::SharedMemoryMinimizedTreeStore`] meets all of these, including
+//! safe reclamation of markers. The [design notes] cover the full rule set,
+//! how to reclaim markers without reopening the race, mapping onto networked
+//! stores, and layering a fast local store in front of a shared one.
 //!
-//! # Layering
+//! A per-node store over storage that _other_ nodes write to never sees
+//! their writes, so it goes stale. Nodes sharing storage must share a store.
 //!
-//! A fast per-node store in front of a shared one composes as a single
-//! implementation of this trait, using the shared store's generation. Its
-//! local copies go stale when other nodes write, so it must refresh them
-//! by one of:
-//!
-//! - checking the shared generation on each hit (one small round trip,
-//!   never stale);
-//! - invalidating on a push from the shared store (stale for the push
-//!   delay);
-//! - expiring entries after a time-to-live (stale for up to the TTL).
+//! [design notes]: https://github.com/inkandswitch/subduction/blob/main/design/minimized_tree_store.md
 //!
 //! # Errors
 //!
 //! A store error never fails a node operation; the store is only an
 //! optimization. A failed `get` is a miss, and the node reads storage
-//! without installing. A failed `install` is ignored. A failed `merge` or
+//! without populating. A failed `populate` is ignored. A failed `merge` or
 //! `remove` could leave a stale tree behind, so the node stops using the
 //! store for that tree until a later `remove` succeeds.
 //!
@@ -105,6 +104,7 @@
 
 pub mod memory;
 pub mod noop;
+pub mod shared;
 
 use core::{error::Error, ops::DerefMut};
 
@@ -132,12 +132,14 @@ pub trait MinimizedTreeStore<Async: FutureForm>: Clone {
     /// A checked-out resident tree, owned rather than borrowed from the store.
     ///
     /// The node may minimize the tree in place through this handle. That
-    /// changes its form, never its content, so writing the result back is
-    /// optional. The node never holds an entry across an `.await`.
+    /// changes its form, never its content. A store that shares trees
+    /// between nodes must not write the result back: a [`Lookup::Hit`]
+    /// carries no generation, so a write-back can overwrite another node's
+    /// merge. The node never holds an entry across an `.await`.
     type Entry: DerefMut<Target = MinimizedSedimentree> + 'static;
 
     /// Check out the tree for `id`, or report a miss with its current
-    /// generation for a later [`install`](Self::install).
+    /// generation for a later [`populate`](Self::populate).
     fn get(
         &self,
         id: SedimentreeId,
@@ -145,16 +147,16 @@ pub trait MinimizedTreeStore<Async: FutureForm>: Clone {
 
     /// Keep a tree rebuilt from storage after a miss.
     ///
-    /// Returns [`Install::Stale`] if the tree's generation moved since
+    /// Returns [`Populate::Stale`] if the tree's generation moved since
     /// `seen`, so the node re-reads storage. If a tree is already resident
     /// and the generation still matches, keep the resident one and return
-    /// [`Install::Current`].
-    fn install(
+    /// [`Populate::Populated`].
+    fn populate(
         &self,
         id: SedimentreeId,
         tree: MinimizedSedimentree,
         seen: Self::Generation,
-    ) -> Async::Future<'_, Result<Install, Self::Error>>;
+    ) -> Async::Future<'_, Result<Populate, Self::Error>>;
 
     /// Merge newly persisted data into a resident tree.
     ///
@@ -177,16 +179,16 @@ pub enum Lookup<Entry, Generation> {
     /// The tree is resident.
     Hit(Entry),
 
-    /// The tree is not resident; install a rebuilt copy against this
+    /// The tree is not resident; populate a rebuilt copy against this
     /// generation.
     Miss(Generation),
 }
 
-/// The result of [`MinimizedTreeStore::install`].
+/// The result of [`MinimizedTreeStore::populate`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Install {
+pub enum Populate {
     /// The generation still matched; the rebuilt tree is current.
-    Current,
+    Populated,
 
     /// The generation moved since the miss; re-read storage and retry.
     Stale,

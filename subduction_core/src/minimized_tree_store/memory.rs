@@ -9,7 +9,7 @@ use sedimentree_core::{
     sedimentree::{Sedimentree, minimized::MinimizedSedimentree},
 };
 
-use super::{Install, Lookup, MinimizedTreeStore};
+use super::{Lookup, MinimizedTreeStore, Populate};
 use crate::collections::bounded_sharded_map::{BoundedShardedMap, Checkout};
 
 /// Keeps minimized trees in this process's memory.
@@ -20,7 +20,7 @@ use crate::collections::bounded_sharded_map::{BoundedShardedMap, Checkout};
 /// trees.
 ///
 /// Only this node sees the store, so its generation is `()`: the node's own
-/// coordination orders installs against writes. Clones share the same map.
+/// coordination orders populates against writes. Clones share the same map.
 #[derive(Debug)]
 pub struct MemoryMinimizedTreeStore<const SHARDS: usize = 256> {
     trees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
@@ -131,16 +131,16 @@ impl<Async: FutureForm, const SHARDS: usize> MinimizedTreeStore<Async>
         })
     }
 
-    fn install(
+    fn populate(
         &self,
         id: SedimentreeId,
         tree: MinimizedSedimentree,
         (): (),
-    ) -> Async::Future<'_, Result<Install, Infallible>> {
+    ) -> Async::Future<'_, Result<Populate, Infallible>> {
         Async::from_future(async move {
             // A resident tree came from an equally current read; keep it.
             self.trees.insert_if_absent(id, tree).await;
-            Ok(Install::Current)
+            Ok(Populate::Populated)
         })
     }
 

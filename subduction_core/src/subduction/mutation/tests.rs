@@ -485,7 +485,7 @@ async fn partial_deletion_does_not_leave_phantom_cached_items() {
 }
 
 #[tokio::test]
-async fn pre_failure_scan_cannot_reinstall_after_invalidation() {
+async fn pre_failure_scan_cannot_repopulate_after_invalidation() {
     let (storage, cache) = managed(MemoryStorage::new(), TokioSpawn);
     save(&cache, &storage, 1).await;
     let fetcher = storage.local_fetcher(ID);
@@ -507,8 +507,8 @@ async fn pre_failure_scan_cannot_reinstall_after_invalidation() {
         .await
         .is_err()
     );
-    let stale = read.install(old, &mut |_| ()).await;
-    assert!(stale.is_none(), "stale scan must retry, not reinstall");
+    let stale = read.populate(old, &mut |_| ()).await;
+    assert!(stale.is_none(), "stale scan must retry, not repopulate");
     assert!(cache.get_cloned(ID).await.is_none());
     assert_eq!(
         ingest::read_cached(&cache, &fetcher, |tree| tree.loose_commits().count())
@@ -530,11 +530,11 @@ async fn scan_overlapped_by_a_completed_write_retries_into_the_resident_entry() 
     let old = ingest::load_tree(&fetcher).await.expect("scan");
     save(&cache, &storage, 2).await;
     let overlapped = read
-        .install(old, &mut |tree| tree.loose_commits().count())
+        .populate(old, &mut |tree| tree.loose_commits().count())
         .await;
     assert_eq!(
         overlapped, None,
-        "an overlapped scan must not install its old copy"
+        "an overlapped scan must not populate its old copy"
     );
     assert_eq!(
         ingest::read_cached(&cache, &fetcher, |tree| tree.loose_commits().count())

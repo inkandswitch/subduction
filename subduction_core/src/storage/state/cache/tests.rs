@@ -17,7 +17,7 @@ type Cache<const N: usize> = crate::minimized_tree_store::memory::MemoryMinimize
 const ID: SedimentreeId = SedimentreeId::new([71; 32]);
 
 #[tokio::test]
-async fn installation_checks_revision_after_acquiring_the_store_lock() {
+async fn populating_checks_revision_after_acquiring_the_store_lock() {
     let state = Arc::new(StorageState::default());
     let tree = state.tree(ID);
     let cache = Cache::<1>::new();
@@ -25,17 +25,17 @@ async fn installation_checks_revision_after_acquiring_the_store_lock() {
         .prepare_cache_read::<Sendable, _>(&cache, Some(()))
         .await;
     let mut inspect = |_: &mut MinimizedSedimentree| ();
-    let install = read.install(Some(MinimizedSedimentree::default()), &mut inspect);
-    futures::pin_mut!(install);
+    let populate = read.populate(Some(MinimizedSedimentree::default()), &mut inspect);
+    futures::pin_mut!(populate);
 
     let mutation = {
         let _held = tree.state.store.lock().await;
         // A premature validity check would succeed at this point, before
         // the reader discovers that the store lock is held.
-        assert!(install.as_mut().now_or_never().is_none());
+        assert!(populate.as_mut().now_or_never().is_none());
         tree.track_mutation()
     };
-    assert_eq!(install.await, None, "the blocked read must revalidate");
+    assert_eq!(populate.await, None, "the blocked read must revalidate");
     assert!(cache.get_cloned(ID).await.is_none());
     mutation
         .persist::<Sendable, _, _, _, _>(&cache, async { Ok::<_, ()>(()) }, None, None)
@@ -44,7 +44,7 @@ async fn installation_checks_revision_after_acquiring_the_store_lock() {
 }
 
 #[tokio::test]
-async fn read_handle_installs_only_at_its_own_tree_key() {
+async fn read_handle_populates_only_its_own_tree_key() {
     let state = Arc::new(StorageState::default());
     let other = SedimentreeId::new([72; 32]);
     let cache = Cache::<1>::new();
@@ -56,10 +56,10 @@ async fn read_handle_installs_only_at_its_own_tree_key() {
         .tree(other)
         .prepare_cache_read::<Sendable, _>(&cache, Some(()))
         .await;
-    assert_eq!(second.install(None, &mut |_| ()).await, Some(None));
+    assert_eq!(second.populate(None, &mut |_| ()).await, Some(None));
     assert_eq!(
         first
-            .install(Some(MinimizedSedimentree::default()), &mut |_| ())
+            .populate(Some(MinimizedSedimentree::default()), &mut |_| ())
             .await,
         Some(Some(()))
     );
@@ -94,7 +94,7 @@ async fn completion_waits_for_the_store_and_notifies_only_after_its_locks_are_re
         let tree = state.tree(ID);
         let watch = state.watch(ID);
         let cache = Cache::<1>::new();
-        MinimizedTreeStore::<Sendable>::install(&cache, ID, MinimizedSedimentree::default(), ())
+        MinimizedTreeStore::<Sendable>::populate(&cache, ID, MinimizedSedimentree::default(), ())
             .await
             .expect("seed resident tree");
         let mutation = tree.track_mutation();

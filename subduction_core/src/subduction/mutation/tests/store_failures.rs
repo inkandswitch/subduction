@@ -6,7 +6,7 @@
 use super::*;
 use crate::{
     collections::bounded_sharded_map::Checkout,
-    minimized_tree_store::{Install, Lookup},
+    minimized_tree_store::{Lookup, Populate},
     storage::state::cache::Resident,
 };
 use core::{
@@ -22,16 +22,16 @@ struct Injected;
 struct Switches {
     generation: AtomicU64,
     fail_get: AtomicBool,
-    fail_install: AtomicBool,
+    fail_populate: AtomicBool,
     fail_merge: AtomicBool,
     fail_remove: AtomicBool,
     gets: AtomicUsize,
-    installs: AtomicUsize,
+    populates: AtomicUsize,
     removes: AtomicUsize,
 }
 
 /// A store with one generation counter for every tree, bumped by `merge` and
-/// `remove` and compared by `install`. Each check-then-write is not atomic,
+/// `remove` and compared by `populate`. Each check-then-write is not atomic,
 /// so this is only a faithful shared store for sequential tests.
 #[derive(Debug, Clone, Default)]
 struct FlakyStore {
@@ -92,24 +92,24 @@ impl MinimizedTreeStore<Sendable> for FlakyStore {
         })
     }
 
-    fn install(
+    fn populate(
         &self,
         id: SedimentreeId,
         tree: MinimizedSedimentree,
         seen: u64,
-    ) -> futures::future::BoxFuture<'_, Result<Install, Injected>> {
+    ) -> futures::future::BoxFuture<'_, Result<Populate, Injected>> {
         Sendable::from_future(async move {
-            self.switches.installs.fetch_add(1, Ordering::SeqCst);
-            if self.switches.fail_install.load(Ordering::SeqCst) {
+            self.switches.populates.fetch_add(1, Ordering::SeqCst);
+            if self.switches.fail_populate.load(Ordering::SeqCst) {
                 return Err(Injected);
             }
             if seen != self.switches.generation.load(Ordering::SeqCst) {
-                return Ok(Install::Stale);
+                return Ok(Populate::Stale);
             }
-            MinimizedTreeStore::<Sendable>::install(&self.inner, id, tree, ())
+            MinimizedTreeStore::<Sendable>::populate(&self.inner, id, tree, ())
                 .await
                 .unwrap_or_else(never);
-            Ok(Install::Current)
+            Ok(Populate::Populated)
         })
     }
 
@@ -170,7 +170,7 @@ async fn commit_count(
 }
 
 #[tokio::test]
-async fn a_write_from_another_node_between_miss_and_install_is_not_hidden() {
+async fn a_write_from_another_node_between_miss_and_populate_is_not_hidden() {
     let (storage, store) = flaky_node();
     let fetcher = storage.local_fetcher(ID);
     storage
@@ -196,10 +196,10 @@ async fn a_write_from_another_node_between_miss_and_install_is_not_hidden() {
         .expect("remote store maintenance");
 
     assert_eq!(
-        read.install(old, &mut |tree| tree.loose_commits().count())
+        read.populate(old, &mut |tree| tree.loose_commits().count())
             .await,
         None,
-        "the generation moved, so the old read must not install"
+        "the generation moved, so the old read must not populate the store"
     );
     assert_eq!(store.resident_commits().await, None);
     assert_eq!(
@@ -211,7 +211,7 @@ async fn a_write_from_another_node_between_miss_and_install_is_not_hidden() {
 }
 
 #[tokio::test]
-async fn a_stale_install_retries_until_the_generation_holds() {
+async fn a_stale_populate_retries_until_the_generation_holds() {
     let (storage, store) = flaky_node();
     storage
         .local_putter(ID)
@@ -226,16 +226,16 @@ async fn a_stale_install_retries_until_the_generation_holds() {
     store.bump();
     let read = coordination.prepare_cache_read(&store, Some(seen)).await;
     assert_eq!(
-        read.install(Some(MinimizedSedimentree::default()), &mut |_| ())
+        read.populate(Some(MinimizedSedimentree::default()), &mut |_| ())
             .await,
         None
     );
     assert_eq!(commit_count(&store, &storage).await, Some(1));
-    assert_eq!(store.count(|s| &s.installs), 2);
+    assert_eq!(store.count(|s| &s.populates), 2);
 }
 
 #[tokio::test]
-async fn a_failed_lookup_reads_storage_without_installing() {
+async fn a_failed_lookup_reads_storage_without_populating() {
     let (storage, store) = flaky_node();
     storage
         .local_putter(ID)
@@ -246,9 +246,9 @@ async fn a_failed_lookup_reads_storage_without_installing() {
     store.set(|s| &s.fail_get, true);
     assert_eq!(commit_count(&store, &storage).await, Some(1));
     assert_eq!(
-        store.count(|s| &s.installs),
+        store.count(|s| &s.populates),
         0,
-        "no generation to install against"
+        "no generation to populate against"
     );
     assert_eq!(store.resident_commits().await, None);
 
@@ -258,7 +258,7 @@ async fn a_failed_lookup_reads_storage_without_installing() {
 }
 
 #[tokio::test]
-async fn a_failed_install_still_serves_the_read() {
+async fn a_failed_populate_still_serves_the_read() {
     let (storage, store) = flaky_node();
     storage
         .local_putter(ID)
@@ -266,9 +266,9 @@ async fn a_failed_install_still_serves_the_read() {
         .await
         .expect("seed");
 
-    store.set(|s| &s.fail_install, true);
+    store.set(|s| &s.fail_populate, true);
     assert_eq!(commit_count(&store, &storage).await, Some(1));
-    assert_eq!(store.count(|s| &s.installs), 1);
+    assert_eq!(store.count(|s| &s.populates), 1);
     assert_eq!(store.resident_commits().await, None);
 }
 
@@ -312,7 +312,7 @@ async fn a_failed_merge_bypasses_the_store_until_a_remove_succeeds() {
     assert_eq!(
         store.resident_commits().await,
         Some(2),
-        "reinstalled after healing"
+        "populated again after healing"
     );
     assert!(store.count(|s| &s.gets) > gets, "lookups resume");
 }

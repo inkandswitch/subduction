@@ -1,6 +1,6 @@
 //! The boundary between storage coordination and the minimized tree store.
 //!
-//! Callers cannot check a revision and install later, or settle a mutation before
+//! Callers cannot check a revision and populate later, or settle a mutation before
 //! its store maintenance: the raw operations are private to the parent module.
 //! Both paths here hold the tree's store lock across the store call and the
 //! brief tree-state update. Storage I/O runs before acquiring it, and mutation
@@ -8,7 +8,7 @@
 
 use super::{ReadAttempt, StorageState, TrackedMutation, TreeCoordination};
 use crate::{
-    minimized_tree_store::{Install, Lookup, MinimizedTreeStore},
+    minimized_tree_store::{Lookup, MinimizedTreeStore, Populate},
     stored::StoredItem,
 };
 use alloc::vec::Vec;
@@ -24,9 +24,9 @@ pub(crate) enum Resident<Entry, Generation> {
     /// The tree is resident.
     Hit(Entry),
 
-    /// The tree is not resident. Install a rebuilt copy against `Some`
+    /// The tree is not resident. Populate a rebuilt copy against `Some`
     /// generation; `None` means the store is unusable for this tree right now
-    /// (it failed, or the tree is bypassed), so read storage without installing.
+    /// (it failed, or the tree is bypassed), so read storage without populating.
     Miss(Option<Generation>),
 }
 
@@ -99,9 +99,9 @@ impl TreeCoordination {
 }
 
 /// A prepared read bound to its tree and destination store. Consuming it
-/// through `install` keeps revision validation and installation in one
+/// through `populate` keeps revision validation and populating in one
 /// critical section.
-#[must_use = "install the loaded value through this handle, or discard the read"]
+#[must_use = "populate the store through this handle, or discard the read"]
 pub(crate) struct CacheRead<'a, Async: FutureForm, Trees: MinimizedTreeStore<Async>> {
     store: &'a Trees,
     attempt: ReadAttempt,
@@ -110,14 +110,14 @@ pub(crate) struct CacheRead<'a, Async: FutureForm, Trees: MinimizedTreeStore<Asy
 }
 
 impl<Async: FutureForm, Trees: MinimizedTreeStore<Async>> CacheRead<'_, Async, Trees> {
-    /// Install a still-current storage read, after running `inspect` on it.
+    /// Populate a still-current storage read, after running `inspect` on it.
     ///
     /// The outer `None` means retry: a local mutation overlapped the read, or
     /// the store reported a newer generation. This never adopts a tree another
     /// operation made resident meanwhile; the caller's next lookup hits it.
     /// `Some(None)` means a valid absent tree. `inspect` runs on the loaded
     /// tree before it moves into the store, so it may run again on a retry.
-    pub(crate) async fn install<Inspect, R>(
+    pub(crate) async fn populate<Inspect, R>(
         self,
         loaded: Option<MinimizedSedimentree>,
         inspect: &mut Inspect,
@@ -138,11 +138,11 @@ impl<Async: FutureForm, Trees: MinimizedTreeStore<Async>> CacheRead<'_, Async, T
         let Some(seen) = self.seen else {
             return Some(Some(result));
         };
-        match self.store.install(id, tree, seen).await {
-            Ok(Install::Current) => Some(Some(result)),
-            Ok(Install::Stale) => None,
+        match self.store.populate(id, tree, seen).await {
+            Ok(Populate::Populated) => Some(Some(result)),
+            Ok(Populate::Stale) => None,
             Err(error) => {
-                tracing::warn!(tree = ?id, %error, "minimized tree store install failed");
+                tracing::warn!(tree = ?id, %error, "minimized tree store populate failed");
                 Some(Some(result))
             }
         }

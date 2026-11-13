@@ -36,15 +36,15 @@
 //! A reader filling an empty store calls [`TreeCoordination::prepare_cache_read`].
 //! This waits until no writes or deletes are in progress and returns a
 //! [`cache::CacheRead`] bound to the tree and destination store. After loading
-//! storage, the reader consumes that handle through [`cache::CacheRead::install`].
-//! If a mutation overlapped the read, installation requests a retry. The raw
+//! storage, the reader consumes that handle through [`cache::CacheRead::populate`].
+//! If a mutation overlapped the read, populating requests a retry. The raw
 //! validity check and settlement operations are private: callers cannot separate
 //! them from the store critical sections implemented in [`mod@cache`].
 //!
-//! Each tree has a store lock. The final check and installation happen under it,
+//! Each tree has a store lock. The final check and the populate happen under it,
 //! and writers finish updating the counters under it when they merge into or
 //! remove the stored tree. This prevents a writer from removing the tree between
-//! a reader's successful check and its installation. A shared store adds its own
+//! a reader's successful check and its populate. A shared store adds its own
 //! generation check, which catches writers on other nodes.
 //!
 //! Storage reads and writes do not hold the store or counter locks. The locks
@@ -198,7 +198,7 @@ struct TreeState {
     owner: Arc<StorageState>,
     inner: Mutex<TreeInner>,
     /// Serializes this tree's store maintenance: read validation with
-    /// install, and writes with settlement. Store hits do not take it.
+    /// populating, and writes with settlement. Store hits do not take it.
     store: async_lock::Mutex<()>,
     changed: event_listener::Event,
 }
@@ -241,7 +241,7 @@ impl TreeCoordination {
     ///
     /// The returned attempt does not lock storage or prevent new mutations.
     /// Watchers accept it through `Watch::finish_read`; store readers use
-    /// `prepare_cache_read` instead so validation cannot escape installation.
+    /// `prepare_cache_read` instead so validation cannot escape populating.
     pub(crate) async fn prepare_read(&self) -> ReadAttempt {
         loop {
             // Listen first so a mutation finishing between the check and the
@@ -273,7 +273,7 @@ pub(crate) struct ReadAttempt {
 impl ReadAttempt {
     /// Whether no mutation has started or finished since this read was prepared.
     /// When storing the result, call this while holding the store lock and keep
-    /// that lock until installation finishes; an earlier check is not enough.
+    /// that lock until populating finishes; an earlier check is not enough.
     fn is_current(&self) -> bool {
         let state = self.coordination.state.inner.lock();
         state.active_mutations == 0 && state.revision == self.revision

@@ -1030,7 +1030,7 @@ impl<
                     .map(|vm| vm.payload().clone())
                     .collect();
 
-                // Only install into the cache when there is actual stored
+                // Only populate the store when there is actual stored
                 // data.
                 //
                 // Caching an empty tree for a never-stored id would make a
@@ -1052,13 +1052,13 @@ impl<
                     Some(MinimizedSedimentree::already_minimal(built))
                 };
                 let Some(adopted) = read
-                    .install(loaded, &mut |tree: &mut MinimizedSedimentree| tree.clone())
+                    .populate(loaded, &mut |tree: &mut MinimizedSedimentree| tree.clone())
                     .await
                 else {
                     crate::spawn::yield_once().await;
-                    // Re-read the generation to install against. A tree that
+                    // Re-read the generation to populate against. A tree that
                     // became resident meanwhile is equally current, but this
-                    // response already holds a full scan, so skip installing.
+                    // response already holds a full scan, so skip populating.
                     seen = match fetcher
                         .coordination()
                         .lookup(&self.minimized_tree_store)

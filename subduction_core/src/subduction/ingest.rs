@@ -365,16 +365,18 @@ pub(crate) async fn minimize_tree<
 /// # Deadlock safety
 ///
 /// Hydration loads from storage (an `.await` that, on Wasm, is an async
-/// `IndexedDB` transaction) **without holding any shard lock**. Freshly loaded
-/// trees are also minimized outside the lock. Only then does it briefly lock
-/// the shard to install the tree or adopt a concurrently installed entry.
-/// Never hold the shard mutex across the storage await.
+/// `IndexedDB` transaction) **without holding the tree's store lock** or any
+/// store entry. Freshly loaded trees are also minimized outside the lock.
+/// Only then does it briefly take the store lock to populate the store. If a
+/// mutation overlapped the load, it retries, and the next lookup hits any tree
+/// another reader populated meanwhile. Never hold a store entry across the
+/// storage await.
 ///
 /// # Concurrency
 ///
 /// Concurrent misses for the same id each load independently (a bounded,
-/// self-correcting "thundering herd"); the first to install wins and the
-/// rest are dropped — correct because all loads read the same durable
+/// self-correcting "thundering herd"); the first to populate wins and the
+/// rest are kept out — correct because all loads read the same durable
 /// source. Single-flight de-duplication is intentionally not implemented.
 ///
 /// Returns `None` only when the tree does not exist. Existence is recorded
@@ -449,7 +451,7 @@ pub(crate) async fn heads_or_hydrate<
 ///
 /// The tree is **not** minimized here: membership checks can use the full
 /// history without a [`DepthMetric`]. Readers needing the minimal form prepare
-/// the loaded tree before cache installation (see [`get_or_hydrate`]).
+/// the loaded tree before populating the store (see [`get_or_hydrate`]).
 pub(crate) async fn load_tree<Async: FutureForm, Store: Storage<Async>>(
     access: &crate::storage::fetcher::Fetcher<Async, Store>,
 ) -> Result<Option<MinimizedSedimentree>, Store::Error> {
@@ -473,7 +475,8 @@ pub(crate) async fn load_tree<Async: FutureForm, Store: Storage<Async>>(
 }
 
 /// Read a tree from the store, loading it from storage if needed.
-/// Before installing the loaded tree, check that no writes or deletes overlapped
+/// Before populating the store with the loaded tree, check that no writes or
+/// deletes overlapped
 /// the read; otherwise retry. This prevents an old read from putting stale data
 /// back into the store after another operation cleared it.
 /// No store or revision locks are held while waiting for storage.
@@ -491,7 +494,7 @@ where
     read_cached_prepared(cache, fetcher, Count::Silent, |_| (), inspect).await
 }
 
-/// Prepare each freshly loaded tree before installing it.
+/// Prepare each freshly loaded tree before populating the store with it.
 /// Preparation may be expensive (e.g. minimization) and is repeated on retries.
 /// Revision validation still happens afterward, under the tree's store lock.
 /// `prepare` does not run on resident entries, so `inspect` must handle dirty
@@ -528,7 +531,7 @@ where
         if let Some(tree) = loaded.as_mut() {
             prepare(tree);
         }
-        if let Some(result) = read.install(loaded, &mut inspect).await {
+        if let Some(result) = read.populate(loaded, &mut inspect).await {
             return Ok(result);
         }
         crate::spawn::yield_once().await;

@@ -904,8 +904,8 @@ async fn test_no_requesting_when_in_sync() -> TestResult {
 
 /// A sync request for an id the responder has never stored must not pollute
 /// the responder's in-memory cache. Regression for the LRU cache-pollution
-/// bug: `recv_batch_sync_request` used to unconditionally install the
-/// (empty) built tree, which made a later `get_or_hydrate(id)` return
+/// bug: `recv_batch_sync_request` used to unconditionally populate the store
+/// with the (empty) built tree, which made a later `get_or_hydrate(id)` return
 /// `Some(empty)` instead of `None` — letting any authorized peer fabricate
 /// "existence" for arbitrary ids by requesting them.
 #[tokio::test]
@@ -960,7 +960,7 @@ async fn sync_request_for_unknown_id_does_not_pollute_cache() -> TestResult {
     );
 
     // ... but the unknown id must STILL read as nonexistent: the empty tree
-    // must not have been installed into the cache.
+    // must not have been populated into the store.
     assert!(
         alice.get_commits(unknown_id).await.is_none(),
         "a sync request for an unknown id must not make it appear to exist"

@@ -11,7 +11,7 @@ use sedimentree_core::{
     sedimentree::{Sedimentree, minimized::MinimizedSedimentree},
 };
 
-use super::{Install, Lookup, MinimizedTreeStore};
+use super::{Lookup, MinimizedTreeStore, Populate};
 
 /// Keeps no trees: every read misses and rebuilds from storage.
 ///
@@ -51,13 +51,13 @@ impl<Async: FutureForm> MinimizedTreeStore<Async> for NoopMinimizedTreeStore {
         Async::from_future(async { Ok(Lookup::Miss(())) })
     }
 
-    fn install(
+    fn populate(
         &self,
         _id: SedimentreeId,
         _tree: MinimizedSedimentree,
         (): (),
-    ) -> Async::Future<'_, Result<Install, Infallible>> {
-        Async::from_future(async { Ok(Install::Current) })
+    ) -> Async::Future<'_, Result<Populate, Infallible>> {
+        Async::from_future(async { Ok(Populate::Populated) })
     }
 
     fn merge(
