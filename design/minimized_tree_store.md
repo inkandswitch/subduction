@@ -60,6 +60,16 @@ Each tree has a _generation_ that changes whenever its stored state does. A miss
 
 `populate` may or may not change the generation. Both are safe.
 
+## Checking an implementation
+
+None of these rules can be checked by the compiler, so a store declares that it meets them by implementing `SharedMinimizedTreeStore`, and the `conformance` module (behind the `conformance` feature, which pulls in no executor and so builds on Wasm) tests that declaration. It has:
+
+- checks every store must pass, through one handle;
+- checks for rules 1 to 3, through two handles to one backing store, which accept only a `SharedMinimizedTreeStore`;
+- `check_ops`, which runs generated operation sequences against both handles and compares every result with a model of storage. It checks that a hit always equals storage, that a removed tree never hits, and that a populate is kept only if no write happened since its miss.
+
+`tests/minimized_tree_store_conformance.rs` in `subduction_core` runs the suite against every stock store and is the template for running it against your own. Generate fresh tree ids per run on a networked store. The suite runs operations one after another, and it cannot force a store to forget a marker. So rule 4 and the reclamation part of rule 3 still need the store's own tests.
+
 ## Known gap: failed maintenance on a shared store
 
 When a `merge` or `remove` fails after a write (an error, a timeout, or `ResilientMinimizedTreeStore`'s open breaker), the call may not have changed the generation. The writing node bypasses the store for that tree and retries the `remove` on its next access to it. Other nodes don't know about the bypass: until that retry succeeds, they can keep hitting the tree from before the write, and a reader whose miss came before the write can still populate. Nothing retries the `remove` sooner, so the window lasts until the writing node next touches the tree. A healer that retries bypassed trees in the background would bound it; it is not implemented yet.
@@ -122,3 +132,5 @@ A fast per-node store in front of a shared one composes as a single store, using
 | Expire entries after a time-to-live        | Local memory         | Up to the TTL  |
 
 The first still saves a lot: it moves a few bytes rather than the whole tree.
+
+Only the first keeps every rule. The other two serve hits that can lag storage by the push delay or the TTL, which breaks "a hit means the tree as stored". A node tolerates that the way it tolerates any hit racing a write, but the store is no longer a `SharedMinimizedTreeStore`, and the conformance suite rejects it by design. Run the full suite against the shared layer, and only the single-handle checks against the layered store.
