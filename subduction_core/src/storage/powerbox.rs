@@ -1,9 +1,9 @@
 //! Mint authorized storage capabilities and share their node execution context.
 //!
 //! Trusted tree reads use `local_fetcher`; global ID enumeration remains separate.
-//! Node construction supplies an immutable mutation runner before any capability
-//! can be minted. All writes use that runner, owning persistence and cache
-//! completion independently of the API waiter.
+//! Node construction supplies the node's mutation worker before any capability
+//! can be minted. All writes go through that worker, which owns persistence and
+//! cache completion independently of the API waiter.
 
 use super::{
     destroyer::Destroyer, fetcher::Fetcher, local_access::LocalStorageAccess, mutation::Submission,
@@ -17,7 +17,7 @@ use subduction_crypto::verified_author::VerifiedAuthor;
 
 /// The authorization and execution boundary for storage capabilities.
 ///
-/// Every powerbox has a mutation runner from construction onward. Use the node
+/// Every powerbox has a mutation worker from construction onward. Use the node
 /// builder, or [`StorageTasks::storage_powerbox`](crate::subduction::StorageTasks::storage_powerbox)
 /// when assembling a node and handler manually. There is no inline write mode.
 ///
@@ -40,16 +40,19 @@ pub struct StoragePowerbox<Store: Storage<Async>, Auth, Async: FutureForm = Send
     submission: Submission<Async, Store>,
 }
 impl<Store: Storage<Async>, Auth, Async: FutureForm> StoragePowerbox<Store, Auth, Async> {
-    /// Construct a powerbox with the node's immutable mutation runner.
+    /// Construct a powerbox with a handle to the node's mutation worker.
+    ///
+    /// `state` must be the one the worker watches for shutdown.
     pub(crate) fn new(
         storage: Store,
         policy: Arc<Auth>,
+        state: Arc<super::state::StorageState>,
         submission: Submission<Async, Store>,
     ) -> Self {
         Self {
             storage: Arc::new(storage),
             policy,
-            state: Arc::default(),
+            state,
             submission,
         }
     }
