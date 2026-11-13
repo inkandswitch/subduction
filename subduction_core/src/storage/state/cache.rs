@@ -1,103 +1,209 @@
-//! The boundary between storage coordination and the derived-tree cache.
+//! The boundary between storage coordination and the minimized tree store.
 //!
-//! Callers cannot check a revision and install later, or settle a mutation before
-//! its cache maintenance: the raw operations are private to the parent module.
-//! Both paths here acquire the cache shard before briefly locking tree state.
-//! Storage I/O runs before acquiring the cache, and mutation notifications run
-//! after releasing it. Cache ownership remains with the node.
+//! Callers cannot check a revision and populate later, or settle a mutation before
+//! its store maintenance: the raw operations are private to the parent module.
+//! Every store call here except a plain lookup holds the tree's store lock,
+//! across the call and the brief tree-state update. Storage I/O runs before
+//! acquiring it, and mutation notifications run after releasing it. Store hits
+//! never take the lock.
 
-use super::{ReadAttempt, TrackedMutation, TreeCoordination};
-use crate::{collections::bounded_sharded_map::BoundedShardedMap, stored::StoredItem};
+use super::{ReadAttempt, StorageState, TrackedMutation, TreeCoordination};
+use crate::{
+    minimized_tree_store::{Lookup, MinimizedTreeStore},
+    stored::StoredItem,
+};
 use alloc::vec::Vec;
-use core::future::Future;
+use core::{future::Future, marker::PhantomData};
+use future_form::FutureForm;
 use sedimentree_core::{
     id::SedimentreeId,
     sedimentree::{Sedimentree, minimized::MinimizedSedimentree},
 };
 
-type Cache<const SHARDS: usize> = BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>;
+/// A tree's store entry, as seen by the node.
+pub(crate) enum Resident<Entry, Generation> {
+    /// The tree is resident.
+    Hit(Entry),
 
-/// A prepared read bound to its tree and destination cache. Consuming it through
-/// `install` keeps revision validation and installation in one critical section.
-#[must_use = "install the loaded value through this handle, or discard the read"]
-pub(crate) struct CacheRead<'a, const SHARDS: usize> {
-    cache: &'a Cache<SHARDS>,
-    attempt: ReadAttempt,
+    /// The tree is not resident. Populate a rebuilt copy against `Some`
+    /// generation; `None` means the store is unusable for this tree right now
+    /// (it failed, or the tree is bypassed), so read storage without populating.
+    Miss(Option<Generation>),
 }
 
-impl TreeCoordination {
-    /// Wait for pending mutations before reading storage for this cache.
-    /// Does not hold a lock during the caller's read or prevent later mutations.
-    pub(crate) async fn prepare_cache_read<'a, const SHARDS: usize>(
-        &self,
-        cache: &'a Cache<SHARDS>,
-    ) -> CacheRead<'a, SHARDS> {
-        CacheRead {
-            cache,
-            attempt: self.prepare_read().await,
+impl StorageState {
+    fn is_bypassed(&self, id: SedimentreeId) -> bool {
+        self.bypassed.lock().contains(&id)
+    }
+
+    fn set_bypassed(&self, id: SedimentreeId, bypassed: bool) {
+        let mut set = self.bypassed.lock();
+        if bypassed {
+            set.insert(id);
+        } else {
+            set.remove(&id);
         }
     }
 }
 
-impl<const SHARDS: usize> CacheRead<'_, SHARDS> {
-    /// Adopt a resident entry or install a still-current storage read.
-    /// The outer `None` means retry; `Some(None)` means a valid absent tree.
-    /// `inspect` runs only on the accepted value, under the cache shard lock.
-    pub(crate) async fn install<Inspect, R>(
+impl TreeCoordination {
+    /// Look this tree up in the store.
+    ///
+    /// A store error is a miss without a generation. A bypassed tree first
+    /// retries the `remove` that failed; until that succeeds, it misses too.
+    pub(crate) async fn lookup<Async, Trees>(
+        &self,
+        store: &Trees,
+    ) -> Resident<Trees::Entry, Trees::Generation>
+    where
+        Async: FutureForm,
+        Trees: MinimizedTreeStore<Async>,
+    {
+        let id = self.state.id;
+        let owner = &self.state.owner;
+        if owner.is_bypassed(id) {
+            // Never queue behind another task's store maintenance: while the
+            // store is failing, a busy lock means read storage directly.
+            let Some(_store) = self.state.store.try_lock() else {
+                return Resident::Miss(None);
+            };
+            if let Err(error) = store.remove(id).await {
+                tracing::warn!(tree = ?id, %error, "minimized tree store still failing; reading storage directly");
+                return Resident::Miss(None);
+            }
+            owner.set_bypassed(id, false);
+        }
+        match store.get(id).await {
+            Ok(Lookup::Hit(entry)) => Resident::Hit(entry),
+            Ok(Lookup::Miss(generation)) => Resident::Miss(Some(generation)),
+            Err(error) => {
+                tracing::warn!(tree = ?id, %error, "minimized tree store lookup failed; reading storage");
+                Resident::Miss(None)
+            }
+        }
+    }
+
+    /// Wait for pending mutations before reading storage for the store.
+    /// Does not hold a lock during the caller's read or prevent later mutations.
+    pub(crate) async fn prepare_cache_read<'a, Async, Trees>(
+        &self,
+        store: &'a Trees,
+        seen: Option<Trees::Generation>,
+    ) -> CacheRead<'a, Async, Trees>
+    where
+        Async: FutureForm,
+        Trees: MinimizedTreeStore<Async>,
+    {
+        CacheRead {
+            store,
+            attempt: self.prepare_read().await,
+            seen,
+            _form: PhantomData,
+        }
+    }
+}
+
+/// A prepared read bound to its tree and destination store. Consuming it
+/// through `populate` keeps revision validation and populating in one
+/// critical section.
+#[must_use = "populate the store through this handle, or discard the read"]
+pub(crate) struct CacheRead<'a, Async: FutureForm, Trees: MinimizedTreeStore<Async>> {
+    store: &'a Trees,
+    attempt: ReadAttempt,
+    seen: Option<Trees::Generation>,
+    _form: PhantomData<fn() -> Async>,
+}
+
+impl<Async: FutureForm, Trees: MinimizedTreeStore<Async>> CacheRead<'_, Async, Trees> {
+    /// Populate a still-current storage read, after running `inspect` on it.
+    ///
+    /// The outer `None` means retry: a mutation on this node overlapped the
+    /// read. This never adopts a tree another operation made resident
+    /// meanwhile; the caller's next lookup hits it. If the store reports a
+    /// newer generation (another node wrote), the read is served but not
+    /// stored. `Some(None)` means a valid absent tree. `inspect` runs on the
+    /// loaded tree before it moves into the store, so it may run again on a
+    /// retry.
+    pub(crate) async fn populate<Inspect, R>(
         self,
         loaded: Option<MinimizedSedimentree>,
-        inspect: Inspect,
+        inspect: &mut Inspect,
     ) -> Option<Option<R>>
     where
-        Inspect: FnOnce(&mut MinimizedSedimentree) -> R,
+        Inspect: FnMut(&mut MinimizedSedimentree) -> R,
     {
-        self.cache
-            .install_checked(
-                self.attempt.coordination.state.id,
-                loaded,
-                || self.attempt.is_current(),
-                inspect,
-            )
-            .await
+        // Nothing will be stored, so there is nothing for an overlapping
+        // write to make stale. The read still began after pending writes
+        // settled; skip the store lock and revision check.
+        let Some(seen) = self.seen else {
+            return Some(loaded.map(|mut tree| inspect(&mut tree)));
+        };
+        let state = &self.attempt.coordination.state;
+        let id = state.id;
+        let _store = state.store.lock().await;
+        if !self.attempt.is_current() {
+            return None;
+        }
+        let Some(mut tree) = loaded else {
+            return Some(None);
+        };
+        let result = inspect(&mut tree);
+        // On `Stale`, another node wrote since the miss. This read is no staler
+        // than a hit could be, so serve it; only storing it would be wrong.
+        // Retrying could rescan storage without bound under remote writes.
+        if let Err(error) = self.store.populate(id, tree, seen).await {
+            tracing::warn!(tree = ?id, %error, "minimized tree store populate failed");
+        }
+        Some(Some(result))
     }
 }
 
 impl TrackedMutation {
-    /// Run admitted storage work, maintain the resident cache, then notify.
-    /// Successful writes merge only into resident entries; deletion or failure
-    /// invalidates. Completion never reads storage or populates a cold cache.
+    /// Run admitted storage work, maintain the store, then notify.
+    /// Successful writes merge into the store; deletion or failure removes the
+    /// tree. Completion never reads storage or populates a cold store.
     /// Dropping this future unfinished closes coordination, just like losing
     /// the admitted mutation before its first poll.
-    pub(crate) async fn persist<Work, R, E, const SHARDS: usize>(
+    pub(crate) async fn persist<Async, Trees, Work, R, E>(
         mut self,
-        cache: &Cache<SHARDS>,
+        store: &Trees,
         work: Work,
         update: Option<Sedimentree>,
         items: Option<Vec<StoredItem>>,
     ) -> Result<R, E>
     where
+        Async: FutureForm,
+        Trees: MinimizedTreeStore<Async>,
         Work: Future<Output = Result<R, E>>,
     {
         let result = work.await;
-        let id = self.coordination.state.id;
+        let state = self.coordination.state.clone();
+        let id = state.id;
         // Errors can follow partial storage effects; never merge their update.
         let update = if result.is_ok() { update } else { None };
-        if let Some(update) = update {
-            cache
-                .with_optional_entry(&id, |tree| {
-                    if let Some(tree) = tree {
-                        tree.merge(update);
-                    }
-                    // Settle even on a cache miss, and publish independently of
-                    // residency. The shard stays locked through settlement.
-                    self.complete(items.as_deref());
-                })
-                .await;
-        } else {
-            cache.remove_with(&id, || self.complete(None)).await;
+        let succeeded = update.is_some();
+        {
+            let _store = state.store.lock().await;
+            let bypassed = state.owner.is_bypassed(id);
+            // A bypassed tree may hold a stale entry: replace a merge with a
+            // remove, so a success clears it.
+            let outcome = match update {
+                Some(update) if !bypassed => store.merge(id, update).await,
+                _ => store
+                    .remove(id)
+                    .await
+                    .inspect(|()| state.owner.set_bypassed(id, false)),
+            };
+            if let Err(error) = outcome {
+                tracing::warn!(tree = ?id, %error, "minimized tree store maintenance failed; bypassing it for this tree");
+                state.owner.set_bypassed(id, true);
+            }
+            // Settle even on a store miss or failure, and publish independently
+            // of residency. The store lock stays held through settlement.
+            self.complete(if succeeded { items.as_deref() } else { None });
         }
-        // The shard guard has been released. Drop wakes readers and watchers;
-        // even a waker that immediately accesses the cache cannot deadlock.
+        // The store lock has been released. Drop wakes readers and watchers;
+        // even a waker that immediately reads the store cannot deadlock.
         drop(self);
         result
     }
