@@ -1,11 +1,12 @@
 //! The mutation vocabulary shared by managed put and delete capabilities.
 //!
-//! Backends only persist data. A node installs a typed submission function in
-//! its powerbox; capabilities use it to submit persistence and cache completion
-//! together. It captures the existing spawner, not another executor or registry.
-//! Every powerbox is constructed with its runner; mutations never execute inline.
+//! Backends only persist data. A node gives its powerbox a `Submission`: a
+//! handle to the node's mutation worker, which capabilities use to submit
+//! persistence and cache completion together. The worker runs on the existing
+//! spawner, not another executor or registry, and spawns one task per mutation.
+//! Every powerbox is constructed with its worker; mutations never execute inline.
 
-use super::{fetcher::Fetcher, traits::Storage};
+use super::{fetcher::Fetcher, state::TrackedMutation, traits::Storage};
 use alloc::{sync::Arc, vec::Vec};
 use future_form::FutureForm;
 use sedimentree_core::{
@@ -149,14 +150,69 @@ impl Operation {
     }
 }
 
-pub(crate) type Runner<Async, Store> = dyn Fn(
-        Fetcher<Async, Store>,
-        Operation,
-    )
-        -> async_channel::Receiver<Result<usize, MutationError<<Store as Storage<Async>>::Error>>>
-    + Send
-    + Sync;
-pub(crate) type Submission<Async, Store> = Arc<Runner<Async, Store>>;
+/// A request to the node's mutation worker.
+pub(crate) struct Request<Async: FutureForm, Store: Storage<Async>> {
+    pub(crate) fetcher: Fetcher<Async, Store>,
+    pub(crate) operation: Operation,
+    /// Taken at submission, so admission covers the request while it waits.
+    pub(crate) tracked: TrackedMutation,
+    pub(crate) reply: async_channel::Sender<Result<usize, MutationError<Store::Error>>>,
+}
+
+/// Starts a not-yet-running worker on the node's spawner.
+pub(crate) type SpawnWorker<Async> =
+    dyn Fn(<Async as FutureForm>::Future<'static, ()>) + Send + Sync;
+
+/// The capabilities' handle to the node's mutation worker.
+///
+/// The worker owns the minimized tree store and the spawner, so this handle
+/// is `Send` exactly when its requests and the pending worker future are:
+/// always on `Sendable`, and on `Local` without requiring a thread-safe store.
+/// The worker starts on the first submission, so building a node does not
+/// need a running executor.
+pub(crate) struct Submission<Async: FutureForm, Store: Storage<Async>> {
+    requests: async_channel::Sender<Request<Async, Store>>,
+    start: Arc<Start<Async>>,
+}
+
+struct Start<Async: FutureForm> {
+    worker: spin::Mutex<Option<Async::Future<'static, ()>>>,
+    spawn: Arc<SpawnWorker<Async>>,
+}
+
+impl<Async: FutureForm, Store: Storage<Async>> Submission<Async, Store> {
+    /// A handle to `worker`, which must serve the receiving end of
+    /// `requests`. `spawn` starts it on the first submission.
+    pub(crate) fn new(
+        requests: async_channel::Sender<Request<Async, Store>>,
+        worker: Async::Future<'static, ()>,
+        spawn: Arc<SpawnWorker<Async>>,
+    ) -> Self {
+        Self {
+            requests,
+            start: Arc::new(Start {
+                worker: spin::Mutex::new(Some(worker)),
+                spawn,
+            }),
+        }
+    }
+
+    fn start_worker(&self) {
+        let worker = self.start.worker.lock().take();
+        if let Some(worker) = worker {
+            (self.start.spawn)(worker);
+        }
+    }
+}
+
+impl<Async: FutureForm, Store: Storage<Async>> Clone for Submission<Async, Store> {
+    fn clone(&self) -> Self {
+        Self {
+            requests: self.requests.clone(),
+            start: self.start.clone(),
+        }
+    }
+}
 
 pub(crate) async fn apply<Async: FutureForm, Store: Storage<Async>>(
     submission: &Submission<Async, Store>,
@@ -166,10 +222,24 @@ pub(crate) async fn apply<Async: FutureForm, Store: Storage<Async>>(
     if fetcher.coordination().closed() {
         return Err(MutationError::Closed);
     }
-    if let Ok(result) = submission(fetcher.clone(), operation).recv().await {
-        result
-    } else {
-        fetcher.coordination().close();
-        Err(MutationError::Closed)
+    let coordination = fetcher.coordination().clone();
+    let (reply, receiver) = async_channel::bounded(1);
+    // Admission covers submission too. A rejected, never-run request must
+    // close validity even if its waiter disappears immediately: dropping
+    // `tracked` unsettled does that.
+    let tracked = coordination.track_mutation();
+    submission.start_worker();
+    let request = Request {
+        fetcher,
+        operation,
+        tracked,
+        reply,
+    };
+    if submission.requests.try_send(request).is_ok()
+        && let Ok(result) = receiver.recv().await
+    {
+        return result;
     }
+    coordination.close();
+    Err(MutationError::Closed)
 }
