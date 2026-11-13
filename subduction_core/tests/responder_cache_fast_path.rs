@@ -449,7 +449,7 @@ async fn cold_clone_of_resident_tree_uses_bulk_scan() -> TestResult {
 
 /// The slow path warms the cache: the first request for a tree that lives
 /// only in storage (not resident — e.g. after a restart) takes the
-/// bulk-scan slow path, and that scan installs the tree into the cache so
+/// bulk-scan slow path, and that scan populates the store with the tree so
 /// the *second* request takes the zero-bulk fast path.
 #[tokio::test]
 async fn slow_path_warms_cache_for_subsequent_requests() -> TestResult {

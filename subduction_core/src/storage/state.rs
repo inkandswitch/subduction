@@ -1,53 +1,55 @@
-//! Track changes to storage so old reads cannot put stale trees into the cache.
+//! Track changes to storage so old reads cannot put stale trees into the store.
 //!
 //! # Why this is needed
 //!
-//! Storage is the source of truth; the in-memory trees are cached copies. A write
-//! can save some items and then fail, or a deletion can remove some items before
-//! returning an error. In either case, we clear the cached tree so the next read
-//! loads what is actually in storage.
+//! Storage is the source of truth; the trees in the
+//! [minimized tree store](crate::minimized_tree_store) are derived copies. A
+//! write can save some items and then fail, or a deletion can remove some items
+//! before returning an error. In either case, we remove the stored tree so the
+//! next read loads what is actually in storage.
 //!
-//! Clearing the cache alone is not enough, because another read may already be
+//! Removing the tree alone is not enough, because another read may already be
 //! in progress:
 //!
-//! 1. A reader loads the old tree from storage, but has not cached it yet.
-//! 2. A write saves another commit, then fails. Its error handler clears the cache.
-//! 3. The reader finishes and puts its old copy into the cache, hiding the commit
+//! 1. A reader loads the old tree from storage, but has not stored it yet.
+//! 2. A write saves another commit, then fails. Its error handler removes the tree.
+//! 3. The reader finishes and puts its old copy into the store, hiding the commit
 //!    that was just saved.
 //!
 //! This module provides the information needed to detect that overlap and retry
-//! the read instead of caching an outdated result.
+//! the read instead of storing an outdated result.
 //!
 //! # How it works
 //!
 //! Each tree has a change counter (its "revision") and a count of writes or
 //! deletes still in progress. The revision advances both when an operation starts
 //! and when it finishes. An operation is normally finished only after it has
-//! updated or cleared any cached entry, not just when its storage call returns.
-//! A tree that is not cached is left that way; a later read will load it.
+//! merged into or removed the stored tree, not just when its storage call
+//! returns. A tree that is not stored is left that way; a later read will load it.
 //! Storage handles created by the same powerbox share this information, so a
 //! reader and a writer using different handles still track the same tree.
 //!
 //! Writers call [`TreeCoordination::track_mutation`] before submitting storage
 //! work, then consume the tracking handle through [`TrackedMutation::persist`].
-//! That operation owns persistence, cache maintenance, settlement and notification.
+//! That operation owns persistence, store maintenance, settlement and notification.
 //!
-//! A reader filling an empty cache calls [`TreeCoordination::prepare_cache_read`].
+//! A reader filling an empty store calls [`TreeCoordination::prepare_cache_read`].
 //! This waits until no writes or deletes are in progress and returns a
-//! [`cache::CacheRead`] bound to the tree and destination cache. After loading
-//! storage, the reader consumes that handle through [`cache::CacheRead::install`].
-//! If a mutation overlapped the read, installation requests a retry. The raw
+//! [`cache::CacheRead`] bound to the tree and destination store. After loading
+//! storage, the reader consumes that handle through [`cache::CacheRead::populate`].
+//! If a mutation overlapped the read, populating requests a retry. The raw
 //! validity check and settlement operations are private: callers cannot separate
-//! them from the cache critical sections implemented in [`mod@cache`].
+//! them from the store critical sections implemented in [`mod@cache`].
 //!
-//! The final check and cache insertion happen under the same cache lock. Writers
-//! also finish updating the counters under that lock when they update or clear
-//! the cache. This prevents a writer from clearing the cache between a reader's
-//! successful check and its insertion. If another operation has already filled
-//! the cache, the reader uses that entry instead of its own loaded copy.
+//! Each tree has a store lock. The final check and the populate happen under it,
+//! and writers finish updating the counters under it when they merge into or
+//! remove the stored tree. This prevents a writer from removing the tree between
+//! a reader's successful check and its populate. A shared store adds its own
+//! generation check, which catches writers on other nodes.
 //!
-//! Storage reads and writes do not hold the cache or counter locks. The locks
-//! protecting these counters are also released before waiting for a cache lock.
+//! Storage reads and writes do not hold the store or counter locks. The locks
+//! protecting these counters are also released before waiting for a store lock.
+//! Store hits take neither lock.
 //!
 //! # Watching stored changes
 //!
@@ -58,12 +60,12 @@
 //! stream's later updates without being noticed.
 //!
 //! Completed writes queue their stored items for watchers whether or not the
-//! tree is cached. Failed writes and deletions instead tell watchers to reread
+//! tree is stored. Failed writes and deletions instead tell watchers to reread
 //! storage. The queues are temporary, not a durable event history: each holds
 //! at most 256 items or 4 MiB. Overflow also asks the watcher to reread. These
 //! limits do not bound the size of a full storage read.
 //!
-//! Queue updates happen with the revision change under the cache lock; readers
+//! Queue updates happen with the revision change under the store lock; readers
 //! and watchers are woken after the locks are released. Storage I/O and executor
 //! calls never run while the counter locks are held.
 //!
@@ -75,19 +77,19 @@
 //! one critical section; there is no separate queue lock to acquire in order.
 //! Watch handles identify entries owned by the tree and remove them on drop.
 //!
-//! Cache maintenance takes the cache shard lock before the tree lock. No code
-//! holds the tree lock while waiting for the cache, doing I/O, or notifying tasks.
+//! Store maintenance takes the tree's store lock before the tree lock. No code
+//! holds the tree lock while waiting for the store, doing I/O, or notifying tasks.
 //! Watch consumption also takes the tree lock, so consumers of the same tree
 //! serialize their short queue operations with publication and read acceptance.
 //!
 //! # Limits
 //!
 //! This does not make storage operations atomic. The node runs admitted writes
-//! in its own tasks, so dropping an API waiter does not abandon cache maintenance.
+//! in its own tasks, so dropping an API waiter does not abandon store maintenance.
 //! If the executor drops an unfinished task, its guard marks the shared state
 //! closed: backend work may still be running, so readers cannot assume it has
-//! finished. Changes made directly through an unrelated storage handle are not
-//! tracked here either.
+//! finished. The store keeps the tree from before that write. Changes made
+//! directly through an unrelated storage handle are not tracked here either.
 
 pub(crate) mod cache;
 
@@ -100,7 +102,11 @@ use alloc::{
     sync::{Arc, Weak},
     vec::Vec,
 };
-use sedimentree_core::{collections::Map, id::SedimentreeId};
+use async_lock::Mutex as AsyncMutex;
+use sedimentree_core::{
+    collections::{Map, Set},
+    id::SedimentreeId,
+};
 use spin::Mutex;
 
 pub(crate) const MAX_PENDING_ITEMS: usize = 256;
@@ -109,6 +115,9 @@ pub(crate) const MAX_PENDING_BYTES: usize = 4 * 1024 * 1024;
 #[derive(Debug, Default)]
 pub(crate) struct StorageState {
     trees: Mutex<Map<SedimentreeId, Weak<TreeState>>>,
+    /// Trees whose store entry may be stale after a failed `merge`/`remove`.
+    /// Reads skip the store for these until a `remove` succeeds.
+    bypassed: Mutex<Set<SedimentreeId>>,
     closed: core::sync::atomic::AtomicBool,
     changed: event_listener::Event,
 }
@@ -140,6 +149,7 @@ impl StorageState {
             id,
             owner: self.clone(),
             inner: Mutex::default(),
+            store: AsyncMutex::new(()),
             changed: event_listener::Event::new(),
         });
         trees.insert(id, Arc::downgrade(&state));
@@ -182,12 +192,15 @@ impl TreeInner {
         id
     }
 }
-/// The same revision validates metadata cache hydration and full-blob catch-up.
+/// The same revision validates minimized tree hydration and full-blob catch-up.
 #[derive(Debug)]
 struct TreeState {
     id: SedimentreeId,
     owner: Arc<StorageState>,
     inner: Mutex<TreeInner>,
+    /// Serializes this tree's store maintenance: read validation with
+    /// populating, and writes with settlement. Store hits do not take it.
+    store: AsyncMutex<()>,
     changed: event_listener::Event,
 }
 
@@ -228,8 +241,8 @@ impl TreeCoordination {
     /// Wait for pending mutations to finish, then prepare to read storage.
     ///
     /// The returned attempt does not lock storage or prevent new mutations.
-    /// Watchers accept it through `Watch::finish_read`; cache readers use
-    /// `prepare_cache_read` instead so validation cannot escape installation.
+    /// Watchers accept it through `Watch::finish_read`; store readers use
+    /// `prepare_cache_read` instead so validation cannot escape populating.
     pub(crate) async fn prepare_read(&self) -> ReadAttempt {
         loop {
             // Listen first so a mutation finishing between the check and the
@@ -260,18 +273,18 @@ pub(crate) struct ReadAttempt {
 }
 impl ReadAttempt {
     /// Whether no mutation has started or finished since this read was prepared.
-    /// When caching the result, call this while holding the cache lock and keep
-    /// that lock until installation finishes; an earlier check is not enough.
+    /// When storing the result, call this while holding the store lock and keep
+    /// that lock until populating finishes; an earlier check is not enough.
     fn is_current(&self) -> bool {
         let state = self.coordination.state.inner.lock();
         state.active_mutations == 0 && state.revision == self.revision
     }
 }
 
-/// A pending write or delete, including cache updates and watcher publication.
-/// Consume with `persist`, which owns cache maintenance and notification order.
+/// A pending write or delete, including store updates and watcher publication.
+/// Consume with `persist`, which owns store maintenance and notification order.
 /// Losing an unfinished driver closes observation: backend work may continue.
-#[must_use = "keep the handle until storage and cache work are complete"]
+#[must_use = "keep the handle until storage and store work are complete"]
 pub(crate) struct TrackedMutation {
     coordination: TreeCoordination,
     completed: bool,
@@ -281,10 +294,10 @@ impl TrackedMutation {
     pub(crate) fn observed(&self) -> bool {
         !self.coordination.state.inner.lock().watchers.is_empty()
     }
-    /// Mark cache work complete and queue persisted items (or a rescan request).
-    /// Live-node completion is called only by the cache integration, under the
-    /// shard lock. Drop also settles abandoned work, but closes coordination first
-    /// rather than claiming its cache maintenance succeeded.
+    /// Mark store work complete and queue persisted items (or a rescan request).
+    /// Live-node completion is called only by the store integration, under the
+    /// store lock. Drop also settles abandoned work, but closes coordination first
+    /// rather than claiming its store maintenance succeeded.
     /// Calling this again is harmless; notification happens on drop, outside locks.
     fn complete(&mut self, items: Option<&[StoredItem]>) {
         if self.completed {

@@ -28,13 +28,12 @@ use testresult::TestResult;
 /// registration; the peer must not remain tracked without a reader.
 #[tokio::test]
 async fn failed_manager_handoff_rolls_back_registration() -> TestResult {
-    let (subduction, _handler, _listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-            .signer(test_signer())
-            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-            .spawner(TokioSpawn)
-            .timer(InstantTimeout)
-            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
+    let (subduction, _handler, _listener_fut, actor_fut) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     // Kill the manager before it ever runs: dropping the future drops the
     // command-channel receiver, so the handoff send fails immediately.
@@ -71,13 +70,12 @@ async fn failed_manager_handoff_rolls_back_registration() -> TestResult {
 /// gone.
 #[tokio::test]
 async fn failed_reconnect_handoff_rolls_back_registration() -> TestResult {
-    let (subduction, _handler, _listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-            .signer(test_signer())
-            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-            .spawner(TokioSpawn)
-            .timer(InstantTimeout)
-            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
+    let (subduction, _handler, _listener_fut, actor_fut) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     drop(actor_fut);
 

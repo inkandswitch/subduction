@@ -516,7 +516,7 @@ async fn nonsupplier_marker_keeps_other_round_alive(rejected_offer: bool) {
         remote_heads::RemoteHeads,
     };
     use subduction_crypto::verified_meta::VerifiedMeta;
-    let (a, _, listener, manager) = SubductionBuilder::<_, _, _, _, _, _, 256>::new()
+    let (a, _, listener, manager) = SubductionBuilder::new()
         .signer(MemorySigner::from_bytes(&[70; 32]))
         .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
@@ -639,7 +639,7 @@ async fn all_peers_start_without_a_concurrency_cap_or_peer_deadline() {
         peer::id::PeerId,
         remote_heads::RemoteHeads,
     };
-    let (a, _, listener, manager) = SubductionBuilder::<_, _, _, _, _, _, 256>::new()
+    let (a, _, listener, manager) = SubductionBuilder::new()
         .signer(MemorySigner::from_bytes(&[43; 32]))
         .roundtrip_timeout(Duration::from_millis(100))
         .storage(MemoryStorage::new(), Arc::new(OpenPolicy))

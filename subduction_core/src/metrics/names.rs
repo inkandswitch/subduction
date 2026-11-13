@@ -147,14 +147,15 @@ pub const SUBSCRIPTION_PROPAGATIONS_TOTAL: &str = "subduction_subscription_propa
 pub const STORAGE_SEDIMENTREES: &str = "subduction_storage_sedimentrees";
 
 /// Cumulative resident-cache hits when resolving a sedimentree (the tree
-/// was already in the in-memory LRU; no storage hydration needed).
+/// was already in the minimized tree store; no storage hydration needed).
 pub const SEDIMENTREE_CACHE_HITS_TOTAL: &str = "subduction_sedimentree_cache_hits_total";
 /// Cumulative resident-cache misses (the tree had to be hydrated from
 /// durable storage). A high miss ratio means hydration — and the
 /// minimization it triggers — is on the hot path.
 pub const SEDIMENTREE_CACHE_MISSES_TOTAL: &str = "subduction_sedimentree_cache_misses_total";
-/// Sedimentrees currently resident in the in-memory LRU cache. Compare
-/// against the cache cap to see eviction pressure (which drives misses).
+/// Sedimentrees currently resident in the minimized tree store. Compare
+/// against the store's capacity to see eviction pressure (which drives
+/// misses).
 pub const SEDIMENTREE_CACHE_RESIDENT: &str = "subduction_sedimentree_cache_resident";
 /// Cumulative loose-commit write operations (CAS; includes idempotent
 /// no-ops). Maintained incrementally — never scanned.

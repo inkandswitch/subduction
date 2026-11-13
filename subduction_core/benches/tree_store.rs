@@ -58,9 +58,7 @@ fn runtime() -> Runtime {
 /// manager are not needed for local reads and writes, so they are dropped.
 macro_rules! node {
     ($storage:expr) => {{
-        // Annotated so the builder's defaults fix every parameter.
-        let builder: SubductionBuilder = SubductionBuilder::new();
-        let (node, _handler, _listener, _manager) = builder
+        let (node, _handler, _listener, _manager) = SubductionBuilder::new()
             .signer(MemorySigner::from_bytes(&[7; 32]))
             .storage($storage, Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
