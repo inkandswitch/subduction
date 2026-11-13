@@ -7,7 +7,7 @@
 //! Shard selection uses SipHash-2-4 with a random key to prevent `DoS` attacks
 //! where an adversary crafts keys that all hash to the same shard.
 
-use alloc::vec::Vec;
+use alloc::{sync::Arc, vec::Vec};
 use async_lock::Mutex;
 use core::hash::{Hash, Hasher};
 use sedimentree_core::collections::Map;
@@ -38,7 +38,7 @@ use siphasher::sip::SipHasher24;
 /// ```
 #[derive(Debug)]
 pub struct ShardedMap<K: Hash + Ord, V, const N: usize = 256> {
-    shards: [Mutex<Map<K, V>>; N],
+    shards: [Arc<Mutex<Map<K, V>>>; N],
 
     /// Seed 0 for keyed hash.
     key0: u64,
@@ -84,7 +84,7 @@ impl<K: Hash + Ord, V, const N: usize> ShardedMap<K, V, N> {
     #[must_use]
     pub fn with_key(key0: u64, key1: u64) -> Self {
         Self {
-            shards: core::array::from_fn(|_| Mutex::new(Map::new())),
+            shards: core::array::from_fn(|_| Arc::new(Mutex::new(Map::new()))),
             key0,
             key1,
         }
@@ -119,7 +119,8 @@ impl<K: Hash + Ord, V, const N: usize> ShardedMap<K, V, N> {
     ///
     /// Returns `None` if `index >= N`.
     #[inline]
-    pub const fn shard_at(&self, index: usize) -> Option<&Mutex<Map<K, V>>> {
+    #[must_use]
+    pub fn shard_at(&self, index: usize) -> Option<&Mutex<Map<K, V>>> {
         if index < N {
             #[allow(clippy::indexing_slicing)] // checked above + no `get` on array to avoid nightly
             Some(&self.shards[index])
@@ -142,6 +143,13 @@ impl<K: Hash + Ord, V, const N: usize> ShardedMap<K, V, N> {
     /// ```
     #[inline]
     pub fn get_shard_containing(&self, key: &K) -> &Mutex<Map<K, V>> {
+        self.shared_shard_containing(key)
+    }
+
+    /// The shard containing `key`, shared so it can be locked with an owned
+    /// guard that does not borrow the map.
+    #[inline]
+    pub fn shared_shard_containing(&self, key: &K) -> &Arc<Mutex<Map<K, V>>> {
         #[allow(clippy::indexing_slicing)] // shard_index always returns valid index
         &self.shards[self.shard_index(key)]
     }
