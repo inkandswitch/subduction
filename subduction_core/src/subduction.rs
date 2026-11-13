@@ -3403,6 +3403,26 @@ where
     }
 }
 
+impl<
+    'a,
+    Async: SubductionFutureForm<'a, Conn, Hdl::Message>,
+    E: Effects<Async>,
+    Conn: Connection<Async, Hdl::Message> + PartialEq + Clone + 'static,
+    Hdl: Handler<Async, Conn>,
+    Metric: DepthMetric,
+> Subduction<'a, Async, E, Conn, Hdl, Metric>
+{
+    /// The node's minimized tree store.
+    ///
+    /// Read it for observability, such as a resident-count gauge. Writing to
+    /// it directly bypasses the node's coordination; see
+    /// [`MinimizedTreeStore`] for the contract.
+    #[must_use]
+    pub const fn minimized_tree_store(&self) -> &E::MinimizedTreeStore {
+        &self.sedimentrees
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Test-only observability surface.
 //
@@ -3420,12 +3440,6 @@ impl<
     Metric: DepthMetric,
 > Subduction<'a, Async, E, Conn, Hdl, Metric>
 {
-    /// The node's minimized tree store.
-    #[must_use]
-    pub const fn minimized_tree_store(&self) -> &E::MinimizedTreeStore {
-        &self.sedimentrees
-    }
-
     /// Number of multiplexers currently registered for `peer_id`.
     ///
     /// One multiplexer is created per connection, so at a quiescent point
