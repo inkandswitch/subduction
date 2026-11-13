@@ -41,7 +41,7 @@ criterion_pprof = { workspace = true }
 futures = { workspace = true, features = ["executor"] }
 metrics-util = { workspace = true }
 rand = { workspace = true, features = ["std_rng"] }
-subduction_core = { path = ".", features = ["bolero", "metrics", "std", "test_utils"] }
+subduction_core = { path = ".", features = ["bolero", "conformance", "metrics", "std", "test_utils"] }
 testresult = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }
 
@@ -77,6 +77,9 @@ required-features = ["metrics"]
 default = []
 arbitrary = ["dep:arbitrary", "sedimentree_core/arbitrary", "subduction_crypto/arbitrary"]
 bolero = ["dep:bolero", "arbitrary", "sedimentree_core/bolero", "subduction_crypto/bolero"]
+# `MinimizedTreeStore` conformance checks for store implementations. Pulls in
+# no executor, so it builds for every target, including Wasm.
+conformance = ["arbitrary", "std"]
 metrics = ["dep:metrics", "std"]
 serde = ["dep:serde", "ed25519-dalek/serde", "subduction_crypto/serde"]
 serde-std = ["serde/std"]
