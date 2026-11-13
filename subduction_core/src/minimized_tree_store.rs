@@ -101,6 +101,16 @@
 //!
 //! [design notes]: https://github.com/inkandswitch/subduction/blob/main/design/minimized_tree_store.md
 //!
+//! # Checking an implementation
+//!
+//! The compiler cannot check this contract. The `conformance` module, behind
+//! the `conformance` feature, checks most of it: it has checks for every
+//! store, checks of rules 1 to 3 for a [`SharedMinimizedTreeStore`] through
+//! two handles, and a model-based check over generated operation sequences.
+//! Rule 4 and the reclamation of markers still need the store's own tests.
+//! Run the suite from your store's tests, as this crate does for its own
+//! stores. It pulls in no executor, so it runs on the store's own target.
+//!
 //! # Errors
 //!
 //! A store error never fails a node operation; the store is only an
@@ -111,6 +121,9 @@
 //!
 //! [`Storage`]: crate::storage::traits::Storage
 
+#[cfg(feature = "conformance")]
+#[cfg_attr(docsrs, doc(cfg(feature = "conformance")))]
+pub mod conformance;
 pub mod memory;
 pub mod noop;
 pub mod resilient;
@@ -192,7 +205,8 @@ pub trait MinimizedTreeStore<Async: FutureForm>: Clone {
 ///
 /// Implementing this promises that the store meets every rule in [Sharing a
 /// store between nodes](self#sharing-a-store-between-nodes). The compiler
-/// cannot check that promise.
+/// cannot check that promise. The shared-store checks in the `conformance`
+/// module test rules 1 to 3 of it, and accept only stores that make it.
 pub trait SharedMinimizedTreeStore<Async: FutureForm>: MinimizedTreeStore<Async> {}
 
 /// The result of [`MinimizedTreeStore::get`].
