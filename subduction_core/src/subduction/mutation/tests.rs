@@ -752,7 +752,8 @@ async fn forced_driver_loss_ends_validity_not_backend_effects() {
     let mut waiter = Box::pin(putter.save_commit(item(1).await));
     assert!(waiter.as_mut().now_or_never().is_none());
     started.recv().await.expect("effect started");
-    spawner.0.lock().first().expect("tracked").abort();
+    // The first spawn is the mutation worker; the last is this write's task.
+    spawner.0.lock().last().expect("tracked").abort();
     assert!(matches!(waiter.await, Err(MutationError::Closed)));
     assert!(storage.state.closed());
     assert!(
@@ -775,7 +776,8 @@ async fn cloned_powerboxes_manage_capabilities_from_the_first_write() {
         .save_commit(item(1).await)
         .await
         .expect("first write");
-    assert_eq!(spawner.0.lock().len(), 1, "first write uses the runner");
+    // The first write starts the mutation worker, which spawns its task.
+    assert_eq!(spawner.0.lock().len(), 2, "first write uses the worker");
     ingest::read_cached(&cache, &putter.as_fetcher(), |_| ())
         .await
         .expect("warm cache")
@@ -785,7 +787,7 @@ async fn cloned_powerboxes_manage_capabilities_from_the_first_write() {
         .save_commit(item(2).await)
         .await
         .expect("second write");
-    assert_eq!(spawner.0.lock().len(), 2);
+    assert_eq!(spawner.0.lock().len(), 3, "one task per write");
     assert_eq!(
         cache
             .get_cloned(ID)
@@ -801,7 +803,7 @@ async fn cloned_powerboxes_manage_capabilities_from_the_first_write() {
         putter.save_commit(item(3).await).await,
         Err(crate::storage::mutation::MutationError::Closed)
     ));
-    assert_eq!(spawner.0.lock().len(), 2, "clones share shutdown state");
+    assert_eq!(spawner.0.lock().len(), 3, "clones share shutdown state");
 }
 
 #[tokio::test]
