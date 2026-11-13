@@ -7,10 +7,13 @@
 //! storage read and a minimization pass to build. A [`MinimizedTreeStore`]
 //! keeps those built trees so that hot reads skip both.
 //!
-//! Two stores ship with the crate:
+//! Three stores ship with the crate:
 //!
 //! - [`memory::MemoryMinimizedTreeStore`] keeps trees in this process's
 //!   memory, for one node. It is the default.
+//! - [`shared::SharedMemoryMinimizedTreeStore`] keeps them in memory for
+//!   several nodes in one process, following every rule for a shared store
+//!   below. Start from it when writing a networked store.
 //! - [`noop::NoopMinimizedTreeStore`] keeps nothing.
 //!
 //! Implement the trait to keep trees elsewhere: a shared store in front of
@@ -63,6 +66,9 @@
 //! > rules below itself. If it does not, it _loses updates and hides
 //! > commits_ that are in storage, and nothing in the node can detect it.
 //!
+//! A store that meets these rules says so by implementing
+//! [`SharedMinimizedTreeStore`].
+//!
 //! 1. **`populate` is a compare-and-set.** Checking `seen` against the
 //!    current generation and writing the tree must happen as one atomic
 //!    step.
@@ -80,8 +86,15 @@
 //! a write-back can overwrite another node's merge. Store calls must time
 //! out, since the node holds a per-tree lock across store maintenance.
 //!
+//! [`shared::SharedMemoryMinimizedTreeStore`] meets all of these, including
+//! safe reclamation of markers. The [design notes] cover the full rule set,
+//! how to reclaim markers without reopening the race, mapping onto networked
+//! stores, and layering a fast local store in front of a shared one.
+//!
 //! A per-node store over storage that _other_ nodes write to never sees
 //! their writes, so it goes stale. Nodes sharing storage must share a store.
+//!
+//! [design notes]: https://github.com/inkandswitch/subduction/blob/main/design/minimized_tree_store.md
 //!
 //! # Errors
 //!
@@ -95,6 +108,7 @@
 
 pub mod memory;
 pub mod noop;
+pub mod shared;
 
 use core::{error::Error, ops::DerefMut};
 
@@ -167,6 +181,13 @@ pub trait MinimizedTreeStore<Async: FutureForm>: Clone {
     /// Drop the tree for `id`, if resident, and change its generation.
     fn remove(&self, id: SedimentreeId) -> Async::Future<'_, Result<(), Self::Error>>;
 }
+
+/// A [`MinimizedTreeStore`] that several nodes can share.
+///
+/// Implementing this promises that the store meets every rule in [Sharing a
+/// store between nodes](self#sharing-a-store-between-nodes). The compiler
+/// cannot check that promise.
+pub trait SharedMinimizedTreeStore<Async: FutureForm>: MinimizedTreeStore<Async> {}
 
 /// The result of [`MinimizedTreeStore::get`].
 #[derive(Debug)]
