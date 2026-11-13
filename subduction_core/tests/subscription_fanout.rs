@@ -329,7 +329,7 @@ async fn add_commit_pushes_only_to_authorized_subscribers() -> TestResult {
 /// cannot distinguish one delivery from several.
 #[tokio::test]
 async fn add_commit_sends_one_frame_per_commit_to_a_subscriber() -> TestResult {
-    let (a, _handler, listener, manager) = SubductionBuilder::<_, _, _, _, _, _, 256>::new()
+    let (a, _handler, listener, manager) = SubductionBuilder::new()
         .signer(make_signer(8))
         .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)

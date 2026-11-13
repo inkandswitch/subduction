@@ -168,13 +168,12 @@ fn make_commit_parts(data: &[u8]) -> (CommitId, BTreeSet<CommitId>, Blob) {
 /// `unauthorized_fetch_returns_unauthorized_result` test below.
 #[tokio::test]
 async fn local_add_sedimentree_bypasses_put_policy() {
-    let (subduction, _handler, _listener_fut, _actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-            .signer(test_signer())
-            .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
-            .spawner(TokioSpawn)
-            .timer(InstantTimeout)
-            .build::<Sendable, MockConnection>();
+    let (subduction, _handler, _listener_fut, _actor_fut) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, MockConnection>();
 
     let id = SedimentreeId::new([1u8; 32]);
     let tree = Sedimentree::default();
@@ -192,13 +191,12 @@ async fn local_add_sedimentree_bypasses_put_policy() {
 
 #[tokio::test]
 async fn local_add_commit_bypasses_put_policy() {
-    let (subduction, _handler, _listener_fut, _actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-            .signer(test_signer())
-            .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
-            .spawner(TokioSpawn)
-            .timer(InstantTimeout)
-            .build::<Sendable, MockConnection>();
+    let (subduction, _handler, _listener_fut, _actor_fut) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, MockConnection>();
 
     let id = SedimentreeId::new([1u8; 32]);
     let (head, parents, blob) = make_commit_parts(b"test data");
@@ -213,16 +211,15 @@ async fn local_adds_bypass_id_specific_policy() -> TestResult {
     let allowed_id = SedimentreeId::new([42u8; 32]);
     let other_id = SedimentreeId::new([99u8; 32]);
 
-    let (subduction, _handler, _listener_fut, _actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-            .signer(test_signer())
-            .storage(
-                MemoryStorage::new(),
-                Arc::new(AllowSpecificIdPolicy { allowed_id }),
-            )
-            .spawner(TokioSpawn)
-            .timer(InstantTimeout)
-            .build::<Sendable, MockConnection>();
+    let (subduction, _handler, _listener_fut, _actor_fut) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(
+            MemoryStorage::new(),
+            Arc::new(AllowSpecificIdPolicy { allowed_id }),
+        )
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, MockConnection>();
 
     // Local operations succeed for both IDs — policy only applies to remote data
     let tree = Sedimentree::default();
@@ -249,13 +246,12 @@ async fn local_adds_bypass_id_specific_policy() -> TestResult {
 
 #[tokio::test]
 async fn local_add_stores_data_despite_rejecting_policy() {
-    let (subduction, _handler, _listener_fut, _actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-            .signer(test_signer())
-            .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
-            .spawner(TokioSpawn)
-            .timer(InstantTimeout)
-            .build::<Sendable, MockConnection>();
+    let (subduction, _handler, _listener_fut, _actor_fut) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, MockConnection>();
 
     let id = SedimentreeId::new([1u8; 32]);
     let tree = Sedimentree::default();
@@ -347,13 +343,12 @@ impl StoragePolicy<Sendable> for RejectFetchPolicy {
 
 #[tokio::test]
 async fn multiple_local_adds_succeed_despite_rejecting_policy() {
-    let (subduction, _handler, _listener_fut, _actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-            .signer(test_signer())
-            .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
-            .spawner(TokioSpawn)
-            .timer(InstantTimeout)
-            .build::<Sendable, MockConnection>();
+    let (subduction, _handler, _listener_fut, _actor_fut) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, MockConnection>();
 
     // All local operations succeed (policy bypassed)
     for i in 0..5u8 {
@@ -384,7 +379,7 @@ async fn requested_data_rejection(all_peers: bool) -> TestResult {
     let policy = Arc::new(RejectFetchPolicy {
         allow_fetch: AtomicBool::new(true),
     });
-    let (node, _, listener, manager) = SubductionBuilder::<_, _, _, _, _, _, 256>::new()
+    let (node, _, listener, manager) = SubductionBuilder::new()
         .signer(test_signer())
         .storage(MemoryStorage::new(), policy.clone())
         .spawner(TokioSpawn)
@@ -587,18 +582,17 @@ async fn remote_commit_from_unauthorized_author_is_rejected() -> TestResult {
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
     let relay_peer_id = PeerId::new([1u8; 32]);
 
-    let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-            .signer(test_signer())
-            .storage(
-                MemoryStorage::new(),
-                Arc::new(AllowSpecificAuthorPolicy {
-                    allowed_author: allowed_vk,
-                }),
-            )
-            .spawner(TokioSpawn)
-            .timer(InstantTimeout)
-            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
+    let (subduction, _handler, listener_fut, actor_fut) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(
+            MemoryStorage::new(),
+            Arc::new(AllowSpecificAuthorPolicy {
+                allowed_author: allowed_vk,
+            }),
+        )
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(relay_peer_id);
     subduction.add_connection(conn.authenticated()).await?;
@@ -683,13 +677,12 @@ async fn remote_commit_from_unauthorized_author_is_rejected() -> TestResult {
 /// with `SyncResult::Unauthorized` so the peer knows they're not authorized.
 #[tokio::test]
 async fn unauthorized_fetch_returns_unauthorized_result() -> TestResult {
-    let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-            .signer(test_signer())
-            .storage(MemoryStorage::new(), Arc::new(RejectFetchPolicy::default()))
-            .spawner(TokioSpawn)
-            .timer(InstantTimeout)
-            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
+    let (subduction, _handler, listener_fut, actor_fut) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(RejectFetchPolicy::default()))
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     let peer_id = PeerId::new([1u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);

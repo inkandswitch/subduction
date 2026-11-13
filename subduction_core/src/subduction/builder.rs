@@ -24,7 +24,7 @@
 //! | `depth_metric` | [`.depth_metric()`] | [`CountLeadingZeroBytes`] |
 //! | `heads_observer` | [`.heads_observer()`] | [`NoRemoteHeadsObserver`] (discards updates) |
 //! | `nonce_cache` | [`.nonce_cache()`] | [`NonceCache::default()`] |
-//! | `sedimentrees` | [`.sedimentrees()`] | Empty [`BoundedShardedMap::new()`] |
+//! | `minimized_tree_store` | [`.minimized_tree_store()`] | Unbounded [`MemoryMinimizedTreeStore`] |
 //!
 //! # Example
 //!
@@ -38,14 +38,6 @@
 //!     .timer(InstantTimeout)
 //!     .discovery_id(discovery_id)
 //!     .build::<Sendable, MyConnection>();
-//!
-//! // Name the node type where it is stored or returned; nothing else fixes
-//! // the shard count, so a fully unconstrained result fails to infer `SHARDS`.
-//! type MyCfg = Config<MyStorage, MyPolicy, MemorySigner, InstantTimeout, TokioSpawn>;
-//! type MyHandler = SyncHandler<Sendable, MyCfg, MyConnection, CountLeadingZeroBytes>;
-//! type MyNode = Subduction<'static, Sendable, MyCfg, MyConnection, MyHandler>;
-//!
-//! let node: Arc<MyNode> = subduction;
 //! ```
 //!
 //! `TokioSpawn`, `InstantTimeout`, and the mock connections live in
@@ -71,10 +63,10 @@
 //! [`.discovery_id()`]: SubductionBuilder::discovery_id
 //! [`.depth_metric()`]: SubductionBuilder::depth_metric
 //! [`.nonce_cache()`]: SubductionBuilder::nonce_cache
-//! [`.sedimentrees()`]: SubductionBuilder::sedimentrees
+//! [`.minimized_tree_store()`]: SubductionBuilder::minimized_tree_store
 //! [`CountLeadingZeroBytes`]: sedimentree_core::depth::CountLeadingZeroBytes
 //! [`NonceCache::default()`]: crate::nonce_cache::NonceCache
-//! [`BoundedShardedMap::new()`]: crate::collections::bounded_sharded_map::BoundedShardedMap::new
+//! [`MemoryMinimizedTreeStore`]: crate::minimized_tree_store::memory::MemoryMinimizedTreeStore
 
 use alloc::sync::Arc;
 use async_lock::Mutex;
@@ -83,12 +75,10 @@ use sedimentree_core::{
     collections::{Map, Set},
     depth::{CountLeadingZeroBytes, DepthMetric},
     id::SedimentreeId,
-    sedimentree::minimized::MinimizedSedimentree,
 };
 
 use crate::{
     authenticated::Authenticated,
-    collections::bounded_sharded_map::BoundedShardedMap,
     connection::{
         Connection,
         managed::{ManagedCall, ManagedConnection},
@@ -97,6 +87,7 @@ use crate::{
     effects::config::Config,
     handler::{Handler, sync::SyncHandler},
     handshake::audience::DiscoveryId,
+    minimized_tree_store::{MinimizedTreeStore, memory::MemoryMinimizedTreeStore},
     multiplexer::DEFAULT_ROUNDTRIP_TIMEOUT,
     nonce_cache::NonceCache,
     peer::{counter::PeerCounter, id::PeerId},
@@ -139,7 +130,7 @@ pub struct SubductionBuilder<
     Timer = Unset,
     Metric = CountLeadingZeroBytes,
     HeadsObserver = NoRemoteHeadsObserver,
-    const SHARDS: usize = 256,
+    Trees = MemoryMinimizedTreeStore,
 > {
     signer: Sign,
     spawner: Sp,
@@ -152,30 +143,14 @@ pub struct SubductionBuilder<
     depth_metric: Metric,
     nonce_cache: Option<NonceCache>,
     send_counter: Option<PeerCounter>,
-    max_resident_trees: Option<usize>,
-    sedimentrees: SedimentreesOption<SHARDS>,
-}
-
-/// Internal helper: stores an optional pre-populated `BoundedShardedMap`.
-///
-/// Using a wrapper struct avoids placing the const generic `SHARDS` on
-/// fields that don't otherwise need it.
-#[derive(Debug)]
-struct SedimentreesOption<const SHARDS: usize>(
-    Option<Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>>,
-);
-
-impl<const SHARDS: usize> Default for SedimentreesOption<SHARDS> {
-    fn default() -> Self {
-        Self(None)
-    }
+    minimized_tree_store: Trees,
 }
 
 // -----------------------------------------------------------------------
 // Constructor
 // -----------------------------------------------------------------------
 
-impl<const SHARDS: usize>
+impl
     SubductionBuilder<
         Unset,
         Unset,
@@ -183,7 +158,7 @@ impl<const SHARDS: usize>
         Unset,
         CountLeadingZeroBytes,
         NoRemoteHeadsObserver,
-        SHARDS,
+        MemoryMinimizedTreeStore,
     >
 {
     /// Create a new builder with all defaults.
@@ -192,9 +167,9 @@ impl<const SHARDS: usize>
     /// `timer` — must be set via their respective methods before
     /// calling [`build`](SubductionBuilder::build).
     ///
-    /// The const generic `SHARDS` controls the number of shards in the
-    /// internal [`BoundedShardedMap`]. The struct declares a default of 256,
-    /// but inference does not use it: name the node type to fix `SHARDS`.
+    /// Trees are kept in an unbounded [`MemoryMinimizedTreeStore`] unless
+    /// [`minimized_tree_store`](SubductionBuilder::minimized_tree_store)
+    /// supplies another store.
     #[must_use]
     pub fn new() -> Self {
         SubductionBuilder {
@@ -208,13 +183,12 @@ impl<const SHARDS: usize>
             depth_metric: CountLeadingZeroBytes,
             nonce_cache: None,
             send_counter: None,
-            max_resident_trees: None,
-            sedimentrees: SedimentreesOption::default(),
+            minimized_tree_store: MemoryMinimizedTreeStore::new(),
         }
     }
 }
 
-impl<const SHARDS: usize> Default
+impl Default
     for SubductionBuilder<
         Unset,
         Unset,
@@ -222,7 +196,7 @@ impl<const SHARDS: usize> Default
         Unset,
         CountLeadingZeroBytes,
         NoRemoteHeadsObserver,
-        SHARDS,
+        MemoryMinimizedTreeStore,
     >
 {
     fn default() -> Self {
@@ -230,8 +204,8 @@ impl<const SHARDS: usize> Default
     }
 }
 
-impl<Sp, Store, Timer, Metric, HeadsObserver, const SHARDS: usize>
-    SubductionBuilder<Unset, Sp, Store, Timer, Metric, HeadsObserver, SHARDS>
+impl<Sp, Store, Timer, Metric, HeadsObserver, Trees>
+    SubductionBuilder<Unset, Sp, Store, Timer, Metric, HeadsObserver, Trees>
 {
     /// Set the signer for peer identity and handshake authentication.
     ///
@@ -239,7 +213,7 @@ impl<Sp, Store, Timer, Metric, HeadsObserver, const SHARDS: usize>
     pub fn signer<Sign>(
         self,
         signer: Sign,
-    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, HeadsObserver, SHARDS> {
+    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, HeadsObserver, Trees> {
         let Self {
             signer: Unset,
             spawner,
@@ -251,8 +225,7 @@ impl<Sp, Store, Timer, Metric, HeadsObserver, const SHARDS: usize>
             depth_metric,
             nonce_cache,
             send_counter,
-            max_resident_trees,
-            sedimentrees,
+            minimized_tree_store,
         } = self;
 
         SubductionBuilder {
@@ -266,14 +239,13 @@ impl<Sp, Store, Timer, Metric, HeadsObserver, const SHARDS: usize>
             depth_metric,
             nonce_cache,
             send_counter,
-            max_resident_trees,
-            sedimentrees,
+            minimized_tree_store,
         }
     }
 }
 
-impl<Sign, Store, Timer, Metric, HeadsObserver, const SHARDS: usize>
-    SubductionBuilder<Sign, Unset, Store, Timer, Metric, HeadsObserver, SHARDS>
+impl<Sign, Store, Timer, Metric, HeadsObserver, Trees>
+    SubductionBuilder<Sign, Unset, Store, Timer, Metric, HeadsObserver, Trees>
 {
     /// Set the task spawner for background work.
     ///
@@ -283,7 +255,7 @@ impl<Sign, Store, Timer, Metric, HeadsObserver, const SHARDS: usize>
     pub fn spawner<Sp>(
         self,
         spawner: Sp,
-    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, HeadsObserver, SHARDS> {
+    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, HeadsObserver, Trees> {
         let Self {
             signer,
             spawner: Unset,
@@ -295,8 +267,7 @@ impl<Sign, Store, Timer, Metric, HeadsObserver, const SHARDS: usize>
             depth_metric,
             nonce_cache,
             send_counter,
-            max_resident_trees,
-            sedimentrees,
+            minimized_tree_store,
         } = self;
 
         SubductionBuilder {
@@ -310,14 +281,13 @@ impl<Sign, Store, Timer, Metric, HeadsObserver, const SHARDS: usize>
             depth_metric,
             nonce_cache,
             send_counter,
-            max_resident_trees,
-            sedimentrees,
+            minimized_tree_store,
         }
     }
 }
 
-impl<Sign, Sp, Timer, Metric, HeadsObserver, const SHARDS: usize>
-    SubductionBuilder<Sign, Sp, Unset, Timer, Metric, HeadsObserver, SHARDS>
+impl<Sign, Sp, Timer, Metric, HeadsObserver, Trees>
+    SubductionBuilder<Sign, Sp, Unset, Timer, Metric, HeadsObserver, Trees>
 {
     /// Set the storage backend and authorization policy.
     ///
@@ -327,7 +297,7 @@ impl<Sign, Sp, Timer, Metric, HeadsObserver, const SHARDS: usize>
         self,
         storage: Store,
         policy: Arc<Policy>,
-    ) -> SubductionBuilder<Sign, Sp, (Store, Arc<Policy>), Timer, Metric, HeadsObserver, SHARDS>
+    ) -> SubductionBuilder<Sign, Sp, (Store, Arc<Policy>), Timer, Metric, HeadsObserver, Trees>
     {
         let Self {
             signer,
@@ -340,8 +310,7 @@ impl<Sign, Sp, Timer, Metric, HeadsObserver, const SHARDS: usize>
             depth_metric,
             nonce_cache,
             send_counter,
-            max_resident_trees,
-            sedimentrees,
+            minimized_tree_store,
         } = self;
 
         SubductionBuilder {
@@ -355,14 +324,13 @@ impl<Sign, Sp, Timer, Metric, HeadsObserver, const SHARDS: usize>
             depth_metric,
             nonce_cache,
             send_counter,
-            max_resident_trees,
-            sedimentrees,
+            minimized_tree_store,
         }
     }
 }
 
-impl<Sign, Sp, Store, Metric, HeadsObserver, const SHARDS: usize>
-    SubductionBuilder<Sign, Sp, Store, Unset, Metric, HeadsObserver, SHARDS>
+impl<Sign, Sp, Store, Metric, HeadsObserver, Trees>
+    SubductionBuilder<Sign, Sp, Store, Unset, Metric, HeadsObserver, Trees>
 {
     /// Set the timeout strategy for roundtrip calls.
     ///
@@ -372,7 +340,7 @@ impl<Sign, Sp, Store, Metric, HeadsObserver, const SHARDS: usize>
     pub fn timer<O>(
         self,
         timer: O,
-    ) -> SubductionBuilder<Sign, Sp, Store, O, Metric, HeadsObserver, SHARDS> {
+    ) -> SubductionBuilder<Sign, Sp, Store, O, Metric, HeadsObserver, Trees> {
         let Self {
             signer,
             spawner,
@@ -384,8 +352,7 @@ impl<Sign, Sp, Store, Metric, HeadsObserver, const SHARDS: usize>
             depth_metric,
             nonce_cache,
             send_counter,
-            max_resident_trees,
-            sedimentrees,
+            minimized_tree_store,
         } = self;
 
         SubductionBuilder {
@@ -399,14 +366,13 @@ impl<Sign, Sp, Store, Metric, HeadsObserver, const SHARDS: usize>
             depth_metric,
             nonce_cache,
             send_counter,
-            max_resident_trees,
-            sedimentrees,
+            minimized_tree_store,
         }
     }
 }
 
-impl<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, const SHARDS: usize>
-    SubductionBuilder<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, SHARDS>
+impl<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, Trees>
+    SubductionBuilder<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, Trees>
 {
     /// Set the [`RemoteHeadsObserver`] invoked whenever a remote peer
     /// reports its heads for a sedimentree — via a `HeadsUpdate` message,
@@ -427,7 +393,7 @@ impl<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, const SHARDS: usize>
     pub fn heads_observer<NewHeadsObserver>(
         self,
         heads_observer: NewHeadsObserver,
-    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, NewHeadsObserver, SHARDS> {
+    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, NewHeadsObserver, Trees> {
         let Self {
             signer,
             spawner,
@@ -439,8 +405,7 @@ impl<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, const SHARDS: usize>
             depth_metric,
             nonce_cache,
             send_counter,
-            max_resident_trees,
-            sedimentrees,
+            minimized_tree_store,
         } = self;
 
         SubductionBuilder {
@@ -454,14 +419,13 @@ impl<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, const SHARDS: usize>
             depth_metric,
             nonce_cache,
             send_counter,
-            max_resident_trees,
-            sedimentrees,
+            minimized_tree_store,
         }
     }
 }
 
-impl<Sign, Sp, Store, Timer, Met, HeadsObserver, const SHARDS: usize>
-    SubductionBuilder<Sign, Sp, Store, Timer, Met, HeadsObserver, SHARDS>
+impl<Sign, Sp, Store, Timer, Met, HeadsObserver, Trees>
+    SubductionBuilder<Sign, Sp, Store, Timer, Met, HeadsObserver, Trees>
 {
     /// Set the discovery ID for discovery-mode connections.
     ///
@@ -504,7 +468,7 @@ impl<Sign, Sp, Store, Timer, Met, HeadsObserver, const SHARDS: usize>
     pub fn depth_metric<Metric: DepthMetric>(
         self,
         metric: Metric,
-    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, HeadsObserver, SHARDS> {
+    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Metric, HeadsObserver, Trees> {
         let Self {
             signer,
             spawner,
@@ -516,8 +480,7 @@ impl<Sign, Sp, Store, Timer, Met, HeadsObserver, const SHARDS: usize>
             depth_metric: _replaced,
             nonce_cache,
             send_counter,
-            max_resident_trees,
-            sedimentrees,
+            minimized_tree_store,
         } = self;
 
         SubductionBuilder {
@@ -531,8 +494,7 @@ impl<Sign, Sp, Store, Timer, Met, HeadsObserver, const SHARDS: usize>
             depth_metric: metric,
             nonce_cache,
             send_counter,
-            max_resident_trees,
-            sedimentrees,
+            minimized_tree_store,
         }
     }
 
@@ -557,47 +519,46 @@ impl<Sign, Sp, Store, Timer, Met, HeadsObserver, const SHARDS: usize>
         self
     }
 
-    /// Bound the number of sedimentrees kept resident in memory.
+    /// Keep minimized trees in `store` instead of the default unbounded
+    /// [`MemoryMinimizedTreeStore`].
     ///
-    /// The in-memory sedimentree map is an LRU cache over durable storage:
-    /// when the resident set exceeds this many trees, the least-recently-used
-    /// trees are evicted and transparently re-hydrated from storage on next
-    /// access. This bounds memory by the active working set rather than the
-    /// total number of documents ever synced.
-    ///
-    /// # Approximate, not a strict global cap
-    ///
-    /// The bound is enforced **per shard**: `max` is divided across the
-    /// map's shards (`ceil(max / SHARDS)` per shard, floored at 1). So the
-    /// effective global ceiling is `ceil(max / SHARDS) * SHARDS`, which can
-    /// exceed `max` and is **at least `SHARDS`** (256 by default). Setting a
-    /// value smaller than the shard count therefore still permits up to one
-    /// resident tree per shard. Treat `max` as an order-of-magnitude target,
-    /// not an exact limit. See
-    /// [`BoundedShardedMap::with_capacity`](crate::collections::bounded_sharded_map::BoundedShardedMap::with_capacity).
-    ///
-    /// Defaults to unbounded (no eviction) — set this on servers / clients
-    /// that sync large numbers of documents. Ignored if a pre-populated
-    /// [`sedimentrees`](Self::sedimentrees) map is supplied (configure the
-    /// cap on that map directly via `with_capacity`).
+    /// To bound memory, pass [`MemoryMinimizedTreeStore::with_capacity`]: the
+    /// least-recently-used trees are evicted and rebuilt from storage on next
+    /// access. To keep trees outside this process, pass your own
+    /// [`MinimizedTreeStore`],
+    /// after reading its contract on sharing a store between nodes.
     #[must_use]
-    pub const fn max_resident_trees(mut self, max: usize) -> Self {
-        self.max_resident_trees = Some(max);
-        self
-    }
+    pub fn minimized_tree_store<NewTrees>(
+        self,
+        store: NewTrees,
+    ) -> SubductionBuilder<Sign, Sp, Store, Timer, Met, HeadsObserver, NewTrees> {
+        let Self {
+            signer,
+            spawner,
+            storage,
+            timer,
+            heads_observer,
+            discovery_id,
+            default_roundtrip_timeout,
+            depth_metric,
+            nonce_cache,
+            send_counter,
+            minimized_tree_store: _replaced,
+        } = self;
 
-    /// Provide a pre-populated sedimentree map.
-    ///
-    /// Use this for hydration: load sedimentree state from storage,
-    /// then pass the populated map here. Defaults to an empty
-    /// [`BoundedShardedMap::new()`](crate::collections::bounded_sharded_map::BoundedShardedMap::new).
-    #[must_use]
-    pub fn sedimentrees(
-        mut self,
-        sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
-    ) -> Self {
-        self.sedimentrees = SedimentreesOption(Some(sedimentrees));
-        self
+        SubductionBuilder {
+            signer,
+            spawner,
+            storage,
+            timer,
+            heads_observer,
+            discovery_id,
+            default_roundtrip_timeout,
+            depth_metric,
+            nonce_cache,
+            send_counter,
+            minimized_tree_store: store,
+        }
     }
 }
 
@@ -605,16 +566,8 @@ impl<Sign, Sp, Store, Timer, Met, HeadsObserver, const SHARDS: usize>
 // Build methods (only available when all required fields are set)
 // -----------------------------------------------------------------------
 
-impl<
-    Sign,
-    Sp,
-    Store,
-    Policy,
-    Timer,
-    Metric: DepthMetric,
-    HeadsObserver: RemoteHeadsObserver,
-    const SHARDS: usize,
-> SubductionBuilder<Sign, Sp, (Store, Arc<Policy>), Timer, Metric, HeadsObserver, SHARDS>
+impl<Sign, Sp, Store, Policy, Timer, Metric: DepthMetric, HeadsObserver: RemoteHeadsObserver, Trees>
+    SubductionBuilder<Sign, Sp, (Store, Arc<Policy>), Timer, Metric, HeadsObserver, Trees>
 {
     /// Build a [`Subduction`] instance with the default [`SyncHandler`].
     ///
@@ -648,27 +601,24 @@ impl<
             Subduction<
                 'a,
                 Async,
-                Config<Store, Policy, Sign, Timer, Sp>,
+                Config<Store, Policy, Sign, Timer, Sp, Trees>,
                 Conn,
                 SyncHandler<
                     Async,
-                    Config<Store, Policy, Sign, Timer, Sp>,
+                    Config<Store, Policy, Sign, Timer, Sp, Trees>,
                     Conn,
                     Metric,
-                    SHARDS,
                     HeadsObserver,
                 >,
                 Metric,
-                SHARDS,
             >,
         >,
         Arc<
             SyncHandler<
                 Async,
-                Config<Store, Policy, Sign, Timer, Sp>,
+                Config<Store, Policy, Sign, Timer, Sp, Trees>,
                 Conn,
                 Metric,
-                SHARDS,
                 HeadsObserver,
             >,
         >,
@@ -679,19 +629,17 @@ impl<
         Async: SubductionFutureForm<'a, Conn, SyncMessage> + 'static,
         Async: NodeTasks<
                 'a,
-                Config<Store, Policy, Sign, Timer, Sp>,
+                Config<Store, Policy, Sign, Timer, Sp, Trees>,
                 Conn,
                 SyncMessage,
                 SyncHandler<
                     Async,
-                    Config<Store, Policy, Sign, Timer, Sp>,
+                    Config<Store, Policy, Sign, Timer, Sp, Trees>,
                     Conn,
                     Metric,
-                    SHARDS,
                     HeadsObserver,
                 >,
                 Metric,
-                SHARDS,
             >,
         Store: Storage<Async>,
         Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'a,
@@ -699,22 +647,21 @@ impl<
         Sign: Signer<Async>,
         Timer: Timeout<Async> + Clone + 'a,
         Sp: Spawn<Async> + Clone + Send + Sync + 'static,
+        Trees: MinimizedTreeStore<Async> + Send + Sync,
         'a: 'static,
         Metric: Clone,
         SyncHandler<
             Async,
-            Config<Store, Policy, Sign, Timer, Sp>,
+            Config<Store, Policy, Sign, Timer, Sp, Trees>,
             Conn,
             Metric,
-            SHARDS,
             HeadsObserver,
         >: Handler<Async, Conn, Message = SyncMessage>,
         <SyncHandler<
             Async,
-            Config<Store, Policy, Sign, Timer, Sp>,
+            Config<Store, Policy, Sign, Timer, Sp, Trees>,
             Conn,
             Metric,
-            SHARDS,
             HeadsObserver,
         > as Handler<Async, Conn>>::HandlerError:
             Into<ListenError<Async, Store, Conn, SyncMessage>>,
@@ -724,14 +671,7 @@ impl<
                 SendError = <Conn as Connection<Async, SyncMessage>>::SendError,
             >,
     {
-        let sedimentrees = self.sedimentrees.0.unwrap_or_else(|| {
-            let map = BoundedShardedMap::new();
-            let map = match self.max_resident_trees {
-                Some(cap) => map.with_capacity(cap),
-                None => map,
-            };
-            Arc::new(map)
-        });
+        let minimized_tree_store = self.minimized_tree_store;
 
         let connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>> =
             Arc::new(Mutex::new(Map::new()));
@@ -742,11 +682,11 @@ impl<
         let storage = Async::storage_powerbox(
             self.storage.0,
             self.storage.1,
-            sedimentrees.clone(),
+            minimized_tree_store.clone(),
             self.spawner.clone(),
         );
         let mut handler = SyncHandler::with_remote_heads_observer(
-            sedimentrees.clone(),
+            minimized_tree_store.clone(),
             connections.clone(),
             subscriptions.clone(),
             storage.clone(),
@@ -765,7 +705,7 @@ impl<
             handler.clone(),
             self.discovery_id,
             self.signer,
-            sedimentrees,
+            minimized_tree_store,
             connections,
             subscriptions,
             storage,
@@ -782,8 +722,8 @@ impl<
     }
 }
 
-impl<Sign, Sp, Store, Policy, Timer, Metric: DepthMetric, const SHARDS: usize>
-    SubductionBuilder<Sign, Sp, (Store, Arc<Policy>), Timer, Metric, NoRemoteHeadsObserver, SHARDS>
+impl<Sign, Sp, Store, Policy, Timer, Metric: DepthMetric, Trees>
+    SubductionBuilder<Sign, Sp, (Store, Arc<Policy>), Timer, Metric, NoRemoteHeadsObserver, Trees>
 {
     /// Build a [`Subduction`] instance with a custom [`Handler`].
     ///
@@ -826,15 +766,7 @@ impl<Sign, Sp, Store, Policy, Timer, Metric: DepthMetric, const SHARDS: usize>
         handler: Arc<Hdl>,
     ) -> (
         Arc<
-            Subduction<
-                'a,
-                Async,
-                Config<Store, Policy, Sign, Timer, Sp>,
-                Conn,
-                Hdl,
-                Metric,
-                SHARDS,
-            >,
+            Subduction<'a, Async, Config<Store, Policy, Sign, Timer, Sp, Trees>, Conn, Hdl, Metric>,
         >,
         ListenerFuture<'a, Async>,
         crate::connection::manager::ManagerFuture<Async>,
@@ -843,12 +775,11 @@ impl<Sign, Sp, Store, Policy, Timer, Metric: DepthMetric, const SHARDS: usize>
         Async: SubductionFutureForm<'a, Conn, Hdl::Message> + 'static,
         Async: NodeTasks<
                 'a,
-                Config<Store, Policy, Sign, Timer, Sp>,
+                Config<Store, Policy, Sign, Timer, Sp, Trees>,
                 Conn,
                 Hdl::Message,
                 Hdl,
                 Metric,
-                SHARDS,
             >,
         Store: Storage<Async>,
         Conn: Connection<Async, Hdl::Message> + PartialEq + Clone + 'a,
@@ -856,6 +787,7 @@ impl<Sign, Sp, Store, Policy, Timer, Metric: DepthMetric, const SHARDS: usize>
         Sign: Signer<Async>,
         Timer: Timeout<Async> + Clone + 'a,
         Sp: Spawn<Async> + Clone + Send + Sync + 'static,
+        Trees: MinimizedTreeStore<Async> + Send + Sync,
         'a: 'static,
         Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
         Hdl::Message: From<SyncMessage>,
@@ -866,14 +798,7 @@ impl<Sign, Sp, Store, Policy, Timer, Metric: DepthMetric, const SHARDS: usize>
                 SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
             >,
     {
-        let sedimentrees = self.sedimentrees.0.unwrap_or_else(|| {
-            let map = BoundedShardedMap::new();
-            let map = match self.max_resident_trees {
-                Some(cap) => map.with_capacity(cap),
-                None => map,
-            };
-            Arc::new(map)
-        });
+        let minimized_tree_store = self.minimized_tree_store;
 
         let connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>> =
             Arc::new(Mutex::new(Map::new()));
@@ -884,14 +809,14 @@ impl<Sign, Sp, Store, Policy, Timer, Metric: DepthMetric, const SHARDS: usize>
         let storage = Async::storage_powerbox(
             self.storage.0,
             self.storage.1,
-            sedimentrees.clone(),
+            minimized_tree_store.clone(),
             self.spawner.clone(),
         );
         Subduction::new(
             handler,
             self.discovery_id,
             self.signer,
-            sedimentrees,
+            minimized_tree_store,
             connections,
             subscriptions,
             storage,
@@ -906,16 +831,8 @@ impl<Sign, Sp, Store, Policy, Timer, Metric: DepthMetric, const SHARDS: usize>
     }
 }
 
-impl<
-    Sign,
-    Sp,
-    Store,
-    Policy,
-    Timer,
-    Metric: DepthMetric,
-    HeadsObserver: RemoteHeadsObserver,
-    const SHARDS: usize,
-> SubductionBuilder<Sign, Sp, (Store, Arc<Policy>), Timer, Metric, HeadsObserver, SHARDS>
+impl<Sign, Sp, Store, Policy, Timer, Metric: DepthMetric, HeadsObserver: RemoteHeadsObserver, Trees>
+    SubductionBuilder<Sign, Sp, (Store, Arc<Policy>), Timer, Metric, HeadsObserver, Trees>
 {
     /// Build a [`Subduction`] instance with a composed [`Handler`].
     ///
@@ -947,25 +864,16 @@ impl<
             Arc<
                 SyncHandler<
                     Async,
-                    Config<Store, Policy, Sign, Timer, Sp>,
+                    Config<Store, Policy, Sign, Timer, Sp, Trees>,
                     Conn,
                     Metric,
-                    SHARDS,
                     HeadsObserver,
                 >,
             >,
         ) -> (Arc<Hdl>, X),
     ) -> (
         Arc<
-            Subduction<
-                'a,
-                Async,
-                Config<Store, Policy, Sign, Timer, Sp>,
-                Conn,
-                Hdl,
-                Metric,
-                SHARDS,
-            >,
+            Subduction<'a, Async, Config<Store, Policy, Sign, Timer, Sp, Trees>, Conn, Hdl, Metric>,
         >,
         ListenerFuture<'a, Async>,
         crate::connection::manager::ManagerFuture<Async>,
@@ -975,12 +883,11 @@ impl<
         Async: SubductionFutureForm<'a, Conn, Hdl::Message> + 'static,
         Async: NodeTasks<
                 'a,
-                Config<Store, Policy, Sign, Timer, Sp>,
+                Config<Store, Policy, Sign, Timer, Sp, Trees>,
                 Conn,
                 Hdl::Message,
                 Hdl,
                 Metric,
-                SHARDS,
             >,
         Store: Storage<Async>,
         Conn: Connection<Async, Hdl::Message>
@@ -992,6 +899,7 @@ impl<
         Sign: Signer<Async>,
         Timer: Timeout<Async> + Clone + 'a,
         Sp: Spawn<Async> + Clone + Send + Sync + 'static,
+        Trees: MinimizedTreeStore<Async> + Send + Sync,
         'a: 'static,
         Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
         Hdl::Message: From<SyncMessage>,
@@ -999,18 +907,16 @@ impl<
         Metric: Clone,
         SyncHandler<
             Async,
-            Config<Store, Policy, Sign, Timer, Sp>,
+            Config<Store, Policy, Sign, Timer, Sp, Trees>,
             Conn,
             Metric,
-            SHARDS,
             HeadsObserver,
         >: Handler<Async, Conn, Message = SyncMessage>,
         <SyncHandler<
             Async,
-            Config<Store, Policy, Sign, Timer, Sp>,
+            Config<Store, Policy, Sign, Timer, Sp, Trees>,
             Conn,
             Metric,
-            SHARDS,
             HeadsObserver,
         > as Handler<Async, Conn>>::HandlerError:
             Into<ListenError<Async, Store, Conn, SyncMessage>>,
@@ -1020,14 +926,7 @@ impl<
                 SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
             >,
     {
-        let sedimentrees = self.sedimentrees.0.unwrap_or_else(|| {
-            let map = BoundedShardedMap::new();
-            let map = match self.max_resident_trees {
-                Some(cap) => map.with_capacity(cap),
-                None => map,
-            };
-            Arc::new(map)
-        });
+        let minimized_tree_store = self.minimized_tree_store;
 
         let connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>> =
             Arc::new(Mutex::new(Map::new()));
@@ -1038,11 +937,11 @@ impl<
         let storage = Async::storage_powerbox(
             self.storage.0,
             self.storage.1,
-            sedimentrees.clone(),
+            minimized_tree_store.clone(),
             self.spawner.clone(),
         );
         let mut sync_handler = SyncHandler::with_remote_heads_observer(
-            sedimentrees.clone(),
+            minimized_tree_store.clone(),
             connections.clone(),
             subscriptions.clone(),
             storage.clone(),
@@ -1062,7 +961,7 @@ impl<
             handler,
             self.discovery_id,
             self.signer,
-            sedimentrees,
+            minimized_tree_store,
             connections,
             subscriptions,
             storage,

@@ -314,13 +314,12 @@ async fn main() -> Result<()> {
     // Set up signer and subduction instance.
     let signer = load_signer(&args)?;
 
-    let (subduction, _handler, listener_fut, manager_fut) =
-        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-            .signer(signer.clone())
-            .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
-            .spawner(TokioSpawn)
-            .timer(TimeoutTokio)
-            .build::<Sendable, MessageTransport<TokioWebSocketClient<MemorySigner>>>();
+    let (subduction, _handler, listener_fut, manager_fut) = SubductionBuilder::new()
+        .signer(signer.clone())
+        .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(TimeoutTokio)
+        .build::<Sendable, MessageTransport<TokioWebSocketClient<MemorySigner>>>();
 
     tokio::spawn(async move {
         if let Err(e) = listener_fut.await {
