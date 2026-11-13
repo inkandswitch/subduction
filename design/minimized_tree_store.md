@@ -60,6 +60,16 @@ Each tree has a _generation_ that changes whenever its stored state does. A miss
 
 `populate` may or may not change the generation. Both are safe.
 
+## Checking an implementation
+
+None of these rules can be checked by the compiler, so a store declares that it meets them by implementing `SharedMinimizedTreeStore`, and the `conformance` module (behind the `test_utils` feature) tests that declaration. It has:
+
+- checks every store must pass, through one handle;
+- checks for rules 1 to 3, through two handles to one backing store, which accept only a `SharedMinimizedTreeStore`;
+- `check_ops`, which runs generated operation sequences against both handles and compares every result with a model of storage. It checks that a hit always equals storage, that a removed tree never hits, and that a populate is kept only if no write happened since its miss.
+
+`tests/minimized_tree_store_conformance.rs` in `subduction_core` runs the suite against every stock store and is the template for running it against your own. Generate fresh tree ids per run on a networked store. The suite runs operations one after another, and it cannot force a store to forget a marker. So rule 4 and the reclamation part of rule 3 still need the store's own tests.
+
 ## Known gap: a write lost mid-maintenance
 
 If the task running a write is dropped after storage accepts the write but before the store is updated, the store keeps the tree from before the write. The data is safe in storage, and the stale tree only ever lacks items, never adds them. Dropping an unsettled write also closes that node's storage coordination, so for a per-process store the stale tree goes away with the node.

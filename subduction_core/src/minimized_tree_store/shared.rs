@@ -73,7 +73,7 @@ use sedimentree_core::{
 };
 use spin::Mutex as SpinMutex;
 
-use super::{Lookup, MinimizedTreeStore, Populate};
+use super::{Lookup, MinimizedTreeStore, Populate, SharedMinimizedTreeStore};
 
 /// Whether a slot holds its tree.
 #[derive(Debug)]
@@ -406,9 +406,16 @@ impl<Async: FutureForm> MinimizedTreeStore<Async> for SharedMemoryMinimizedTreeS
         })
     }
 }
+#[future_form(Sendable, Local)]
+impl<Async: FutureForm> SharedMinimizedTreeStore<Async> for SharedMemoryMinimizedTreeStore {}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::panic)]
 mod tests {
+    //! Store-specific behaviour: reclamation, capacity and the absent
+    //! generation. The shared-store rules themselves are checked by the
+    //! conformance suite in `tests/minimized_tree_store_conformance.rs`.
+
     use super::*;
 
     const ID: SedimentreeId = SedimentreeId::new([0x51; 32]);
@@ -519,28 +526,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_merge_on_a_never_written_tree_rejects_an_older_populate() {
-        let store = Store::new();
-        let seen = miss(&store).await;
-        merge(&store).await;
-        assert_eq!(populate(&store, seen).await, Populate::Stale);
-        assert!(store.get_cloned(ID).await.is_none());
-    }
-
-    #[tokio::test]
     async fn a_merge_on_a_marker_rejects_an_older_populate() {
         let store = Store::new();
         remove(&store).await;
         let seen = miss(&store).await;
         merge(&store).await;
-        assert_eq!(populate(&store, seen).await, Populate::Stale);
-    }
-
-    #[tokio::test]
-    async fn a_remove_rejects_an_older_populate() {
-        let store = Store::new();
-        let seen = miss(&store).await;
-        remove(&store).await;
         assert_eq!(populate(&store, seen).await, Populate::Stale);
     }
 
@@ -551,16 +541,6 @@ mod tests {
         assert_eq!(populate(&store, seen).await, Populate::Populated);
         assert!(store.get_cloned(ID).await.is_some());
         assert_eq!(populate(&store, seen).await, Populate::Populated);
-    }
-
-    #[tokio::test]
-    async fn remove_drops_the_tree_and_moves_the_generation() {
-        let store = Store::new();
-        let before = miss(&store).await;
-        assert_eq!(populate(&store, before).await, Populate::Populated);
-        remove(&store).await;
-        assert!(store.get_cloned(ID).await.is_none());
-        assert_ne!(miss(&store).await, before);
     }
 
     #[tokio::test]

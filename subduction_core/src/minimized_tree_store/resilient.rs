@@ -38,7 +38,7 @@ use sedimentree_core::{
     sedimentree::{Sedimentree, minimized::MinimizedSedimentree},
 };
 
-use super::{Lookup, MinimizedTreeStore, Populate};
+use super::{Lookup, MinimizedTreeStore, Populate, SharedMinimizedTreeStore};
 use crate::timeout::{TimedOut, Timeout};
 
 /// Consecutive failures that open the breaker, unless configured otherwise.
@@ -273,6 +273,23 @@ impl<Async: FutureForm, Store, Timer> MinimizedTreeStore<Async>
             self.breaker.record(outcome)
         })
     }
+}
+
+/// Every call either reaches the inner store or fails, and the node treats a
+/// failed `merge` or `remove` as a possibly stale tree. So the wrapper keeps
+/// every rule the inner store keeps.
+#[future_form(
+    Sendable where
+        Store: SharedMinimizedTreeStore<Sendable> + Send + Sync,
+        Store::Generation: Send,
+        Timer: Timeout<Sendable> + Send + Sync,
+    Local where
+        Store: SharedMinimizedTreeStore<Local>,
+        Timer: Timeout<Local>
+)]
+impl<Async: FutureForm, Store, Timer> SharedMinimizedTreeStore<Async>
+    for ResilientMinimizedTreeStore<Store, Timer>
+{
 }
 
 #[cfg(test)]

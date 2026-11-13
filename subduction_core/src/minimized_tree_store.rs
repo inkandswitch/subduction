@@ -58,8 +58,9 @@
 //!
 //! Within one process, the node's own coordination already orders these
 //! steps, so a store that only one node uses can set
-//! `type Generation = ()` and always report [`Populate::Populated`]. Both stock
-//! stores do.
+//! `type Generation = ()` and always report [`Populate::Populated`].
+//! [`memory::MemoryMinimizedTreeStore`] and [`noop::NoopMinimizedTreeStore`]
+//! do.
 //!
 //! # Sharing a store between nodes
 //!
@@ -67,6 +68,9 @@
 //! > A store that several nodes write to concurrently must enforce the
 //! > rules below itself. If it does not, it _loses updates and hides
 //! > commits_ that are in storage, and nothing in the node can detect it.
+//!
+//! A store that meets these rules says so by implementing
+//! [`SharedMinimizedTreeStore`].
 //!
 //! 1. **`populate` is a compare-and-set.** Checking `seen` against the
 //!    current generation and writing the tree must happen as one atomic
@@ -97,6 +101,14 @@
 //!
 //! [design notes]: https://github.com/inkandswitch/subduction/blob/main/design/minimized_tree_store.md
 //!
+//! # Checking an implementation
+//!
+//! The compiler cannot check this contract. The `conformance` module, behind
+//! the `test_utils` feature, can: it has checks for every store, further
+//! checks for a [`SharedMinimizedTreeStore`] through two handles, and a
+//! model-based check over generated operation sequences. Run them from your
+//! store's tests, as this crate does for its own stores.
+//!
 //! # Errors
 //!
 //! A store error never fails a node operation; the store is only an
@@ -107,6 +119,9 @@
 //!
 //! [`Storage`]: crate::storage::traits::Storage
 
+#[cfg(feature = "test_utils")]
+#[cfg_attr(docsrs, doc(cfg(feature = "test_utils")))]
+pub mod conformance;
 pub mod memory;
 pub mod noop;
 pub mod resilient;
@@ -134,7 +149,10 @@ pub trait MinimizedTreeStore<Async: FutureForm>: Clone {
     /// The store compares it; the node only carries it from a miss to the
     /// matching [`populate`](Self::populate). A store used by one node can
     /// make this `()`.
-    type Generation: Clone + 'static;
+    ///
+    /// Not `Clone`, so the node can use each generation only once: it cannot
+    /// keep one from an old miss and populate against it later.
+    type Generation: 'static;
 
     /// A checked-out resident tree, owned rather than borrowed from the store.
     ///
@@ -180,6 +198,14 @@ pub trait MinimizedTreeStore<Async: FutureForm>: Clone {
     /// Drop the tree for `id`, if resident, and change its generation.
     fn remove(&self, id: SedimentreeId) -> Async::Future<'_, Result<(), Self::Error>>;
 }
+
+/// A [`MinimizedTreeStore`] that several nodes can share.
+///
+/// Implementing this promises that the store meets every rule in [Sharing a
+/// store between nodes](self#sharing-a-store-between-nodes). The compiler
+/// cannot check that promise. The shared-store checks in the `conformance`
+/// module can, and they accept only stores that make it.
+pub trait SharedMinimizedTreeStore<Async: FutureForm>: MinimizedTreeStore<Async> {}
 
 /// The result of [`MinimizedTreeStore::get`].
 #[derive(Debug)]
