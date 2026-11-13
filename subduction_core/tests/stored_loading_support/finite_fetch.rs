@@ -27,7 +27,7 @@ use subduction_crypto::{signer::memory::MemorySigner, verified_meta::VerifiedMet
 #[allow(clippy::too_many_lines)]
 async fn finite_fetch_reaches_supplier_despite_four_stalled_candidates() {
     for timeout in [CallTimeout::Uncapped, CallTimeout::TimeoutMillis(1_000)] {
-        let (a, _, listener, manager) = SubductionBuilder::<_, _, _, _, _, _, 256>::new()
+        let (a, _, listener, manager) = SubductionBuilder::new()
             .signer(MemorySigner::from_bytes(&[110; 32]))
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)

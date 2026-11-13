@@ -145,7 +145,7 @@ async fn concurrent_subscribers_wait_for_all_upstreams() -> TestResult {
 #[tokio::test]
 async fn subscriber_joins_fetch_started_during_existence_probe() -> TestResult {
     let (storage, probe_entered, release_probe) = probe_storage::ProbeStorage::new();
-    let (hub, _, listener, manager) = SubductionBuilder::<_, _, _, _, _, _, 256>::new()
+    let (hub, _, listener, manager) = SubductionBuilder::new()
         .signer(make_signer(105))
         .storage(storage, Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
@@ -239,7 +239,7 @@ async fn local_document_and_non_subscribing_requests_do_not_wait() -> TestResult
 
     // Cache eviction is not document absence: durable data still responds
     // immediately, even while the upstream is silent.
-    hub.sedimentrees().remove(&id).await;
+    hub.minimized_tree_store().evict(id).await;
     client.inbound_tx.send(subscribe_request(peer, id)).await?;
     assert_eq!(commit_count(response(&client).await), 1);
 

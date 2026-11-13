@@ -431,15 +431,19 @@ async fn an_attempt_keeps_its_tree_registered_and_ignores_other_trees() {
 #[tokio::test]
 async fn fetcher_clones_and_put_capabilities_share_coordination() {
     use crate::{
-        collections::bounded_sharded_map::BoundedShardedMap, connection::test_utils::TokioSpawn,
+        connection::test_utils::TokioSpawn, minimized_tree_store::memory::MemoryMinimizedTreeStore,
         policy::open::OpenPolicy, storage::memory::MemoryStorage, subduction::StorageTasks,
     };
     use future_form::Sendable;
 
-    let storage = <Sendable as StorageTasks<MemoryStorage, OpenPolicy, 1>>::storage_powerbox(
+    let storage = <Sendable as StorageTasks<
+        MemoryStorage,
+        OpenPolicy,
+        MemoryMinimizedTreeStore<1>,
+    >>::storage_powerbox(
         MemoryStorage::new(),
         Arc::new(OpenPolicy),
-        Arc::new(BoundedShardedMap::new()),
+        MemoryMinimizedTreeStore::new(),
         TokioSpawn,
     );
     let fetcher = storage.local_fetcher(ID);
