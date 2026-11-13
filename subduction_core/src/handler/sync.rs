@@ -89,7 +89,7 @@ pub struct SyncHandler<
     Metric: DepthMetric,
     R: RemoteHeadsObserver = NoRemoteHeadsObserver,
 > {
-    sedimentrees: E::MinimizedTreeStore,
+    minimized_tree_store: E::MinimizedTreeStore,
     connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
     subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
     storage: StoragePowerbox<E::Storage, E::Policy, Async>,
@@ -127,7 +127,7 @@ impl<
 {
     fn clone(&self) -> Self {
         Self {
-            sedimentrees: self.sedimentrees.clone(),
+            minimized_tree_store: self.minimized_tree_store.clone(),
             connections: self.connections.clone(),
             subscriptions: self.subscriptions.clone(),
             storage: self.storage.clone(),
@@ -157,7 +157,7 @@ impl<
     /// [`Subduction::new`]: crate::subduction::Subduction::new
     #[allow(clippy::type_complexity)]
     pub fn new(
-        sedimentrees: E::MinimizedTreeStore,
+        minimized_tree_store: E::MinimizedTreeStore,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
         storage: StoragePowerbox<E::Storage, E::Policy, Async>,
@@ -165,7 +165,7 @@ impl<
         spawner: E::Spawner,
     ) -> Self {
         Self {
-            sedimentrees,
+            minimized_tree_store,
             connections,
             subscriptions,
             storage,
@@ -190,7 +190,7 @@ impl<
     /// Create a new `SyncHandler` with a custom remote heads observer.
     #[allow(clippy::type_complexity)]
     pub fn with_remote_heads_observer(
-        sedimentrees: E::MinimizedTreeStore,
+        minimized_tree_store: E::MinimizedTreeStore,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
         storage: StoragePowerbox<E::Storage, E::Policy, Async>,
@@ -199,7 +199,7 @@ impl<
         spawner: E::Spawner,
     ) -> Self {
         Self {
-            sedimentrees,
+            minimized_tree_store,
             connections,
             subscriptions,
             storage,
@@ -850,7 +850,11 @@ impl<
         // resident tree, so a commit that is durable but not yet cached is
         // omitted from this response. That brief lag is benign — the next
         // sync round picks it up, and the protocol tolerates stale views.
-        let (cached, mut seen) = match fetcher.coordination().lookup(&self.sedimentrees).await {
+        let (cached, mut seen) = match fetcher
+            .coordination()
+            .lookup(&self.minimized_tree_store)
+            .await
+        {
             Resident::Hit(mut tree) => (
                 Some(ResponderDiff::new(
                     tree.minimized(&self.depth_metric),
@@ -987,7 +991,7 @@ impl<
             loop {
                 let read = fetcher
                     .coordination()
-                    .prepare_cache_read(&self.sedimentrees, seen.take())
+                    .prepare_cache_read(&self.minimized_tree_store, seen.take())
                     .await;
                 // Slow path (cache miss): full storage scan, which also warms
                 // the cache so subsequent requests for this tree take the
@@ -1055,7 +1059,11 @@ impl<
                     // Re-read the generation to install against. A tree that
                     // became resident meanwhile is equally current, but this
                     // response already holds a full scan, so skip installing.
-                    seen = match fetcher.coordination().lookup(&self.sedimentrees).await {
+                    seen = match fetcher
+                        .coordination()
+                        .lookup(&self.minimized_tree_store)
+                        .await
+                    {
                         Resident::Miss(seen) => seen,
                         Resident::Hit(_) => None,
                     };
@@ -1141,9 +1149,14 @@ impl<
         id: SedimentreeId,
         diff: SyncDiff,
     ) -> Result<Option<FanOut<Conn, Async>>, IoError<Async, E::Storage, Conn, SyncMessage>> {
-        let ingested =
-            ingest::recv_batch_sync_response(&self.sedimentrees, &self.storage, from, id, diff)
-                .await?;
+        let ingested = ingest::recv_batch_sync_response(
+            &self.minimized_tree_store,
+            &self.storage,
+            from,
+            id,
+            diff,
+        )
+        .await?;
         self.minimize_tree(id).await;
         if ingested.is_empty() {
             return Ok(None);
@@ -1167,7 +1180,7 @@ impl<
         putter: &Putter<Async, E::Storage>,
         verified_meta: VerifiedMeta<LooseCommit>,
     ) -> Result<bool, MutationError<E::StorageError>> {
-        ingest::insert_commit_locally(&self.sedimentrees, putter, verified_meta).await
+        ingest::insert_commit_locally(&self.minimized_tree_store, putter, verified_meta).await
     }
 
     async fn insert_fragment_locally(
@@ -1175,11 +1188,11 @@ impl<
         putter: &Putter<Async, E::Storage>,
         verified_meta: VerifiedMeta<Fragment>,
     ) -> Result<bool, MutationError<E::StorageError>> {
-        ingest::insert_fragment_locally(&self.sedimentrees, putter, verified_meta).await
+        ingest::insert_fragment_locally(&self.minimized_tree_store, putter, verified_meta).await
     }
 
     async fn minimize_tree(&self, id: SedimentreeId) {
-        ingest::minimize_tree(&self.sedimentrees, &self.depth_metric, id).await;
+        ingest::minimize_tree(&self.minimized_tree_store, &self.depth_metric, id).await;
     }
 
     /// Compute the current heads for a sedimentree (without a counter).
@@ -1190,8 +1203,13 @@ impl<
     /// a single dirty-gated minimize. A nonexistent tree (or a storage error)
     /// yields empty heads (best-effort; the heads field is advisory).
     async fn heads_for(&self, id: SedimentreeId) -> Vec<CommitId> {
-        match ingest::heads_or_hydrate(&self.sedimentrees, &self.storage, &self.depth_metric, id)
-            .await
+        match ingest::heads_or_hydrate(
+            &self.minimized_tree_store,
+            &self.storage,
+            &self.depth_metric,
+            id,
+        )
+        .await
         {
             Ok(heads) => heads.unwrap_or_default(),
             Err(e) => {

@@ -143,7 +143,7 @@ pub struct SubductionBuilder<
     depth_metric: Metric,
     nonce_cache: Option<NonceCache>,
     send_counter: Option<PeerCounter>,
-    trees: Trees,
+    minimized_tree_store: Trees,
 }
 
 // -----------------------------------------------------------------------
@@ -183,7 +183,7 @@ impl
             depth_metric: CountLeadingZeroBytes,
             nonce_cache: None,
             send_counter: None,
-            trees: MemoryMinimizedTreeStore::new(),
+            minimized_tree_store: MemoryMinimizedTreeStore::new(),
         }
     }
 }
@@ -225,7 +225,7 @@ impl<Sp, Store, Timer, Metric, HeadsObserver, Trees>
             depth_metric,
             nonce_cache,
             send_counter,
-            trees,
+            minimized_tree_store,
         } = self;
 
         SubductionBuilder {
@@ -239,7 +239,7 @@ impl<Sp, Store, Timer, Metric, HeadsObserver, Trees>
             depth_metric,
             nonce_cache,
             send_counter,
-            trees,
+            minimized_tree_store,
         }
     }
 }
@@ -267,7 +267,7 @@ impl<Sign, Store, Timer, Metric, HeadsObserver, Trees>
             depth_metric,
             nonce_cache,
             send_counter,
-            trees,
+            minimized_tree_store,
         } = self;
 
         SubductionBuilder {
@@ -281,7 +281,7 @@ impl<Sign, Store, Timer, Metric, HeadsObserver, Trees>
             depth_metric,
             nonce_cache,
             send_counter,
-            trees,
+            minimized_tree_store,
         }
     }
 }
@@ -310,7 +310,7 @@ impl<Sign, Sp, Timer, Metric, HeadsObserver, Trees>
             depth_metric,
             nonce_cache,
             send_counter,
-            trees,
+            minimized_tree_store,
         } = self;
 
         SubductionBuilder {
@@ -324,7 +324,7 @@ impl<Sign, Sp, Timer, Metric, HeadsObserver, Trees>
             depth_metric,
             nonce_cache,
             send_counter,
-            trees,
+            minimized_tree_store,
         }
     }
 }
@@ -352,7 +352,7 @@ impl<Sign, Sp, Store, Metric, HeadsObserver, Trees>
             depth_metric,
             nonce_cache,
             send_counter,
-            trees,
+            minimized_tree_store,
         } = self;
 
         SubductionBuilder {
@@ -366,7 +366,7 @@ impl<Sign, Sp, Store, Metric, HeadsObserver, Trees>
             depth_metric,
             nonce_cache,
             send_counter,
-            trees,
+            minimized_tree_store,
         }
     }
 }
@@ -405,7 +405,7 @@ impl<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, Trees>
             depth_metric,
             nonce_cache,
             send_counter,
-            trees,
+            minimized_tree_store,
         } = self;
 
         SubductionBuilder {
@@ -419,7 +419,7 @@ impl<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, Trees>
             depth_metric,
             nonce_cache,
             send_counter,
-            trees,
+            minimized_tree_store,
         }
     }
 }
@@ -480,7 +480,7 @@ impl<Sign, Sp, Store, Timer, Met, HeadsObserver, Trees>
             depth_metric: _replaced,
             nonce_cache,
             send_counter,
-            trees,
+            minimized_tree_store,
         } = self;
 
         SubductionBuilder {
@@ -494,7 +494,7 @@ impl<Sign, Sp, Store, Timer, Met, HeadsObserver, Trees>
             depth_metric: metric,
             nonce_cache,
             send_counter,
-            trees,
+            minimized_tree_store,
         }
     }
 
@@ -542,7 +542,7 @@ impl<Sign, Sp, Store, Timer, Met, HeadsObserver, Trees>
             depth_metric,
             nonce_cache,
             send_counter,
-            trees: _replaced,
+            minimized_tree_store: _replaced,
         } = self;
 
         SubductionBuilder {
@@ -556,7 +556,7 @@ impl<Sign, Sp, Store, Timer, Met, HeadsObserver, Trees>
             depth_metric,
             nonce_cache,
             send_counter,
-            trees: store,
+            minimized_tree_store: store,
         }
     }
 }
@@ -670,7 +670,7 @@ impl<Sign, Sp, Store, Policy, Timer, Metric: DepthMetric, HeadsObserver: RemoteH
                 SendError = <Conn as Connection<Async, SyncMessage>>::SendError,
             >,
     {
-        let sedimentrees = self.trees;
+        let minimized_tree_store = self.minimized_tree_store;
 
         let connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>> =
             Arc::new(Mutex::new(Map::new()));
@@ -681,11 +681,11 @@ impl<Sign, Sp, Store, Policy, Timer, Metric: DepthMetric, HeadsObserver: RemoteH
         let storage = Async::storage_powerbox(
             self.storage.0,
             self.storage.1,
-            sedimentrees.clone(),
+            minimized_tree_store.clone(),
             self.spawner.clone(),
         );
         let mut handler = SyncHandler::with_remote_heads_observer(
-            sedimentrees.clone(),
+            minimized_tree_store.clone(),
             connections.clone(),
             subscriptions.clone(),
             storage.clone(),
@@ -704,7 +704,7 @@ impl<Sign, Sp, Store, Policy, Timer, Metric: DepthMetric, HeadsObserver: RemoteH
             handler.clone(),
             self.discovery_id,
             self.signer,
-            sedimentrees,
+            minimized_tree_store,
             connections,
             subscriptions,
             storage,
@@ -797,7 +797,7 @@ impl<Sign, Sp, Store, Policy, Timer, Metric: DepthMetric, Trees>
                 SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
             >,
     {
-        let sedimentrees = self.trees;
+        let minimized_tree_store = self.minimized_tree_store;
 
         let connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>> =
             Arc::new(Mutex::new(Map::new()));
@@ -808,14 +808,14 @@ impl<Sign, Sp, Store, Policy, Timer, Metric: DepthMetric, Trees>
         let storage = Async::storage_powerbox(
             self.storage.0,
             self.storage.1,
-            sedimentrees.clone(),
+            minimized_tree_store.clone(),
             self.spawner.clone(),
         );
         Subduction::new(
             handler,
             self.discovery_id,
             self.signer,
-            sedimentrees,
+            minimized_tree_store,
             connections,
             subscriptions,
             storage,
@@ -925,7 +925,7 @@ impl<Sign, Sp, Store, Policy, Timer, Metric: DepthMetric, HeadsObserver: RemoteH
                 SendError = <Conn as Connection<Async, Hdl::Message>>::SendError,
             >,
     {
-        let sedimentrees = self.trees;
+        let minimized_tree_store = self.minimized_tree_store;
 
         let connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>> =
             Arc::new(Mutex::new(Map::new()));
@@ -936,11 +936,11 @@ impl<Sign, Sp, Store, Policy, Timer, Metric: DepthMetric, HeadsObserver: RemoteH
         let storage = Async::storage_powerbox(
             self.storage.0,
             self.storage.1,
-            sedimentrees.clone(),
+            minimized_tree_store.clone(),
             self.spawner.clone(),
         );
         let mut sync_handler = SyncHandler::with_remote_heads_observer(
-            sedimentrees.clone(),
+            minimized_tree_store.clone(),
             connections.clone(),
             subscriptions.clone(),
             storage.clone(),
@@ -960,7 +960,7 @@ impl<Sign, Sp, Store, Policy, Timer, Metric: DepthMetric, HeadsObserver: RemoteH
             handler,
             self.discovery_id,
             self.signer,
-            sedimentrees,
+            minimized_tree_store,
             connections,
             subscriptions,
             storage,

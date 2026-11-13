@@ -2,6 +2,7 @@
 #![allow(clippy::expect_used, clippy::panic)]
 
 mod hydration;
+mod store_failures;
 
 use crate::{
     connection::test_utils::{InstantTimeout, TokioSpawn, test_signer},
@@ -106,7 +107,10 @@ async fn watching_waits_for_cancelled_mutations_to_settle_then_publishes_or_reco
         if resident {
             assert!(node.get_commits(ID).await.is_some());
         }
-        assert_eq!(node.sedimentrees.get_cloned(ID).await.is_some(), resident);
+        assert_eq!(
+            node.minimized_tree_store.get_cloned(ID).await.is_some(),
+            resident
+        );
         let mut stream = node.load_and_watch(ID);
         assert!(matches!(
             observed_event(&mut stream).await,
@@ -151,13 +155,13 @@ async fn watching_waits_for_cancelled_mutations_to_settle_then_publishes_or_reco
                 count, 2,
                 "recover partial effects, not just successful calls"
             );
-            assert!(node.sedimentrees.get_cloned(ID).await.is_none());
+            assert!(node.minimized_tree_store.get_cloned(ID).await.is_none());
         } else {
             let StoredEvent::Item(StoredItem::Commit(v)) = observed_event(&mut stream).await else {
                 panic!("settled item")
             };
             assert_eq!(v.payload().head(), CommitId::new([2; 32]));
-            let cached = node.sedimentrees.get_cloned(ID).await;
+            let cached = node.minimized_tree_store.get_cloned(ID).await;
             if resident {
                 assert_eq!(cached.expect("resident").loose_commits().count(), 2);
             } else {

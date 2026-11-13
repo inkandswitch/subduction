@@ -159,12 +159,12 @@ impl Node {
         let spawner = runtime.spawner();
         let connections = Arc::new(Mutex::new(Map::new()));
         let subscriptions = Arc::new(Mutex::new(Map::new()));
-        let sedimentrees = WasmTreeStore::with_capacity(max_resident);
+        let minimized_tree_store = WasmTreeStore::with_capacity(max_resident);
         let powerbox =
             <Local as StorageTasks<JsStorage, JsPolicy, WasmTreeStore>>::storage_powerbox(
                 opts_storage,
                 Arc::new(policy),
-                sedimentrees.clone(),
+                minimized_tree_store.clone(),
                 spawner.clone(),
             );
 
@@ -173,7 +173,7 @@ impl Node {
             None => JsRemoteHeadsObserver::new(),
         };
         let sync_handler = SyncHandler::with_remote_heads_observer(
-            sedimentrees.clone(),
+            minimized_tree_store.clone(),
             connections.clone(),
             subscriptions.clone(),
             powerbox.clone(),
@@ -204,7 +204,7 @@ impl Node {
             handler,
             discovery_id,
             signer,
-            sedimentrees,
+            minimized_tree_store,
             connections,
             subscriptions,
             powerbox,

@@ -164,7 +164,7 @@ pub struct Subduction<
 
     timer: E::Timer,
     depth_metric: Metric,
-    sedimentrees: E::MinimizedTreeStore,
+    minimized_tree_store: E::MinimizedTreeStore,
     storage: StoragePowerbox<E::Storage, E::Policy, Async>,
 
     /// Active connections, keyed by peer ID.
@@ -292,18 +292,18 @@ where
     /// ```ignore
     /// type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, InstantTimeout, TokioSpawn>;
     ///
-    /// let sedimentrees = MemoryMinimizedTreeStore::new();
+    /// let minimized_tree_store = MemoryMinimizedTreeStore::new();
     /// let connections = Arc::new(Mutex::new(Map::new()));
     /// let subscriptions = Arc::new(Mutex::new(Map::new()));
     /// let storage = <Sendable as StorageTasks<MemoryStorage, OpenPolicy, MemoryMinimizedTreeStore>>::storage_powerbox(
-    ///     MemoryStorage::new(), Arc::new(OpenPolicy), sedimentrees.clone(), spawner.clone(),
+    ///     MemoryStorage::new(), Arc::new(OpenPolicy), minimized_tree_store.clone(), spawner.clone(),
     /// );
     ///
     /// // A handler only fixes some of the effects slots, so name its type.
     /// type Hdl = SyncHandler<Sendable, Cfg, MyConnection, CountLeadingZeroBytes>;
     ///
     /// let handler: Arc<Hdl> = Arc::new(SyncHandler::new(
-    ///     sedimentrees.clone(),
+    ///     minimized_tree_store.clone(),
     ///     connections.clone(),
     ///     subscriptions.clone(),
     ///     storage.clone(),
@@ -315,7 +315,7 @@ where
     ///     handler,
     ///     discovery_id,
     ///     signer,
-    ///     sedimentrees,
+    ///     minimized_tree_store,
     ///     connections,
     ///     subscriptions,
     ///     storage,
@@ -332,7 +332,7 @@ where
         handler: Arc<Hdl>,
         discovery_id: Option<DiscoveryId>,
         signer: Sign,
-        sedimentrees: Trees,
+        minimized_tree_store: Trees,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
         storage: StoragePowerbox<Store, Policy, Async>,
@@ -347,7 +347,7 @@ where
             handler,
             discovery_id,
             signer,
-            sedimentrees,
+            minimized_tree_store,
             connections,
             subscriptions,
             storage,
@@ -394,7 +394,7 @@ where
         handler: Arc<Hdl>,
         discovery_id: Option<DiscoveryId>,
         signer: E::Signer,
-        sedimentrees: E::MinimizedTreeStore,
+        minimized_tree_store: E::MinimizedTreeStore,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
         storage: StoragePowerbox<E::Storage, E::Policy, Async>,
@@ -437,7 +437,7 @@ where
             timer,
             default_roundtrip_timeout,
             depth_metric,
-            sedimentrees,
+            minimized_tree_store,
             connections,
             connections_changed: Arc::new(event_listener::Event::new()),
             multiplexers: Arc::new(Mutex::new(MultiplexerMap::new())),
@@ -1661,9 +1661,14 @@ where
         id: SedimentreeId,
         diff: SyncDiff,
     ) -> Result<(), IoError<Async, E::Storage, Conn, Hdl::Message>> {
-        let ingested =
-            ingest::recv_batch_sync_response(&self.sedimentrees, &self.storage, from, id, diff)
-                .await?;
+        let ingested = ingest::recv_batch_sync_response(
+            &self.minimized_tree_store,
+            &self.storage,
+            from,
+            id,
+            diff,
+        )
+        .await?;
         self.minimize_tree(id).await;
         self.push_to_subscribers(id, from, &ingested).await;
         Ok(())
@@ -2412,7 +2417,7 @@ where
         // The shared ingester verifies and groups accepted items by author;
         // return-direction requests belong to this captured resolver instead.
         let ingested = ingest::recv_batch_sync_response(
-            &self.sedimentrees,
+            &self.minimized_tree_store,
             &self.storage,
             &peer,
             id,
@@ -2596,7 +2601,13 @@ where
         &self,
         id: SedimentreeId,
     ) -> Result<Option<Vec<CommitId>>, E::StorageError> {
-        ingest::heads_or_hydrate(&self.sedimentrees, &self.storage, &self.depth_metric, id).await
+        ingest::heads_or_hydrate(
+            &self.minimized_tree_store,
+            &self.storage,
+            &self.depth_metric,
+            id,
+        )
+        .await
     }
 
     /// Get the current heads for every known sedimentree.
@@ -2905,7 +2916,7 @@ where
         putter: &Putter<Async, E::Storage>,
         verified_meta: VerifiedMeta<LooseCommit>,
     ) -> Result<bool, MutationError<E::StorageError>> {
-        ingest::insert_commit_locally(&self.sedimentrees, putter, verified_meta).await
+        ingest::insert_commit_locally(&self.minimized_tree_store, putter, verified_meta).await
     }
 
     /// Insert a fragment locally, persisting to storage before updating in-memory state.
@@ -2920,7 +2931,7 @@ where
         putter: &Putter<Async, E::Storage>,
         verified_meta: VerifiedMeta<Fragment>,
     ) -> Result<bool, MutationError<E::StorageError>> {
-        ingest::insert_fragment_locally(&self.sedimentrees, putter, verified_meta).await
+        ingest::insert_fragment_locally(&self.minimized_tree_store, putter, verified_meta).await
     }
 
     /// Re-minimize a sedimentree in the in-memory cache.
@@ -2928,7 +2939,7 @@ where
     /// Prunes dominated fragments and loose commits covered by fragments,
     /// keeping only the minimal covering. Storage retains the full history.
     async fn minimize_tree(&self, id: SedimentreeId) {
-        ingest::minimize_tree(&self.sedimentrees, &self.depth_metric, id).await;
+        ingest::minimize_tree(&self.minimized_tree_store, &self.depth_metric, id).await;
     }
 
     /// Get a sedimentree from the in-memory LRU cache, hydrating it from
@@ -2939,9 +2950,14 @@ where
         &self,
         id: SedimentreeId,
     ) -> Result<Option<Sedimentree>, IoError<Async, E::Storage, Conn, Hdl::Message>> {
-        ingest::get_or_hydrate(&self.sedimentrees, &self.storage, &self.depth_metric, id)
-            .await
-            .map_err(IoError::Storage)
+        ingest::get_or_hydrate(
+            &self.minimized_tree_store,
+            &self.storage,
+            &self.depth_metric,
+            id,
+        )
+        .await
+        .map_err(IoError::Storage)
     }
 }
 
@@ -3078,7 +3094,10 @@ where
     /// stalling every request.
     async fn holds_locally(&self, fetcher: &Fetcher<Async, E::Storage>) -> bool {
         matches!(
-            fetcher.coordination().lookup(&self.sedimentrees).await,
+            fetcher
+                .coordination()
+                .lookup(&self.minimized_tree_store)
+                .await,
             Resident::Hit(_)
         ) || !matches!(fetcher.contains_sedimentree_id().await, Ok(false))
     }
@@ -3419,7 +3438,7 @@ impl<
     /// [`MinimizedTreeStore`] for the contract.
     #[must_use]
     pub const fn minimized_tree_store(&self) -> &E::MinimizedTreeStore {
-        &self.sedimentrees
+        &self.minimized_tree_store
     }
 }
 
@@ -3662,7 +3681,7 @@ pub trait StorageTasks<Store: Storage<Self>, Policy, Trees: MinimizedTreeStore<S
     fn storage_powerbox<Sp: Spawn<Self> + Clone + Send + Sync + 'static>(
         storage: Store,
         policy: Arc<Policy>,
-        cache: Trees,
+        minimized_tree_store: Trees,
         spawner: Sp,
     ) -> StoragePowerbox<Store, Policy, Self>;
 }
@@ -3683,7 +3702,7 @@ impl<Async: FutureForm, Store, Policy, Trees> StorageTasks<Store, Policy, Trees>
     fn storage_powerbox<Sp: Spawn<Self> + Clone + Send + Sync + 'static>(
         storage: Store,
         policy: Arc<Policy>,
-        cache: Trees,
+        minimized_tree_store: Trees,
         spawner: Sp,
     ) -> StoragePowerbox<Store, Policy, Self> {
         StoragePowerbox::new(
@@ -3691,7 +3710,7 @@ impl<Async: FutureForm, Store, Policy, Trees> StorageTasks<Store, Policy, Trees>
             policy,
             Arc::new(move |fetcher, operation| {
                 let (sender, receiver) = async_channel::bounded(1);
-                let cache = cache.clone();
+                let minimized_tree_store = minimized_tree_store.clone();
                 // Admission covers submission too. A rejected, never-polled future
                 // must close validity even if its waiter disappears immediately.
                 let tracked = fetcher.coordination().track_mutation();
@@ -3706,7 +3725,7 @@ impl<Async: FutureForm, Store, Policy, Trees> StorageTasks<Store, Policy, Trees>
                     };
                     let result = tracked
                         .persist(
-                            &cache,
+                            &minimized_tree_store,
                             operation.persist::<Async, Store>(
                                 fetcher.storage(),
                                 fetcher.sedimentree_id(),
@@ -4217,7 +4236,8 @@ mod tests {
     /// from storage exactly as hydration does, and assert equality.
     #[tokio::test]
     async fn tree_is_reconstructable_from_storage_alone() -> TestResult {
-        let sedimentrees = MemoryMinimizedTreeStore::from_map(BoundedShardedMap::with_key(0, 0));
+        let minimized_tree_store =
+            MemoryMinimizedTreeStore::from_map(BoundedShardedMap::with_key(0, 0));
         let connections = Arc::new(Mutex::new(Map::new()));
         let subscriptions = Arc::new(Mutex::new(Map::new()));
         let storage = <Sendable as StorageTasks<
@@ -4227,11 +4247,11 @@ mod tests {
         >>::storage_powerbox(
             MemoryStorage::new(),
             Arc::new(OpenPolicy),
-            sedimentrees.clone(),
+            minimized_tree_store.clone(),
             TokioSpawn,
         );
         let handler: Arc<ReconstructionHandler> = Arc::new(SyncHandler::new(
-            sedimentrees.clone(),
+            minimized_tree_store.clone(),
             connections.clone(),
             subscriptions.clone(),
             storage.clone(),
@@ -4243,7 +4263,7 @@ mod tests {
             handler,
             None,
             test_signer(),
-            sedimentrees.clone(),
+            minimized_tree_store.clone(),
             connections,
             subscriptions,
             storage.clone(),
@@ -4272,15 +4292,15 @@ mod tests {
         // ONLY (this does not delete anything from storage). The writes ran
         // `minimize_tree`, so the resident wrapper is clean; take its inner
         // (minimal) tree for comparison with the rehydrated minimal form.
-        let resident = sedimentrees
+        let resident = minimized_tree_store
             .get_cloned(id)
             .await
             .ok_or("tree should be resident after writes")?
             .into_tree();
-        let evicted = sedimentrees.evict(id).await;
+        let evicted = minimized_tree_store.evict(id).await;
         assert!(evicted.is_some(), "tree should have been in the map");
         assert!(
-            sedimentrees.get_cloned(id).await.is_none(),
+            minimized_tree_store.get_cloned(id).await.is_none(),
             "tree must be gone from the in-RAM map after eviction"
         );
 

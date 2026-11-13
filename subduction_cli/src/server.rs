@@ -147,11 +147,11 @@ pub(crate) struct ServerArgs {
 
     /// Approximate maximum number of sedimentrees kept resident in memory.
     ///
-    /// The in-memory sedimentree map is an LRU cache over disk storage:
+    /// The in-memory minimized tree store is an LRU cache over disk storage:
     /// when the resident set exceeds this many trees, the least-recently-
     /// used ones are evicted and re-hydrated from disk on next access. This
     /// bounds memory by the active working set rather than the total number
-    /// of documents ever synced. When unset, the map is unbounded.
+    /// of documents ever synced. When unset, the store is unbounded.
     ///
     /// This is approximate, not a strict cap: the limit is enforced per
     /// shard, so the effective ceiling is rounded up to a multiple of the
@@ -550,7 +550,7 @@ where
         .send_counter(PeerCounter::with_seed(wall_clock_seed))
         .roundtrip_timeout(Duration::from_secs(args.timeout));
 
-    let trees = if let Some(max) = args.max_resident_trees {
+    let minimized_tree_store = if let Some(max) = args.max_resident_trees {
         tracing::info!(
             max_resident_trees = max,
             "bounding in-memory minimized tree store"
@@ -559,7 +559,7 @@ where
     } else {
         MemoryMinimizedTreeStore::new()
     };
-    let builder = builder.minimized_tree_store(trees);
+    let builder = builder.minimized_tree_store(minimized_tree_store);
 
     let builder = if let Some(id) = discovery_id {
         builder.discovery_id(id)
