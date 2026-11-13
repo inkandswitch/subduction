@@ -6,7 +6,7 @@
 use super::*;
 use crate::{
     collections::bounded_sharded_map::Checkout,
-    minimized_tree_store::{Lookup, Populate},
+    minimized_tree_store::{Lookup, Populate, resilient::ResilientMinimizedTreeStore},
     storage::state::cache::Resident,
 };
 use futures::future::BoxFuture;
@@ -27,6 +27,8 @@ struct Switches {
     fail_populate: AtomicBool,
     fail_merge: AtomicBool,
     fail_remove: AtomicBool,
+    /// Apply each merge, then never finish it, like a call whose reply is lost.
+    hang_after_merge: AtomicBool,
     gets: AtomicUsize,
     populates: AtomicUsize,
     removes: AtomicUsize,
@@ -121,6 +123,9 @@ impl MinimizedTreeStore<Sendable> for FlakyStore {
             MinimizedTreeStore::<Sendable>::merge(&self.inner, id, update)
                 .await
                 .unwrap_or_else(never);
+            if self.switches.hang_after_merge.load(Ordering::SeqCst) {
+                core::future::pending::<()>().await;
+            }
             Ok(())
         })
     }
@@ -141,20 +146,26 @@ impl MinimizedTreeStore<Sendable> for FlakyStore {
 }
 
 fn flaky_node() -> (StoragePowerbox<MemoryStorage, OpenPolicy>, FlakyStore) {
-    use crate::subduction::StorageTasks;
     let store = FlakyStore::default();
-    let storage =
-        <Sendable as StorageTasks<MemoryStorage, OpenPolicy, FlakyStore>>::storage_powerbox(
-            MemoryStorage::new(),
-            Arc::new(OpenPolicy),
-            store.clone(),
-            TokioSpawn,
-        );
-    (storage, store)
+    (node_over(store.clone()), store)
 }
 
-async fn commit_count(
-    store: &FlakyStore,
+fn node_over<Trees>(store: Trees) -> StoragePowerbox<MemoryStorage, OpenPolicy>
+where
+    Trees:
+        MinimizedTreeStore<Sendable, Error: Send, Generation: Send + Sync> + Send + Sync + 'static,
+{
+    use crate::subduction::StorageTasks;
+    <Sendable as StorageTasks<MemoryStorage, OpenPolicy, Trees>>::storage_powerbox(
+        MemoryStorage::new(),
+        Arc::new(OpenPolicy),
+        store,
+        TokioSpawn,
+    )
+}
+
+async fn commit_count<Trees: MinimizedTreeStore<Sendable>>(
+    store: &Trees,
     storage: &StoragePowerbox<MemoryStorage, OpenPolicy>,
 ) -> Option<usize> {
     ingest::read_cached(store, &storage.local_fetcher(ID), |tree| {
@@ -318,4 +329,93 @@ async fn a_failed_merge_bypasses_the_store_until_a_remove_succeeds() {
         "populated again after healing"
     );
     assert!(store.count(|s| &s.gets) > gets, "lookups resume");
+}
+
+/// Times out any future that is not ready on its first poll.
+#[derive(Debug, Clone, Copy)]
+struct PollOnce;
+
+impl crate::timeout::Timeout<Sendable> for PollOnce {
+    fn timeout<'a, T: 'a>(
+        &'a self,
+        _dur: core::time::Duration,
+        fut: BoxFuture<'a, T>,
+    ) -> BoxFuture<'a, Result<T, crate::timeout::TimedOut>> {
+        use futures::FutureExt;
+        Box::pin(async move { fut.now_or_never().ok_or(crate::timeout::TimedOut) })
+    }
+}
+
+type Wrapped = ResilientMinimizedTreeStore<FlakyStore, PollOnce>;
+
+fn resilient_node(
+    wrap: impl FnOnce(Wrapped) -> Wrapped,
+) -> (StoragePowerbox<MemoryStorage, OpenPolicy>, Wrapped) {
+    let store = wrap(ResilientMinimizedTreeStore::new(
+        FlakyStore::default(),
+        PollOnce,
+        core::time::Duration::from_secs(1),
+    ));
+    (node_over(store.clone()), store)
+}
+
+#[tokio::test]
+async fn a_merge_that_lands_then_times_out_fails_closed() {
+    let (storage, store) = resilient_node(|store| store);
+    let putter = storage.local_putter(ID);
+    putter.save_commit(item(1).await).await.expect("seed");
+    assert_eq!(commit_count(&store, &storage).await, Some(1));
+
+    // The merge reaches the store, but its reply never arrives.
+    store.inner().set(|s| &s.hang_after_merge, true);
+    putter.save_commit(item(2).await).await.expect("write");
+    store.inner().set(|s| &s.hang_after_merge, false);
+
+    // The node cannot know whether the merge landed, so it treats the tree as
+    // possibly stale and removes it before using the store again.
+    assert_eq!(commit_count(&store, &storage).await, Some(2));
+    assert!(
+        store.inner().count(|s| &s.removes) > 0,
+        "the timed-out merge is followed by a remove"
+    );
+    assert_eq!(commit_count(&store, &storage).await, Some(2));
+    assert_eq!(
+        store.inner().resident_commits().await,
+        Some(2),
+        "repopulated from storage"
+    );
+}
+
+#[tokio::test]
+async fn an_open_breaker_serves_reads_from_storage_and_heals_after_it_closes() {
+    // Open after one failure; while open, let every second call through.
+    let (storage, store) = resilient_node(|store| store.with_breaker(1, 2));
+    let putter = storage.local_putter(ID);
+    putter.save_commit(item(1).await).await.expect("seed");
+    assert_eq!(commit_count(&store, &storage).await, Some(1));
+
+    // The write's merge fails and opens the breaker, so the follow-up remove
+    // is refused without reaching the store.
+    store.inner().set(|s| &s.fail_merge, true);
+    putter.save_commit(item(2).await).await.expect("write");
+    store.inner().set(|s| &s.fail_merge, false);
+    assert!(store.is_open(), "one failure opens the breaker");
+    assert_eq!(
+        store.inner().resident_commits().await,
+        Some(1),
+        "stale entry remains"
+    );
+
+    // Every read is correct while the breaker is open, and a probe that gets
+    // through heals the tree.
+    for _ in 0..4 {
+        assert_eq!(commit_count(&store, &storage).await, Some(2));
+    }
+    assert!(!store.is_open(), "a successful probe closes the breaker");
+    assert_eq!(commit_count(&store, &storage).await, Some(2));
+    assert_eq!(
+        store.inner().resident_commits().await,
+        Some(2),
+        "healed and repopulated"
+    );
 }
