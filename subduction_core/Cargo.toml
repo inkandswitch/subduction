@@ -65,6 +65,10 @@ harness = false
 name = "listen_dispatch_local"
 harness = false
 
+[[bench]]
+name = "tree_store"
+harness = false
+
 [[test]]
 name = "connections_gauge"
 required-features = ["metrics"]
