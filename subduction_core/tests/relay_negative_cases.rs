@@ -12,6 +12,7 @@ use sedimentree_core::{
 use subduction_core::{
     authenticated::{Authenticated, Direction},
     connection::test_utils::{CloseableChannelTransport, InstantTimeout, TokioSpawn},
+    effects::config::Config,
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -25,22 +26,11 @@ use testresult::TestResult;
 
 type Conn = MessageTransport<CloseableChannelTransport>;
 
-type TestSyncHandler =
-    SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>;
+type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, InstantTimeout, TokioSpawn>;
 
-type TestSubduction = Arc<
-    Subduction<
-        'static,
-        Sendable,
-        MemoryStorage,
-        Conn,
-        TestSyncHandler,
-        OpenPolicy,
-        MemorySigner,
-        InstantTimeout,
-        TokioSpawn,
-    >,
->;
+type TestSyncHandler = SyncHandler<Sendable, Cfg, Conn, CountLeadingZeroBytes>;
+
+type TestSubduction = Arc<Subduction<'static, Sendable, Cfg, Conn, TestSyncHandler>>;
 
 const SYNC_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(500);
 const PROPAGATION_PAUSE: Duration = Duration::from_millis(50);

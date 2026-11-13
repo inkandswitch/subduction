@@ -29,6 +29,7 @@ use subduction_core::{
         message::SyncMessage,
         test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn, test_signer},
     },
+    effects::config::Config,
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -36,11 +37,16 @@ use subduction_core::{
     storage::memory::MemoryStorage,
     subduction::builder::SubductionBuilder,
 };
+use subduction_crypto::signer::memory::MemorySigner;
 use testresult::TestResult;
 
 type Conn = ChannelMockConnection<SyncMessage>;
-type InnerHandler =
-    SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>;
+type InnerHandler = SyncHandler<
+    Sendable,
+    Config<MemoryStorage, OpenPolicy, MemorySigner, InstantTimeout, TokioSpawn>,
+    Conn,
+    CountLeadingZeroBytes,
+>;
 
 /// The sedimentree id whose `HeadsUpdate` makes the handler panic.
 const POISON_ID: SedimentreeId = SedimentreeId::new([0xFFu8; 32]);

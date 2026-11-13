@@ -70,6 +70,10 @@ use subduction_crypto::verified_meta::VerifiedMeta;
 #[allow(clippy::type_complexity)]
 pub trait Storage<Async: FutureForm + ?Sized> {
     /// The error type for storage operations.
+    ///
+    /// [`HasStorage::StorageError`] mirrors these bounds; change both together.
+    ///
+    /// [`HasStorage::StorageError`]: crate::effects::storage::HasStorage::StorageError
     type Error: core::error::Error;
 
     // ==================== Sedimentree IDs ====================

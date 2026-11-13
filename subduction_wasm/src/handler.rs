@@ -23,10 +23,10 @@ use wasm_bindgen::prelude::*;
 
 use crate::{
     clock::JsClock,
-    policy::{JsPolicy, ephemeral::JsEphemeralPolicy},
+    policy::ephemeral::JsEphemeralPolicy,
     remote_heads::JsRemoteHeadsObserver,
     runtime::ManagedTransport,
-    subduction::{JsDepthMetric, WASM_SHARD_COUNT, WasmSpawn},
+    subduction::{JsDepthMetric, WASM_SHARD_COUNT, WasmEffects, WasmSpawn},
     wire::WireMessage,
 };
 use sedimentree_wasm::storage::JsStorage;
@@ -143,11 +143,9 @@ impl Handler<Local, WasmConn> for WasmKeyhiveHandler {
 
 type WasmSyncHandler = SyncHandler<
     Local,
-    JsStorage,
+    WasmEffects,
     WasmConn,
-    JsPolicy,
     JsDepthMetric,
-    WasmSpawn,
     { WASM_SHARD_COUNT },
     JsRemoteHeadsObserver,
 >;

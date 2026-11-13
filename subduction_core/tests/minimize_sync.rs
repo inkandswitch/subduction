@@ -22,11 +22,13 @@ use subduction_core::{
         message::SyncMessage,
         test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn, test_signer},
     },
+    effects::config::Config,
     handler::sync::SyncHandler,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
 };
+use subduction_crypto::signer::memory::MemorySigner;
 use testresult::TestResult;
 
 /// Create a `CommitId` with `n` leading zero bytes.
@@ -50,32 +52,24 @@ fn make_unique_blob(seed: u8) -> Blob {
     Blob::new(data)
 }
 
+type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, InstantTimeout, TokioSpawn>;
+
 /// Helper: create and spawn a Subduction instance for testing.
 ///
 /// Returns only the `Arc<Subduction>` handle; listener and actor
 /// futures are spawned onto the tokio runtime automatically.
 ///
 /// Must be called from within a tokio runtime context.
-type TestSyncHandler = SyncHandler<
-    Sendable,
-    MemoryStorage,
-    ChannelMockConnection<SyncMessage>,
-    OpenPolicy,
-    CountLeadingZeroBytes,
-    TokioSpawn,
->;
+type TestSyncHandler =
+    SyncHandler<Sendable, Cfg, ChannelMockConnection<SyncMessage>, CountLeadingZeroBytes>;
 
 type TestSubduction = Arc<
     Subduction<
         'static,
         Sendable,
-        MemoryStorage,
+        Cfg,
         ChannelMockConnection<SyncMessage>,
         TestSyncHandler,
-        OpenPolicy,
-        subduction_crypto::signer::memory::MemorySigner,
-        InstantTimeout,
-        TokioSpawn,
         CountLeadingZeroBytes,
     >,
 >;

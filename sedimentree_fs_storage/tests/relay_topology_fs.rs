@@ -18,6 +18,7 @@ use sedimentree_fs_storage::FsStorage;
 use subduction_core::{
     authenticated::{Authenticated, Direction},
     connection::test_utils::{ChannelTransport, InstantTimeout, TokioSpawn},
+    effects::config::Config,
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -30,21 +31,10 @@ use tempfile::TempDir;
 use testresult::TestResult;
 
 type Conn = MessageTransport<ChannelTransport>;
-type TestSyncHandler =
-    SyncHandler<Sendable, FsStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>;
-type TestSubduction = Arc<
-    Subduction<
-        'static,
-        Sendable,
-        FsStorage,
-        Conn,
-        TestSyncHandler,
-        OpenPolicy,
-        MemorySigner,
-        InstantTimeout,
-        TokioSpawn,
-    >,
->;
+type Cfg = Config<FsStorage, OpenPolicy, MemorySigner, InstantTimeout, TokioSpawn>;
+
+type TestSyncHandler = SyncHandler<Sendable, Cfg, Conn, CountLeadingZeroBytes>;
+type TestSubduction = Arc<Subduction<'static, Sendable, Cfg, Conn, TestSyncHandler>>;
 
 const SYNC_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(1_000);
 const PROPAGATION_PAUSE: Duration = Duration::from_millis(80);

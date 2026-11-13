@@ -17,6 +17,7 @@
 
 use alloc::{sync::Arc, vec::Vec};
 use async_lock::Mutex;
+use core::fmt::Debug;
 use future_form::{FutureForm, Local, Sendable, future_form};
 use nonempty::NonEmpty;
 use sedimentree_core::{
@@ -42,10 +43,10 @@ use crate::{
             SyncResult,
         },
     },
+    effects::{policy::HasStoragePolicy, spawner::HasSpawner, storage::HasStorage},
     peer::id::PeerId,
-    policy::storage::StoragePolicy,
     spawn::Spawn,
-    storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
+    storage::{mutation::MutationError, powerbox::StoragePowerbox, putter::Putter},
     subduction::{
         error::{IoError, ListenError},
         ingest, peers,
@@ -78,22 +79,20 @@ use crate::{
 #[allow(clippy::type_complexity)]
 pub struct SyncHandler<
     Async: FutureForm,
-    Store: Storage<Async>,
+    E: HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
     Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
-    Auth: StoragePolicy<Async>,
     Metric: DepthMetric,
-    Sp: Spawn<Async>,
     const SHARDS: usize = 256,
     R: RemoteHeadsObserver = NoRemoteHeadsObserver,
 > {
     sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
     connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
     subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
-    storage: StoragePowerbox<Store, Auth, Async>,
+    storage: StoragePowerbox<E::Storage, E::Policy, Async>,
     depth_metric: Metric,
     heads_notifier: FilteredHeadsNotifier<R>,
     send_counter: PeerCounter,
-    spawner: Sp,
+    spawner: E::Spawner,
     /// Windowed per-peer counts of inbound `BatchSyncRequest`s; see
     /// [`requestor_tally`](crate::metrics::requestor_tally). `Arc`-shared so
     /// an operator loop can drain it without reaching through the handler.
@@ -103,14 +102,12 @@ pub struct SyncHandler<
 
 impl<
     Async: FutureForm,
-    Store: Storage<Async>,
+    E: HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
     Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
-    Auth: StoragePolicy<Async>,
     Metric: DepthMetric,
-    Sp: Spawn<Async>,
     R: RemoteHeadsObserver,
     const SHARDS: usize,
-> core::fmt::Debug for SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, R>
+> Debug for SyncHandler<Async, E, Conn, Metric, SHARDS, R>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SyncHandler").finish_non_exhaustive()
@@ -119,14 +116,12 @@ impl<
 
 impl<
     Async: FutureForm,
-    Store: Storage<Async>,
+    E: HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
     Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
-    Auth: StoragePolicy<Async>,
     Metric: DepthMetric + Clone,
-    Sp: Spawn<Async> + Clone,
     R: RemoteHeadsObserver + Clone,
     const SHARDS: usize,
-> Clone for SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, R>
+> Clone for SyncHandler<Async, E, Conn, Metric, SHARDS, R>
 {
     fn clone(&self) -> Self {
         Self {
@@ -146,13 +141,11 @@ impl<
 
 impl<
     Async: FutureForm,
-    Store: Storage<Async>,
+    E: HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
     Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
-    Auth: StoragePolicy<Async>,
     Metric: DepthMetric,
-    Sp: Spawn<Async>,
     const SHARDS: usize,
-> SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, NoRemoteHeadsObserver>
+> SyncHandler<Async, E, Conn, Metric, SHARDS, NoRemoteHeadsObserver>
 {
     /// Create a new `SyncHandler` from shared state.
     ///
@@ -166,9 +159,9 @@ impl<
         sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
-        storage: StoragePowerbox<Store, Auth, Async>,
+        storage: StoragePowerbox<E::Storage, E::Policy, Async>,
         depth_metric: Metric,
-        spawner: Sp,
+        spawner: E::Spawner,
     ) -> Self {
         Self {
             sedimentrees,
@@ -187,14 +180,12 @@ impl<
 
 impl<
     Async: FutureForm,
-    Store: Storage<Async>,
+    E: HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
     Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
-    Auth: StoragePolicy<Async>,
     Metric: DepthMetric,
-    Sp: Spawn<Async>,
     R: RemoteHeadsObserver,
     const SHARDS: usize,
-> SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, R>
+> SyncHandler<Async, E, Conn, Metric, SHARDS, R>
 {
     /// Create a new `SyncHandler` with a custom remote heads observer.
     #[allow(clippy::type_complexity)]
@@ -202,10 +193,10 @@ impl<
         sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
-        storage: StoragePowerbox<Store, Auth, Async>,
+        storage: StoragePowerbox<E::Storage, E::Policy, Async>,
         depth_metric: Metric,
         remote_heads_observer: R,
-        spawner: Sp,
+        spawner: E::Spawner,
     ) -> Self {
         Self {
             sedimentrees,
@@ -272,31 +263,35 @@ impl<
 
 #[future_form(
     Sendable where
-        Store: Storage<Sendable> + Send + Sync + core::fmt::Debug,
-        Conn: Connection<Sendable, SyncMessage> + PartialEq + Clone + Send + Sync + core::fmt::Debug + 'static,
-        Auth: StoragePolicy<Sendable> + Send + Sync,
-        Auth::FetchDisallowed: Send + 'static,
-        Auth::PutDisallowed: Send + 'static,
-        Metric: DepthMetric + Send + Sync,
-        Store::Error: Send + 'static,
+        E::Policy: Send + Sync,
+        E::Spawner: Send + Sync + 'static,
+        E::Storage: Send + Sync,
+        E::FetchDisallowed: Send + 'static,
+        E::PutDisallowed: Send + 'static,
+        E::StorageError: Send + 'static,
+        Conn: Connection<Sendable, SyncMessage> + PartialEq + Clone + Send + Sync + Debug + 'static,
         Conn::SendError: Send + 'static,
         Conn::RecvError: Send + 'static,
         Conn::DisconnectionError: Send + 'static,
-        Sp: Spawn<Sendable> + Send + Sync + 'static,
+        Metric: DepthMetric + Send + Sync,
         R: RemoteHeadsObserver + Send + Sync,
     Local where
-        Store: Storage<Local> + core::fmt::Debug,
-        Conn: Connection<Local, SyncMessage> + PartialEq + Clone + core::fmt::Debug + 'static,
-        Auth: StoragePolicy<Local>,
+        E::Spawner: 'static,
+        Conn: Connection<Local, SyncMessage> + PartialEq + Clone + Debug + 'static,
         Metric: DepthMetric,
-        Sp: Spawn<Local> + 'static,
         R: RemoteHeadsObserver
 )]
-impl<Async: FutureForm, Store, Conn, Auth, Metric, Sp, R, const SHARDS: usize> Handler<Async, Conn>
-    for SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, R>
+impl<
+    Async: FutureForm,
+    E: HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
+    Conn,
+    Metric,
+    R,
+    const SHARDS: usize,
+> Handler<Async, Conn> for SyncHandler<Async, E, Conn, Metric, SHARDS, R>
 {
     type Message = SyncMessage;
-    type HandlerError = ListenError<Async, Store, Conn, SyncMessage>;
+    type HandlerError = ListenError<Async, E::Storage, Conn, SyncMessage>;
 
     fn handle<'a>(
         &'a self,
@@ -329,14 +324,12 @@ impl<Async: FutureForm, Store, Conn, Auth, Metric, Sp, R, const SHARDS: usize> H
 
 impl<
     Async: FutureForm,
-    Store: Storage<Async>,
+    E: HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
     Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
-    Auth: StoragePolicy<Async>,
     Metric: DepthMetric,
-    Sp: Spawn<Async>,
     R: RemoteHeadsObserver,
     const SHARDS: usize,
-> RemoteHeadsNotifier for SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, R>
+> RemoteHeadsNotifier for SyncHandler<Async, E, Conn, Metric, SHARDS, R>
 {
     fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
         self.heads_notifier.notify(id, peer, heads);
@@ -421,21 +414,20 @@ where
 
 impl<
     Async: FutureForm,
-    Store: Storage<Async>,
+    E: HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
     Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
-    Auth: StoragePolicy<Async>,
     Metric: DepthMetric,
-    Sp: Spawn<Async>,
     R: RemoteHeadsObserver,
     const SHARDS: usize,
-> SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, R>
+> SyncHandler<Async, E, Conn, Metric, SHARDS, R>
 {
     #[allow(clippy::too_many_lines)]
     async fn dispatch(
         &self,
         conn: &Authenticated<Conn, Async>,
         message: SyncMessage,
-    ) -> Result<Option<FanOut<Conn, Async>>, ListenError<Async, Store, Conn, SyncMessage>> {
+    ) -> Result<Option<FanOut<Conn, Async>>, ListenError<Async, E::Storage, Conn, SyncMessage>>
+    {
         let from = conn.peer_id();
 
         let span = tracing::debug_span!(
@@ -463,7 +455,8 @@ impl<
         from: PeerId,
         message: SyncMessage,
         conn: &Authenticated<Conn, Async>,
-    ) -> Result<Option<FanOut<Conn, Async>>, ListenError<Async, Store, Conn, SyncMessage>> {
+    ) -> Result<Option<FanOut<Conn, Async>>, ListenError<Async, E::Storage, Conn, SyncMessage>>
+    {
         // Note: remote heads arrive via three paths:
         //
         // 1. `responder_heads` in `BatchSyncResponse` — handled by
@@ -561,7 +554,7 @@ impl<
         signed_commit: &Signed<LooseCommit>,
         blob: Blob,
         conn: &Authenticated<Conn, Async>,
-    ) -> Result<Option<FanOut<Conn, Async>>, IoError<Async, Store, Conn, SyncMessage>> {
+    ) -> Result<Option<FanOut<Conn, Async>>, IoError<Async, E::Storage, Conn, SyncMessage>> {
         let verified = match signed_commit.try_verify() {
             Ok(v) => v,
             Err(e) => {
@@ -713,7 +706,7 @@ impl<
         signed_fragment: &Signed<Fragment>,
         blob: Blob,
         conn: &Authenticated<Conn, Async>,
-    ) -> Result<Option<FanOut<Conn, Async>>, IoError<Async, Store, Conn, SyncMessage>> {
+    ) -> Result<Option<FanOut<Conn, Async>>, IoError<Async, E::Storage, Conn, SyncMessage>> {
         let verified = match signed_fragment.try_verify() {
             Ok(v) => v,
             Err(e) => {
@@ -805,7 +798,7 @@ impl<
         their_fingerprints: &FingerprintSummary,
         req_id: RequestId,
         conn: &Authenticated<Conn, Async>,
-    ) -> Result<(), ListenError<Async, Store, Conn, SyncMessage>> {
+    ) -> Result<(), ListenError<Async, E::Storage, Conn, SyncMessage>> {
         let peer_id = conn.peer_id();
         tracing::info!(peer = %peer_id, tree = ?id, "recv_batch_sync_request");
         #[cfg(feature = "metrics")]
@@ -1137,7 +1130,7 @@ impl<
         from: &PeerId,
         id: SedimentreeId,
         diff: SyncDiff,
-    ) -> Result<Option<FanOut<Conn, Async>>, IoError<Async, Store, Conn, SyncMessage>> {
+    ) -> Result<Option<FanOut<Conn, Async>>, IoError<Async, E::Storage, Conn, SyncMessage>> {
         let ingested =
             ingest::recv_batch_sync_response(&self.sedimentrees, &self.storage, from, id, diff)
                 .await?;
@@ -1161,17 +1154,17 @@ impl<
 
     async fn insert_commit_locally(
         &self,
-        putter: &Putter<Async, Store>,
+        putter: &Putter<Async, E::Storage>,
         verified_meta: VerifiedMeta<LooseCommit>,
-    ) -> Result<bool, crate::storage::mutation::MutationError<Store::Error>> {
+    ) -> Result<bool, MutationError<E::StorageError>> {
         ingest::insert_commit_locally(&self.sedimentrees, putter, verified_meta).await
     }
 
     async fn insert_fragment_locally(
         &self,
-        putter: &Putter<Async, Store>,
+        putter: &Putter<Async, E::Storage>,
         verified_meta: VerifiedMeta<Fragment>,
-    ) -> Result<bool, crate::storage::mutation::MutationError<Store::Error>> {
+    ) -> Result<bool, MutationError<E::StorageError>> {
         ingest::insert_fragment_locally(&self.sedimentrees, putter, verified_meta).await
     }
 

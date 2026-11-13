@@ -15,6 +15,7 @@ use sedimentree_core::{
     loose_commit::id::CommitId,
 };
 use subduction_core::{
+    effects::config::Config,
     handler::sync::SyncHandler,
     handshake::audience::Audience,
     peer::id::PeerId,
@@ -77,46 +78,20 @@ where
 
 const INGEST_WAIT: Duration = Duration::from_secs(2);
 
+type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, TimeoutTokio, TokioSpawn>;
+
 type TestSubduction = Arc<
     Subduction<
         'static,
         Sendable,
-        MemoryStorage,
+        Cfg,
         TokioWebSocketClient<MemorySigner>,
-        SyncHandler<
-            Sendable,
-            MemoryStorage,
-            TokioWebSocketClient<MemorySigner>,
-            OpenPolicy,
-            CountLeadingZeroBytes,
-            TokioSpawn,
-        >,
-        OpenPolicy,
-        MemorySigner,
-        TimeoutTokio,
-        TokioSpawn,
+        SyncHandler<Sendable, Cfg, TokioWebSocketClient<MemorySigner>, CountLeadingZeroBytes>,
     >,
 >;
 
-type TestHandler = Arc<
-    SyncHandler<
-        Sendable,
-        MemoryStorage,
-        TokioWebSocketClient<MemorySigner>,
-        OpenPolicy,
-        CountLeadingZeroBytes,
-        TokioSpawn,
-    >,
->;
-
-type ClientSyncHandler = SyncHandler<
-    Sendable,
-    MemoryStorage,
-    TokioWebSocketClient<MemorySigner>,
-    OpenPolicy,
-    CountLeadingZeroBytes,
-    TokioSpawn,
->;
+type TestHandler =
+    Arc<SyncHandler<Sendable, Cfg, TokioWebSocketClient<MemorySigner>, CountLeadingZeroBytes>>;
 
 #[allow(clippy::type_complexity)]
 fn setup_client_subduction(
@@ -124,18 +99,7 @@ fn setup_client_subduction(
 ) -> (
     TestSubduction,
     TestHandler,
-    ListenerFuture<
-        'static,
-        Sendable,
-        MemoryStorage,
-        TokioWebSocketClient<MemorySigner>,
-        ClientSyncHandler,
-        OpenPolicy,
-        MemorySigner,
-        TimeoutTokio,
-        TokioSpawn,
-        CountLeadingZeroBytes,
-    >,
+    ListenerFuture<'static, Sendable>,
     subduction_core::connection::manager::ManagerFuture<Sendable>,
 ) {
     SubductionBuilder::new()

@@ -55,8 +55,8 @@ use subduction_keyhive::{connection::KeyhiveConnection, runtime::init_sendable_k
 
 use crate::{
     handler::{
-        CliConn, CliEphemeralHandler, CliHandler, CliHandlerOpenPolicy, CliKeyhiveHandler,
-        CliKeyhiveProtocol, CliSyncHandler, CliWireHandler,
+        CliConn, CliEffects, CliEphemeralHandler, CliHandler, CliHandlerOpenPolicy,
+        CliKeyhiveHandler, CliKeyhiveProtocol, CliSyncHandler, CliWireHandler,
     },
     key,
     keyhive::{CliConnKeyhiveAdapter, FsKeyhiveStorage, KEYHIVE_DIR},
@@ -70,20 +70,8 @@ use crate::{
 /// Generic over the handler `H` so the same connection plumbing serves both
 /// the keyhive-enabled ([`CliHandler`]) and keyhive-disabled
 /// ([`CliHandlerOpenPolicy`]) servers.
-type CliSubduction<H> = Arc<
-    Subduction<
-        'static,
-        future_form::Sendable,
-        MetricsStorage<RedbStorage>,
-        CliConn,
-        H,
-        CliKeyhivePolicyHandle,
-        MemorySigner,
-        FuturesTimerTimeout,
-        TokioSpawn,
-        CountLeadingZeroBytes,
-    >,
->;
+type CliSubduction<H> =
+    Arc<Subduction<'static, Sendable, CliEffects, CliConn, H, CountLeadingZeroBytes>>;
 
 /// Arguments for the server command.
 #[derive(Debug, clap::Parser)]
