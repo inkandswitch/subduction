@@ -53,7 +53,7 @@ Each tree has a _generation_ that changes whenever its stored state does. A miss
 2. **`merge` and `remove` change the generation even on a miss.** Without a resident tree, leave a _marker_: a generation with no tree. That's what the in-flight populate collides with.
 3. **A generation never repeats for a tree.** See [Reclaiming markers](#reclaiming-markers).
 4. **All four operations are serialized per tree.** A read-modify-write `merge` racing a `remove` can otherwise bring back a tree that storage no longer matches.
-5. **Store calls time out.** The node holds a per-tree lock across store maintenance, so a hung call stalls that tree's writes.
+5. **Store calls time out.** The node holds a per-tree lock across store maintenance, so a hung call stalls that tree's writes. `ResilientMinimizedTreeStore` adds this to any store: it bounds each call with the node's `Timeout` effect and opens a circuit breaker after a run of consecutive failures, so an outage costs no remote calls and degrades to reading storage directly.
 6. **Fail safe, for every node.** After a `merge` or `remove` returns an error, no node may be served the tree from before that call, and no populate from before it may succeed. See [Failed maintenance on a shared store](#failed-maintenance-on-a-shared-store).
 7. **Never write back an entry.** A `Hit` carries no generation, so a write back of a node's (minimized) copy can overwrite another node's merge. Minimization stays local to the reader.
 8. **A hit means the tree exists.** Keep empty trees exactly as populated, and never synthesize a hit.
@@ -62,7 +62,7 @@ Each tree has a _generation_ that changes whenever its stored state does. A miss
 
 ## Failed maintenance on a shared store
 
-When a `merge` or `remove` fails after a write (an error or a timeout), the call may not have changed the generation, but storage already holds the write. A tree from before the call is now stale, and serving it hides the write.
+When a `merge` or `remove` fails after a write (an error, a timeout, or `ResilientMinimizedTreeStore`'s open breaker), the call may not have changed the generation, but storage already holds the write. A tree from before the call is now stale, and serving it hides the write.
 
 The node logs the error and keeps no record of it. Only the store knows whether the failed call reached it, and only the store is shared with the other nodes that might serve the stale tree. Rule 6 must hold for every node, not just the one that saw the error. Remembering the failure in the writing node's process is not enough on its own: the other nodes keep hitting the old tree.
 
@@ -74,7 +74,7 @@ The failed call is often the very thing that can't reach the store, so a network
 | Expire entries after a time-to-live        | Bound how long any entry lives, so a missed invalidation heals on its own                                                                 | Up to the TTL                      |
 | Validate entries against storage           | Keep a per-tree version with storage, bumped by every write. Store it with each entry and compare it on a hit                             | None, at one small read per hit    |
 
-The first approach alone leaves other nodes stale until the retry lands, and forever if the writing node dies first; pair it with one of the others. `SharedMemoryMinimizedTreeStore` cannot fail, so it needs none of these.
+`ResilientMinimizedTreeStore` implements the first approach for the process it runs in: it marks the tree, retries the `remove` on the next lookup, turns later merges into removes, and reports old populates as stale until a `remove` lands. On its own that leaves other nodes stale until the retry lands, and forever if the writing node dies first, so a networked store wrapped in it still needs one of the others. `SharedMemoryMinimizedTreeStore` cannot fail, so it needs none of these.
 
 ## Known gap: a write lost mid-maintenance
 
