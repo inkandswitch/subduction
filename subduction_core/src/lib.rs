@@ -115,6 +115,7 @@ pub mod connection;
 pub mod effects;
 pub mod handler;
 pub mod handshake;
+pub mod minimized_tree_store;
 pub mod multiplexer;
 pub mod nonce_cache;
 pub mod peer;
