@@ -88,8 +88,9 @@
 //! in its own tasks, so dropping an API waiter does not abandon store maintenance.
 //! If the executor drops an unfinished task, its guard marks the shared state
 //! closed: backend work may still be running, so readers cannot assume it has
-//! finished. The store keeps the tree from before that write. Changes made
-//! directly through an unrelated storage handle are not tracked here either.
+//! finished. The store keeps the tree from before that write; see the design
+//! notes on a write lost mid-maintenance for when that matters. Changes made directly through an unrelated storage handle are not
+//! tracked here either.
 
 pub(crate) mod cache;
 
