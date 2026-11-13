@@ -144,7 +144,7 @@ async fn accepted_peer_response_items_use_the_same_stream() {
     )
     .await
     .expect("accepted response");
-    assert!(node.sedimentrees().get_cloned(&ID).await.is_none());
+    assert!(node.minimized_tree_store().get_cloned(ID).await.is_none());
     assert!(matches!(
         next(&mut stream).await,
         StoredEvent::Item(StoredItem::Commit(_))
@@ -154,7 +154,7 @@ async fn accepted_peer_response_items_use_the_same_stream() {
         StoredEvent::Item(StoredItem::Fragment(_))
     ));
     assert!(
-        node.sedimentrees().get_cloned(&ID).await.is_none(),
+        node.minimized_tree_store().get_cloned(ID).await.is_none(),
         "watchers receive both items without populating the tree cache"
     );
 }

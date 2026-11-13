@@ -133,13 +133,12 @@ fn prop_ingest_pushes_each_new_head_once() {
                 .count();
 
             rt.block_on(async {
-                let (node, _h, listener, manager): (Node, _, _, _) =
-                    SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-                        .signer(MemorySigner::from_bytes(&[3u8; 32]))
-                        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-                        .spawner(TokioSpawn)
-                        .timer(InstantTimeout)
-                        .build::<Sendable, Conn>();
+                let (node, _h, listener, manager): (Node, _, _, _) = SubductionBuilder::new()
+                    .signer(MemorySigner::from_bytes(&[3u8; 32]))
+                    .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+                    .spawner(TokioSpawn)
+                    .timer(InstantTimeout)
+                    .build::<Sendable, Conn>();
                 let listener = tokio::spawn(listener);
                 let manager = tokio::spawn(manager);
 

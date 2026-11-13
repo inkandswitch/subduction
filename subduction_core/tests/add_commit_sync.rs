@@ -32,13 +32,12 @@ fn make_unique_blob(seed: u8) -> Blob {
 /// Test: Adding a single commit and verifying it's in the in-memory sedimentree.
 #[tokio::test]
 async fn add_single_commit_is_stored() -> TestResult {
-    let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-            .signer(test_signer())
-            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-            .spawner(TokioSpawn)
-            .timer(InstantTimeout)
-            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
+    let (subduction, _handler, listener_fut, actor_fut) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(actor_fut);
@@ -61,13 +60,12 @@ async fn add_single_commit_is_stored() -> TestResult {
 /// Test: Adding multiple commits sequentially and verifying all are stored.
 #[tokio::test]
 async fn add_multiple_commits_all_stored() -> TestResult {
-    let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-            .signer(test_signer())
-            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-            .spawner(TokioSpawn)
-            .timer(InstantTimeout)
-            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
+    let (subduction, _handler, listener_fut, actor_fut) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(actor_fut);
@@ -92,13 +90,12 @@ async fn add_multiple_commits_all_stored() -> TestResult {
 /// Test: Verify commits are retrievable after adding.
 #[tokio::test]
 async fn commits_retrievable_after_add() -> TestResult {
-    let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-            .signer(test_signer())
-            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-            .spawner(TokioSpawn)
-            .timer(InstantTimeout)
-            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
+    let (subduction, _handler, listener_fut, actor_fut) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(actor_fut);
@@ -144,13 +141,12 @@ async fn commits_retrievable_after_add() -> TestResult {
 async fn fingerprint_summary_includes_all_commits() -> TestResult {
     use sedimentree_core::crypto::fingerprint::FingerprintSeed;
 
-    let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-            .signer(test_signer())
-            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-            .spawner(TokioSpawn)
-            .timer(InstantTimeout)
-            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
+    let (subduction, _handler, listener_fut, actor_fut) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(actor_fut);
@@ -174,8 +170,8 @@ async fn fingerprint_summary_includes_all_commits() -> TestResult {
 
     // Get the sedimentree and compute fingerprint summary
     let sedimentree = subduction
-        .sedimentrees()
-        .get_cloned(&sed_id)
+        .minimized_tree_store()
+        .get_cloned(sed_id)
         .await
         .expect("sedimentree should exist");
 
@@ -199,13 +195,12 @@ async fn sync_request_includes_all_local_commits() -> TestResult {
         BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage, SyncResult,
     };
 
-    let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-            .signer(test_signer())
-            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-            .spawner(TokioSpawn)
-            .timer(InstantTimeout)
-            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
+    let (subduction, _handler, listener_fut, actor_fut) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     let sed_id = SedimentreeId::new([1u8; 32]);
     let peer_id = PeerId::new([2u8; 32]);
@@ -286,13 +281,12 @@ async fn sync_request_includes_all_local_commits() -> TestResult {
 async fn full_sync_sends_all_commits() -> TestResult {
     use subduction_core::connection::message::SyncMessage;
 
-    let (client, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-            .signer(test_signer())
-            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-            .spawner(TokioSpawn)
-            .timer(InstantTimeout)
-            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
+    let (client, _handler, listener_fut, actor_fut) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     let sed_id = SedimentreeId::new([1u8; 32]);
     let server_peer_id = PeerId::new([2u8; 32]);
@@ -342,8 +336,8 @@ async fn full_sync_sends_all_commits() -> TestResult {
 
     // First, verify the sedimentree state
     let sedimentree = client
-        .sedimentrees()
-        .get_cloned(&sed_id)
+        .minimized_tree_store()
+        .get_cloned(sed_id)
         .await
         .expect("sedimentree should exist");
 

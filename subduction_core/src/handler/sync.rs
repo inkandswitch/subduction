@@ -35,7 +35,6 @@ use tracing::Instrument;
 
 use crate::{
     authenticated::Authenticated,
-    collections::bounded_sharded_map::BoundedShardedMap,
     connection::{
         Connection,
         message::{
@@ -43,10 +42,16 @@ use crate::{
             SyncResult,
         },
     },
-    effects::{policy::HasStoragePolicy, spawner::HasSpawner, storage::HasStorage},
+    effects::{
+        minimized_tree_store::HasMinimizedTreeStore, policy::HasStoragePolicy, spawner::HasSpawner,
+        storage::HasStorage,
+    },
+    minimized_tree_store::MinimizedTreeStore,
     peer::id::PeerId,
     spawn::Spawn,
-    storage::{mutation::MutationError, powerbox::StoragePowerbox, putter::Putter},
+    storage::{
+        mutation::MutationError, powerbox::StoragePowerbox, putter::Putter, state::cache::Resident,
+    },
     subduction::{
         error::{IoError, ListenError},
         ingest, peers,
@@ -79,13 +84,12 @@ use crate::{
 #[allow(clippy::type_complexity)]
 pub struct SyncHandler<
     Async: FutureForm,
-    E: HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
+    E: HasMinimizedTreeStore<Async> + HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
     Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
     Metric: DepthMetric,
-    const SHARDS: usize = 256,
     R: RemoteHeadsObserver = NoRemoteHeadsObserver,
 > {
-    sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
+    sedimentrees: E::MinimizedTreeStore,
     connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
     subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
     storage: StoragePowerbox<E::Storage, E::Policy, Async>,
@@ -102,12 +106,11 @@ pub struct SyncHandler<
 
 impl<
     Async: FutureForm,
-    E: HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
+    E: HasMinimizedTreeStore<Async> + HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
     Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
     Metric: DepthMetric,
     R: RemoteHeadsObserver,
-    const SHARDS: usize,
-> Debug for SyncHandler<Async, E, Conn, Metric, SHARDS, R>
+> Debug for SyncHandler<Async, E, Conn, Metric, R>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SyncHandler").finish_non_exhaustive()
@@ -116,12 +119,11 @@ impl<
 
 impl<
     Async: FutureForm,
-    E: HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
+    E: HasMinimizedTreeStore<Async> + HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
     Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
     Metric: DepthMetric + Clone,
     R: RemoteHeadsObserver + Clone,
-    const SHARDS: usize,
-> Clone for SyncHandler<Async, E, Conn, Metric, SHARDS, R>
+> Clone for SyncHandler<Async, E, Conn, Metric, R>
 {
     fn clone(&self) -> Self {
         Self {
@@ -141,11 +143,10 @@ impl<
 
 impl<
     Async: FutureForm,
-    E: HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
+    E: HasMinimizedTreeStore<Async> + HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
     Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
     Metric: DepthMetric,
-    const SHARDS: usize,
-> SyncHandler<Async, E, Conn, Metric, SHARDS, NoRemoteHeadsObserver>
+> SyncHandler<Async, E, Conn, Metric, NoRemoteHeadsObserver>
 {
     /// Create a new `SyncHandler` from shared state.
     ///
@@ -156,7 +157,7 @@ impl<
     /// [`Subduction::new`]: crate::subduction::Subduction::new
     #[allow(clippy::type_complexity)]
     pub fn new(
-        sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
+        sedimentrees: E::MinimizedTreeStore,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
         storage: StoragePowerbox<E::Storage, E::Policy, Async>,
@@ -180,17 +181,16 @@ impl<
 
 impl<
     Async: FutureForm,
-    E: HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
+    E: HasMinimizedTreeStore<Async> + HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
     Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
     Metric: DepthMetric,
     R: RemoteHeadsObserver,
-    const SHARDS: usize,
-> SyncHandler<Async, E, Conn, Metric, SHARDS, R>
+> SyncHandler<Async, E, Conn, Metric, R>
 {
     /// Create a new `SyncHandler` with a custom remote heads observer.
     #[allow(clippy::type_complexity)]
     pub fn with_remote_heads_observer(
-        sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
+        sedimentrees: E::MinimizedTreeStore,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
         storage: StoragePowerbox<E::Storage, E::Policy, Async>,
@@ -263,6 +263,9 @@ impl<
 
 #[future_form(
     Sendable where
+        E::MinimizedTreeStore: Send + Sync,
+        <E::MinimizedTreeStore as MinimizedTreeStore<Sendable>>::Error: Send,
+        <E::MinimizedTreeStore as MinimizedTreeStore<Sendable>>::Generation: Send + Sync,
         E::Policy: Send + Sync,
         E::Spawner: Send + Sync + 'static,
         E::Storage: Send + Sync,
@@ -283,12 +286,11 @@ impl<
 )]
 impl<
     Async: FutureForm,
-    E: HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
+    E: HasMinimizedTreeStore<Async> + HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
     Conn,
     Metric,
     R,
-    const SHARDS: usize,
-> Handler<Async, Conn> for SyncHandler<Async, E, Conn, Metric, SHARDS, R>
+> Handler<Async, Conn> for SyncHandler<Async, E, Conn, Metric, R>
 {
     type Message = SyncMessage;
     type HandlerError = ListenError<Async, E::Storage, Conn, SyncMessage>;
@@ -324,12 +326,11 @@ impl<
 
 impl<
     Async: FutureForm,
-    E: HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
+    E: HasMinimizedTreeStore<Async> + HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
     Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
     Metric: DepthMetric,
     R: RemoteHeadsObserver,
-    const SHARDS: usize,
-> RemoteHeadsNotifier for SyncHandler<Async, E, Conn, Metric, SHARDS, R>
+> RemoteHeadsNotifier for SyncHandler<Async, E, Conn, Metric, R>
 {
     fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
         self.heads_notifier.notify(id, peer, heads);
@@ -414,12 +415,11 @@ where
 
 impl<
     Async: FutureForm,
-    E: HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
+    E: HasMinimizedTreeStore<Async> + HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
     Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
     Metric: DepthMetric,
     R: RemoteHeadsObserver,
-    const SHARDS: usize,
-> SyncHandler<Async, E, Conn, Metric, SHARDS, R>
+> SyncHandler<Async, E, Conn, Metric, R>
 {
     #[allow(clippy::too_many_lines)]
     async fn dispatch(
@@ -850,12 +850,16 @@ impl<
         // resident tree, so a commit that is durable but not yet cached is
         // omitted from this response. That brief lag is benign — the next
         // sync round picks it up, and the protocol tolerates stale views.
-        let cached = self
-            .sedimentrees
-            .with_entry(&id, |tree| {
-                ResponderDiff::new(tree.minimized(&self.depth_metric), their_fingerprints)
-            })
-            .await;
+        let (cached, mut seen) = match fetcher.coordination().lookup(&self.sedimentrees).await {
+            Resident::Hit(mut tree) => (
+                Some(ResponderDiff::new(
+                    tree.minimized(&self.depth_metric),
+                    their_fingerprints,
+                )),
+                None,
+            ),
+            Resident::Miss(seen) => (None, seen),
+        };
 
         let (diff, their_missing_commits, their_missing_fragments) = if let Some(diff) = cached {
             #[cfg(feature = "metrics")]
@@ -983,7 +987,7 @@ impl<
             loop {
                 let read = fetcher
                     .coordination()
-                    .prepare_cache_read(&self.sedimentrees)
+                    .prepare_cache_read(&self.sedimentrees, seen.take())
                     .await;
                 // Slow path (cache miss): full storage scan, which also warms
                 // the cache so subsequent requests for this tree take the
@@ -1035,9 +1039,7 @@ impl<
                 // cache nothing; the response correctly advertises no local
                 // items.
                 //
-                // The read handle adopts a concurrently-installed value
-                // if one appeared and records an LRU access; the built tree
-                // is already minimal, so it is wrapped clean.
+                // The built tree is already minimal, so it is wrapped clean.
                 let loaded = if loose_commits.is_empty() && fragments.is_empty() {
                     None
                 } else {
@@ -1045,16 +1047,24 @@ impl<
                         Sedimentree::new(fragments, loose_commits).minimize(&self.depth_metric);
                     Some(MinimizedSedimentree::already_minimal(built))
                 };
-                let Some(adopted) = read.install(loaded, |tree| tree.clone()).await else {
+                let Some(adopted) = read
+                    .install(loaded, &mut |tree: &mut MinimizedSedimentree| tree.clone())
+                    .await
+                else {
                     crate::spawn::yield_once().await;
+                    // Re-read the generation to install against. A tree that
+                    // became resident meanwhile is equally current, but this
+                    // response already holds a full scan, so skip installing.
+                    seen = match fetcher.coordination().lookup(&self.sedimentrees).await {
+                        Resident::Miss(seen) => seen,
+                        Resident::Hit(_) => None,
+                    };
                     continue;
                 };
                 let mut sedimentree = adopted.unwrap_or_default();
 
-                // The wire diff requires the minimal form. A freshly built
-                // value is already minimal, but an adopted
-                // concurrently-installed value may be dirty, so minimize once
-                // here.
+                // The wire diff requires the minimal form. The built tree is
+                // already minimal, so this is a dirty-flag check.
                 let diff = ResponderDiff::new(
                     sedimentree.minimized(&self.depth_metric),
                     their_fingerprints,

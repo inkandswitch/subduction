@@ -72,11 +72,10 @@ real ones):
 pub struct Subduction<
     'a,
     Async: FutureForm,                            // Sendable or Local
-    E: Effects<Async>,                            // Storage, policy, signer, timer, spawner
+    E: Effects<Async>,                            // Storage, policy, signer, timer, spawner, tree store
     Conn: Connection<Async, Hdl::Message>,        // Network connection type
     Hdl: Handler<Async, Conn>,                    // Wire protocol handler
     Metric: DepthMetric = CountLeadingZeroBytes,  // Hash → depth mapping
-    const SHARDS: usize = 256,                    // ShardedMap shard count
 >
 ```
 
@@ -84,8 +83,15 @@ pub struct Subduction<
 through one capability trait per effect, two for policy (`HasStorage`,
 `HasStoragePolicy`, `HasConnectionPolicy`, …), in `subduction_core::effects`.
 The stock implementation is the phantom `effects::config::Config`, with slots
-in order storage, policy, signer, timer, spawner; `Subduction::new` and the
-builder infer it from the components you pass in. Consumers bound `E` only by
+in order storage, policy, signer, timer, spawner, minimized tree store (the
+last defaults to the in-process `MemoryMinimizedTreeStore`); `Subduction::new`
+and the builder infer it from the components you pass in.
+
+The minimized tree store (`subduction_core::minimized_tree_store`) keeps each
+tree's built, minimized form so hot reads skip a full storage scan. It is
+derived data: storage stays the source of truth, and a miss rebuilds from it.
+Implement `MinimizedTreeStore` to keep trees elsewhere, but read its module
+docs first: a store shared between nodes must do compare-and-set installs. Consumers bound `E` only by
 what they use: `SyncHandler` never sees a signer or timer.
 
 Thread-safety is per form. `Effects<Async>` is form-agnostic; generic code

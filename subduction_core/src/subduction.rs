@@ -73,7 +73,6 @@ pub mod upstream_fetch;
 
 use crate::{
     authenticated::Authenticated,
-    collections::bounded_sharded_map::BoundedShardedMap,
     connection::{
         Connection,
         backoff::Backoff,
@@ -91,6 +90,7 @@ use crate::{
     },
     handler::Handler,
     handshake::audience::DiscoveryId,
+    minimized_tree_store::MinimizedTreeStore,
     multiplexer::Multiplexer,
     nonce_cache::NonceCache,
     peer::{counter::PeerCounter, id::PeerId},
@@ -99,7 +99,7 @@ use crate::{
     spawn::Spawn,
     storage::{
         fetcher::Fetcher, mutation::MutationError, powerbox::StoragePowerbox, putter::Putter,
-        traits::Storage,
+        state::cache::Resident, traits::Storage,
     },
     timeout::{Timeout, call::CallTimeout},
 };
@@ -135,7 +135,7 @@ use sedimentree_core::{
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
-    sedimentree::{FingerprintResolver, Sedimentree, minimized::MinimizedSedimentree},
+    sedimentree::{FingerprintResolver, Sedimentree},
 };
 use spawn_guard::AbortOnDrop;
 use subduction_crypto::{
@@ -157,7 +157,6 @@ pub struct Subduction<
     Conn: Connection<Async, Hdl::Message> + PartialEq + Clone + 'static,
     Hdl: Handler<Async, Conn>,
     Metric: DepthMetric = CountLeadingZeroBytes,
-    const SHARDS: usize = 256,
 > {
     handler: Arc<Hdl>,
     signer: E::Signer,
@@ -165,7 +164,7 @@ pub struct Subduction<
 
     timer: E::Timer,
     depth_metric: Metric,
-    sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
+    sedimentrees: E::MinimizedTreeStore,
     storage: StoragePowerbox<E::Storage, E::Policy, Async>,
 
     /// Active connections, keyed by peer ID.
@@ -249,23 +248,22 @@ impl<
     Async: SubductionFutureForm<'a, Conn, Hdl::Message>
         + NodeTasks<
             'a,
-            Config<Store, Policy, Sign, Timer, Sp>,
+            Config<Store, Policy, Sign, Timer, Sp, Trees>,
             Conn,
             Hdl::Message,
             Hdl,
             Metric,
-            SHARDS,
         > + 'static,
     Store: Storage<Async>,
     Policy: ConnectionPolicy<Async> + StoragePolicy<Async>,
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone + 'static,
     Sp: Spawn<Async> + Clone + Send + Sync + 'static,
+    Trees: MinimizedTreeStore<Async> + Send + Sync,
     Conn: Connection<Async, Hdl::Message> + PartialEq + 'a,
     Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
     Metric: DepthMetric,
-    const SHARDS: usize,
-> Subduction<'a, Async, Config<Store, Policy, Sign, Timer, Sp>, Conn, Hdl, Metric, SHARDS>
+> Subduction<'a, Async, Config<Store, Policy, Sign, Timer, Sp, Trees>, Conn, Hdl, Metric>
 where
     'a: 'static,
     Hdl::Message: From<SyncMessage>,
@@ -278,14 +276,14 @@ where
 {
     /// Initialize a new `Subduction` instance.
     ///
-    /// The caller constructs all shared state (`sedimentrees`, `connections`,
+    /// The caller constructs all shared state (the minimized tree store, `connections`,
     /// `subscriptions`, `storage`) and the `handler`
     /// externally, then passes them in. This lets the handler hold its own
     /// `Arc` clones of whatever shared state it needs.
     ///
     /// For the standard sync protocol, pass a [`SyncHandler`] constructed
     /// from the same `Arc`s. Create the powerbox with
-    /// [`StorageTasks::storage_powerbox`], using this node's cache and spawner.
+    /// [`StorageTasks::storage_powerbox`], using this node's tree store and spawner.
     /// Use a fresh powerbox for each node; clones are for sharing with its handlers.
     /// Backends and errors need `'static` for node-owned mutation tasks.
     ///
@@ -294,10 +292,10 @@ where
     /// ```ignore
     /// type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, InstantTimeout, TokioSpawn>;
     ///
-    /// let sedimentrees = Arc::new(BoundedShardedMap::new());
+    /// let sedimentrees = MemoryMinimizedTreeStore::new();
     /// let connections = Arc::new(Mutex::new(Map::new()));
     /// let subscriptions = Arc::new(Mutex::new(Map::new()));
-    /// let storage = <Sendable as StorageTasks<MemoryStorage, OpenPolicy, 256>>::storage_powerbox(
+    /// let storage = <Sendable as StorageTasks<MemoryStorage, OpenPolicy, MemoryMinimizedTreeStore>>::storage_powerbox(
     ///     MemoryStorage::new(), Arc::new(OpenPolicy), sedimentrees.clone(), spawner.clone(),
     /// );
     ///
@@ -334,7 +332,7 @@ where
         handler: Arc<Hdl>,
         discovery_id: Option<DiscoveryId>,
         signer: Sign,
-        sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
+        sedimentrees: Trees,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
         storage: StoragePowerbox<Store, Policy, Async>,
@@ -370,8 +368,7 @@ impl<
     Conn: Connection<Async, Hdl::Message> + PartialEq + 'a,
     Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
     Metric: DepthMetric,
-    const SHARDS: usize,
-> Subduction<'a, Async, E, Conn, Hdl, Metric, SHARDS>
+> Subduction<'a, Async, E, Conn, Hdl, Metric>
 where
     Hdl::Message: From<SyncMessage>,
     Hdl::HandlerError: Into<ListenError<Async, E::Storage, Conn, Hdl::Message>>,
@@ -397,7 +394,7 @@ where
         handler: Arc<Hdl>,
         discovery_id: Option<DiscoveryId>,
         signer: E::Signer,
-        sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
+        sedimentrees: E::MinimizedTreeStore,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<Conn, Async>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
         storage: StoragePowerbox<E::Storage, E::Policy, Async>,
@@ -409,7 +406,7 @@ where
         spawner: E::Spawner,
     ) -> (Arc<Self>, ListenerFuture<'a, Async>, ManagerFuture<Async>)
     where
-        Async: NodeTasks<'a, E, Conn, Hdl::Message, Hdl, Metric, SHARDS>,
+        Async: NodeTasks<'a, E, Conn, Hdl::Message, Hdl, Metric>,
         'a: 'static,
     {
         tracing::info!("initializing Subduction instance");
@@ -1095,7 +1092,7 @@ where
     #[must_use]
     pub fn load_and_watch(self: &Arc<Self>, id: SedimentreeId) -> crate::stored::StoredUpdates
     where
-        Async: NodeTasks<'a, E, Conn, Hdl::Message, Hdl, Metric, SHARDS>,
+        Async: NodeTasks<'a, E, Conn, Hdl::Message, Hdl, Metric>,
         'a: 'static,
     {
         Async::start_stored(self.clone(), id, CallTimeout::Uncapped, true)
@@ -1157,7 +1154,7 @@ where
         timeout: CallTimeout,
     ) -> Result<Option<NonEmpty<Blob>>, IoError<Async, E::Storage, Conn, Hdl::Message>>
     where
-        Async: NodeTasks<'a, E, Conn, Hdl::Message, Hdl, Metric, SHARDS>,
+        Async: NodeTasks<'a, E, Conn, Hdl::Message, Hdl, Metric>,
         'a: 'static,
     {
         use crate::stored::{LoadError, StoredEvent, StoredItem};
@@ -2532,9 +2529,9 @@ where
 
     /// Get all known sedimentree IDs.
     ///
-    /// Enumerates from durable storage (not just the in-RAM cache), so the
-    /// list stays complete even after cold trees are evicted from memory.
-    /// On a storage error, logs and falls back to the resident set.
+    /// Enumerates from durable storage, the source of truth, so the list is
+    /// complete whatever the minimized tree store holds. On a storage error,
+    /// logs and returns an empty list.
     pub async fn sedimentree_ids(&self) -> Vec<SedimentreeId> {
         match self
             .storage
@@ -2544,24 +2541,15 @@ where
         {
             Ok(ids) => ids.into_iter().collect(),
             Err(e) => {
-                tracing::warn!(error = %e, "sedimentree_ids: storage enumeration failed; falling back to resident set");
-                self.sedimentrees.into_keys().await
+                tracing::warn!(error = %e, "sedimentree_ids: storage enumeration failed");
+                Vec::new()
             }
         }
     }
 
-    /// Number of sedimentrees currently resident in the in-memory LRU cache.
-    ///
-    /// This is the cache occupancy (bounded by the resident cap), *not* the
-    /// total number of trees in durable storage — compare the two to gauge
-    /// eviction pressure.
-    pub async fn resident_sedimentree_count(&self) -> usize {
-        self.sedimentrees.len().await
-    }
-
     /// Get all commits for a given sedimentree ID.
     ///
-    /// Hydrates from storage on an in-RAM cache miss, so an evicted tree
+    /// Hydrates from storage on a minimized tree store miss, so an evicted tree
     /// returns its real commits. Returns `None` when the tree does not exist
     /// in storage. On a storage error, logs and returns `None`.
     pub async fn get_commits(&self, id: SedimentreeId) -> Option<Vec<LooseCommit>> {
@@ -2571,7 +2559,7 @@ where
 
     /// Get all fragments for a given sedimentree ID.
     ///
-    /// Hydrates from storage on an in-RAM cache miss. Returns `None` when the
+    /// Hydrates from storage on a minimized tree store miss. Returns `None` when the
     /// tree does not exist in storage (see [`get_commits`]).
     ///
     /// [`get_commits`]: Self::get_commits
@@ -2965,14 +2953,13 @@ where
 // `Subduction`, so this is not a practical restriction.
 impl<
     Async: SubductionFutureForm<'static, Conn, Hdl::Message>
-        + NodeTasks<'static, E, Conn, Hdl::Message, Hdl, Metric, SHARDS>
+        + NodeTasks<'static, E, Conn, Hdl::Message, Hdl, Metric>
         + 'static,
     E: Effects<Async>,
     Conn: Connection<Async, Hdl::Message> + PartialEq + 'static,
     Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
     Metric: DepthMetric,
-    const SHARDS: usize,
-> Subduction<'static, Async, E, Conn, Hdl, Metric, SHARDS>
+> Subduction<'static, Async, E, Conn, Hdl, Metric>
 where
     Hdl::Message: From<SyncMessage>,
     Hdl::HandlerError: Into<ListenError<Async, E::Storage, Conn, Hdl::Message>>,
@@ -3090,11 +3077,10 @@ where
     /// failing store degrades to the immediate-response path rather than
     /// stalling every request.
     async fn holds_locally(&self, fetcher: &Fetcher<Async, E::Storage>) -> bool {
-        self.sedimentrees
-            .with_entry(&fetcher.sedimentree_id(), |_| ())
-            .await
-            .is_some()
-            || !matches!(fetcher.contains_sedimentree_id().await, Ok(false))
+        matches!(
+            fetcher.coordination().lookup(&self.sedimentrees).await,
+            Resident::Hit(_)
+        ) || !matches!(fetcher.contains_sedimentree_id().await, Ok(false))
     }
 
     /// Listen for incoming messages and dispatch them through the handler.
@@ -3432,14 +3418,11 @@ impl<
     Conn: Connection<Async, Hdl::Message> + PartialEq + Clone + 'static,
     Hdl: Handler<Async, Conn>,
     Metric: DepthMetric,
-    const SHARDS: usize,
-> Subduction<'a, Async, E, Conn, Hdl, Metric, SHARDS>
+> Subduction<'a, Async, E, Conn, Hdl, Metric>
 {
-    /// Returns a reference to the sedimentrees map.
+    /// The node's minimized tree store.
     #[must_use]
-    pub const fn sedimentrees(
-        &self,
-    ) -> &Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>> {
+    pub const fn minimized_tree_store(&self) -> &E::MinimizedTreeStore {
         &self.sedimentrees
     }
 
@@ -3523,8 +3506,7 @@ impl<
     Conn: Connection<Async, Hdl::Message> + PartialEq + 'a,
     Hdl: Handler<Async, Conn>,
     Metric: DepthMetric,
-    const SHARDS: usize,
-> Drop for Subduction<'a, Async, E, Conn, Hdl, Metric, SHARDS>
+> Drop for Subduction<'a, Async, E, Conn, Hdl, Metric>
 {
     fn drop(&mut self) {
         self.storage.state.close();
@@ -3540,8 +3522,7 @@ impl<
     Conn: Connection<Async, Hdl::Message> + PartialEq + 'a,
     Hdl: Handler<Async, Conn>,
     Metric: DepthMetric,
-    const SHARDS: usize,
-> ConnectionPolicy<Async> for Subduction<'a, Async, E, Conn, Hdl, Metric, SHARDS>
+> ConnectionPolicy<Async> for Subduction<'a, Async, E, Conn, Hdl, Metric>
 {
     type ConnectionDisallowed = ConnectionDisallowed<Async, E>;
 
@@ -3560,8 +3541,7 @@ impl<
     Conn: Connection<Async, Hdl::Message> + PartialEq + 'a,
     Hdl: Handler<Async, Conn>,
     Metric: DepthMetric,
-    const SHARDS: usize,
-> StoragePolicy<Async> for Subduction<'a, Async, E, Conn, Hdl, Metric, SHARDS>
+> StoragePolicy<Async> for Subduction<'a, Async, E, Conn, Hdl, Metric>
 {
     type FetchDisallowed = E::FetchDisallowed;
     type PutDisallowed = E::PutDisallowed;
@@ -3660,15 +3640,15 @@ pub type DispatchOutcomeFor<Conn, Async, Hdl> =
 ///
 /// Separate from [`NodeTasks`] so that building a powerbox asks only for
 /// the storage backend and policy, not a whole node's effects.
-pub trait StorageTasks<Store: Storage<Self>, Policy, const SHARDS: usize>:
+pub trait StorageTasks<Store: Storage<Self>, Policy, Trees: MinimizedTreeStore<Self>>:
     FutureForm + Sized
 {
     /// Construct a fully initialized powerbox for a node and its handlers.
-    /// Every mutation uses this cache and spawner from its first submission.
+    /// Every mutation uses this tree store and spawner from its first submission.
     fn storage_powerbox<Sp: Spawn<Self> + Clone + Send + Sync + 'static>(
         storage: Store,
         policy: Arc<Policy>,
-        cache: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
+        cache: Trees,
         spawner: Sp,
     ) -> StoragePowerbox<Store, Policy, Self>;
 }
@@ -3677,17 +3657,19 @@ pub trait StorageTasks<Store: Storage<Self>, Policy, const SHARDS: usize>:
     Sendable where
         Store: Storage<Sendable> + Send + Sync + 'static,
         Store::Error: Send + 'static,
+        Trees: MinimizedTreeStore<Sendable> + Send + Sync + 'static,
+        Trees::Error: Send,
+        Trees::Generation: Send + Sync,
     Local where
         Store: Storage<Local> + 'static,
-        Store::Error: 'static
+        Store::Error: 'static,
+        Trees: MinimizedTreeStore<Local> + Send + Sync + 'static
 )]
-impl<Async: FutureForm, Store, Policy, const SHARDS: usize> StorageTasks<Store, Policy, SHARDS>
-    for Async
-{
+impl<Async: FutureForm, Store, Policy, Trees> StorageTasks<Store, Policy, Trees> for Async {
     fn storage_powerbox<Sp: Spawn<Self> + Clone + Send + Sync + 'static>(
         storage: Store,
         policy: Arc<Policy>,
-        cache: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>>,
+        cache: Trees,
         spawner: Sp,
     ) -> StoragePowerbox<Store, Policy, Self> {
         StoragePowerbox::new(
@@ -3742,11 +3724,10 @@ pub trait NodeTasks<
     WireMsg: Encode + Decode + Clone + Send + Debug + 'static,
     Hdl: Handler<Self, Conn, Message = WireMsg> + RemoteHeadsNotifier,
     Metric: DepthMetric,
-    const SHARDS: usize,
 >:
     FutureForm
     + RunManager<Authenticated<Conn, Self>, WireMsg>
-    + StorageTasks<E::Storage, E::Policy, SHARDS>
+    + StorageTasks<E::Storage, E::Policy, E::MinimizedTreeStore>
     + peers::SendPushes<Conn, WireMsg>
     + upstream_fetch::AwaitFetch
     + Sized where
@@ -3756,7 +3737,7 @@ pub trait NodeTasks<
     /// Register before scheduling; streams retain the node until cancellation.
     #[allow(clippy::type_complexity)]
     fn start_stored(
-        node: Arc<Subduction<'a, Self, E, Conn, Hdl, Metric, SHARDS>>,
+        node: Arc<Subduction<'a, Self, E, Conn, Hdl, Metric>>,
         id: SedimentreeId,
         timeout: CallTimeout,
         subscribe: bool,
@@ -3769,7 +3750,7 @@ pub trait NodeTasks<
     /// Construct the listener future; construction does not submit it to an executor.
     #[allow(clippy::type_complexity)]
     fn start_listener(
-        subduction: Arc<Subduction<'a, Self, E, Conn, Hdl, Metric, SHARDS>>,
+        subduction: Arc<Subduction<'a, Self, E, Conn, Hdl, Metric>>,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>>
     where
@@ -3778,7 +3759,7 @@ pub trait NodeTasks<
     /// Construct the spawnable future for syncing a single document.
     #[allow(clippy::type_complexity)]
     fn doc_sync_task(
-        subduction: Arc<Subduction<'a, Self, E, Conn, Hdl, Metric, SHARDS>>,
+        subduction: Arc<Subduction<'a, Self, E, Conn, Hdl, Metric>>,
         peer_id: PeerId,
         id: SedimentreeId,
         subscribe: bool,
@@ -3798,7 +3779,7 @@ pub trait NodeTasks<
     /// can tear down a broken connection on error.
     #[allow(clippy::type_complexity)]
     fn dispatch_task(
-        subduction: Arc<Subduction<'static, Self, E, Conn, Hdl, Metric, SHARDS>>,
+        subduction: Arc<Subduction<'static, Self, E, Conn, Hdl, Metric>>,
         handler: Arc<Hdl>,
         conn: Authenticated<Conn, Self>,
         msg: WireMsg,
@@ -3818,7 +3799,7 @@ pub trait NodeTasks<
     /// the caller's responsibility; both hooks check it before spawning.
     #[allow(clippy::type_complexity)]
     fn forward_subscription_task(
-        subduction: Arc<Subduction<'static, Self, E, Conn, Hdl, Metric, SHARDS>>,
+        subduction: Arc<Subduction<'static, Self, E, Conn, Hdl, Metric>>,
         id: SedimentreeId,
         originator: PeerId,
         claim: Option<upstream_fetch::FetchToken>,
@@ -3844,8 +3825,8 @@ pub trait NodeTasks<
         Hdl: Handler<Local, Conn, Message = WireMsg> + RemoteHeadsNotifier + 'static,
         Hdl::HandlerError: Into<ListenError<Local, E::Storage, Conn, WireMsg>>
 )]
-impl<'a, Async: FutureForm, E: Effects<Async>, Conn, WireMsg, Hdl, Metric, const SHARDS: usize>
-    NodeTasks<'a, E, Conn, WireMsg, Hdl, Metric, SHARDS> for Async
+impl<'a, Async: FutureForm, E: Effects<Async>, Conn, WireMsg, Hdl, Metric>
+    NodeTasks<'a, E, Conn, WireMsg, Hdl, Metric> for Async
 where
     Hdl: Handler<Async, Conn, Message = WireMsg> + RemoteHeadsNotifier,
     Hdl::HandlerError: Into<ListenError<Async, E::Storage, Conn, WireMsg>>,
@@ -3853,7 +3834,7 @@ where
 {
     #[allow(clippy::too_many_lines)]
     fn start_stored(
-        node: Arc<Subduction<'a, Self, E, Conn, Hdl, Metric, SHARDS>>,
+        node: Arc<Subduction<'a, Self, E, Conn, Hdl, Metric>>,
         id: SedimentreeId,
         timeout: CallTimeout,
         subscribe: bool,
@@ -3964,7 +3945,7 @@ where
     }
 
     fn start_listener(
-        subduction: Arc<Subduction<'a, Self, E, Conn, Hdl, Metric, SHARDS>>,
+        subduction: Arc<Subduction<'a, Self, E, Conn, Hdl, Metric>>,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>>
     where
@@ -3981,7 +3962,7 @@ where
     }
 
     fn doc_sync_task(
-        subduction: Arc<Subduction<'a, Self, E, Conn, Hdl, Metric, SHARDS>>,
+        subduction: Arc<Subduction<'a, Self, E, Conn, Hdl, Metric>>,
         peer_id: PeerId,
         id: SedimentreeId,
         subscribe: bool,
@@ -4006,7 +3987,7 @@ where
     }
 
     fn dispatch_task(
-        subduction: Arc<Subduction<'static, Self, E, Conn, Hdl, Metric, SHARDS>>,
+        subduction: Arc<Subduction<'static, Self, E, Conn, Hdl, Metric>>,
         handler: Arc<Hdl>,
         conn: Authenticated<Conn, Self>,
         msg: WireMsg,
@@ -4043,7 +4024,7 @@ where
     }
 
     fn forward_subscription_task(
-        subduction: Arc<Subduction<'static, Self, E, Conn, Hdl, Metric, SHARDS>>,
+        subduction: Arc<Subduction<'static, Self, E, Conn, Hdl, Metric>>,
         id: SedimentreeId,
         originator: PeerId,
         claim: Option<upstream_fetch::FetchToken>,
@@ -4066,6 +4047,7 @@ mod tests {
             FailingSendMockConnection, InstantTimeout, TokioSpawn, test_signer,
         },
         handler::sync::SyncHandler,
+        minimized_tree_store::memory::MemoryMinimizedTreeStore,
         nonce_cache::NonceCache,
         policy::open::OpenPolicy,
         storage::memory::MemoryStorage,
@@ -4140,13 +4122,12 @@ mod tests {
     async fn failure_cleanup_handoff_survives_cancellation() -> TestResult {
         use crate::connection::test_utils::MockConnection;
         let spawner = RecordingSpawn::default();
-        let (node, _handler, _listener, _manager) =
-            builder::SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-                .signer(test_signer())
-                .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-                .spawner(spawner.clone())
-                .timer(InstantTimeout)
-                .build::<Sendable, MockConnection>();
+        let (node, _handler, _listener, _manager) = builder::SubductionBuilder::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+            .spawner(spawner.clone())
+            .timer(InstantTimeout)
+            .build::<Sendable, MockConnection>();
         let conn = MockConnection::new().authenticated();
         node.add_connection(conn.clone()).await?;
 
@@ -4218,15 +4199,18 @@ mod tests {
     ///
     /// Procedure: write commits + fragments via the public store API,
     /// snapshot the resident (minimized) tree, evict it from the in-RAM map
-    /// *only* (`BoundedShardedMap::remove` does not touch storage), rebuild
+    /// *only* (`MemoryMinimizedTreeStore::evict` does not touch storage), rebuild
     /// from storage exactly as hydration does, and assert equality.
     #[tokio::test]
     async fn tree_is_reconstructable_from_storage_alone() -> TestResult {
-        let sedimentrees: Arc<BoundedShardedMap<SedimentreeId, MinimizedSedimentree>> =
-            Arc::new(BoundedShardedMap::with_key(0, 0));
+        let sedimentrees = MemoryMinimizedTreeStore::from_map(BoundedShardedMap::with_key(0, 0));
         let connections = Arc::new(Mutex::new(Map::new()));
         let subscriptions = Arc::new(Mutex::new(Map::new()));
-        let storage = <Sendable as StorageTasks<MemoryStorage, OpenPolicy, 256>>::storage_powerbox(
+        let storage = <Sendable as StorageTasks<
+            MemoryStorage,
+            OpenPolicy,
+            MemoryMinimizedTreeStore,
+        >>::storage_powerbox(
             MemoryStorage::new(),
             Arc::new(OpenPolicy),
             sedimentrees.clone(),
@@ -4275,14 +4259,14 @@ mod tests {
         // `minimize_tree`, so the resident wrapper is clean; take its inner
         // (minimal) tree for comparison with the rehydrated minimal form.
         let resident = sedimentrees
-            .get_cloned(&id)
+            .get_cloned(id)
             .await
             .ok_or("tree should be resident after writes")?
             .into_tree();
-        let evicted = sedimentrees.remove(&id).await;
+        let evicted = sedimentrees.evict(id).await;
         assert!(evicted.is_some(), "tree should have been in the map");
         assert!(
-            sedimentrees.get_cloned(&id).await.is_none(),
+            sedimentrees.get_cloned(id).await.is_none(),
             "tree must be gone from the in-RAM map after eviction"
         );
 

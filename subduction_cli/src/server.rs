@@ -20,6 +20,7 @@ use subduction_core::{
         self,
         audience::{Audience, DiscoveryId},
     },
+    minimized_tree_store::memory::MemoryMinimizedTreeStore,
     nonce_cache::NonceCache,
     peer::{
         counter::{PeerCounter, wall_clock_seed},
@@ -549,15 +550,16 @@ where
         .send_counter(PeerCounter::with_seed(wall_clock_seed))
         .roundtrip_timeout(Duration::from_secs(args.timeout));
 
-    let builder = if let Some(max) = args.max_resident_trees {
+    let trees = if let Some(max) = args.max_resident_trees {
         tracing::info!(
             max_resident_trees = max,
-            "bounding in-memory sedimentree cache"
+            "bounding in-memory minimized tree store"
         );
-        builder.max_resident_trees(max)
+        MemoryMinimizedTreeStore::with_capacity(max)
     } else {
-        builder
+        MemoryMinimizedTreeStore::new()
     };
+    let builder = builder.minimized_tree_store(trees);
 
     let builder = if let Some(id) = discovery_id {
         builder.discovery_id(id)
@@ -620,7 +622,7 @@ where
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
-                        let resident = resident_subduction.resident_sedimentree_count().await;
+                        let resident = resident_subduction.minimized_tree_store().len().await;
                         subduction_core::metrics::set_sedimentree_cache_resident(resident);
 
                         // Heals the connections gauge if an event-driven

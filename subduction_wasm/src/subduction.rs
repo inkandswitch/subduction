@@ -50,10 +50,10 @@ use sedimentree_core::{
 };
 use sedimentree_wasm::storage::{JsStorage, JsStorageError};
 use subduction_core::{
-    collections::bounded_sharded_map::BoundedShardedMap,
     effects::config::Config,
     handler::sync::SyncHandler,
     handshake::audience::DiscoveryId,
+    minimized_tree_store::memory::MemoryMinimizedTreeStore,
     multiplexer::DEFAULT_ROUNDTRIP_TIMEOUT,
     nonce_cache::NonceCache,
     peer::{counter::PeerCounter, id::PeerId},
@@ -92,16 +92,12 @@ pub type PeerSyncResult = PeerSyncEntry<NodeConnection, Local, JsTransportError>
 /// Core broadcast result, without a JS map wrapper.
 pub type PeerSyncResults = PerPeerSync<NodeConnection, Local, JsTransportError>;
 /// The effects every Wasm node is built from.
-pub(crate) type WasmEffects = Config<JsStorage, JsPolicy, JsSigner, JsTimeout, WasmSpawn>;
-type NodeCore = Subduction<
-    'static,
-    Local,
-    WasmEffects,
-    NodeConnection,
-    WasmComposedHandler,
-    JsDepthMetric,
-    WASM_SHARD_COUNT,
->;
+pub(crate) type WasmEffects =
+    Config<JsStorage, JsPolicy, JsSigner, JsTimeout, WasmSpawn, WasmTreeStore>;
+/// Where a Wasm node keeps its minimized trees.
+pub(crate) type WasmTreeStore = MemoryMinimizedTreeStore<WASM_SHARD_COUNT>;
+type NodeCore =
+    Subduction<'static, Local, WasmEffects, NodeConnection, WasmComposedHandler, JsDepthMetric>;
 type NodeEphemeral = EphemeralHandler<Local, NodeConnection, JsEphemeralPolicy, JsClock, WasmSpawn>;
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -163,9 +159,9 @@ impl Node {
         let spawner = runtime.spawner();
         let connections = Arc::new(Mutex::new(Map::new()));
         let subscriptions = Arc::new(Mutex::new(Map::new()));
-        let sedimentrees = Arc::new(BoundedShardedMap::new().with_capacity(max_resident));
+        let sedimentrees = WasmTreeStore::with_capacity(max_resident);
         let powerbox =
-            <Local as StorageTasks<JsStorage, JsPolicy, WASM_SHARD_COUNT>>::storage_powerbox(
+            <Local as StorageTasks<JsStorage, JsPolicy, WasmTreeStore>>::storage_powerbox(
                 opts_storage,
                 Arc::new(policy),
                 sedimentrees.clone(),
