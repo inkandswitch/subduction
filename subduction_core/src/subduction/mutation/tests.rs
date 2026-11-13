@@ -5,7 +5,8 @@ mod hydration;
 
 use crate::{
     collections::bounded_sharded_map::BoundedShardedMap,
-    connection::test_utils::{TokioSpawn, test_signer},
+    connection::test_utils::{InstantTimeout, TokioSpawn, test_signer},
+    effects::config::Config,
     policy::open::OpenPolicy,
     storage::{
         fetcher::Fetcher,
@@ -28,10 +29,12 @@ use sedimentree_core::{
     loose_commit::{LooseCommit, id::CommitId},
     sedimentree::{Sedimentree, minimized::MinimizedSedimentree},
 };
-use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
+use subduction_crypto::{
+    signed::Signed, signer::memory::MemorySigner, verified_meta::VerifiedMeta,
+};
 
 // Primitive regressions admit inline; ownership tests below exercise the real
-// NodeTasks submission boundary, including cancellation and spawner rejection.
+// StorageTasks submission boundary, including cancellation and spawner rejection.
 async fn complete<Async, Store, Work, R, const SHARDS: usize>(
     cache: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
     fetcher: &Fetcher<Async, Store>,
@@ -51,24 +54,20 @@ where
 }
 
 type Cache = BoundedShardedMap<SedimentreeId, MinimizedSedimentree, 1>;
+type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, InstantTimeout, TokioSpawn>;
+
 type WatchedNode = crate::subduction::Subduction<
     'static,
     Sendable,
-    MemoryStorage,
+    Cfg,
     crate::connection::test_utils::MockConnection,
     crate::handler::sync::SyncHandler<
         Sendable,
-        MemoryStorage,
+        Cfg,
         crate::connection::test_utils::MockConnection,
-        OpenPolicy,
         CountLeadingZeroBytes,
-        crate::connection::test_utils::TokioSpawn,
         1,
     >,
-    OpenPolicy,
-    subduction_crypto::signer::memory::MemorySigner,
-    crate::connection::test_utils::InstantTimeout,
-    crate::connection::test_utils::TokioSpawn,
     CountLeadingZeroBytes,
     1,
 >;
@@ -590,30 +589,13 @@ where
     Store::Error: Send + 'static,
     Sp: crate::spawn::Spawn<Sendable> + Clone + Send + Sync + 'static,
 {
-    use crate::{
-        connection::test_utils::MockConnection, handler::sync::SyncHandler, subduction::NodeTasks,
-    };
-    use subduction_crypto::signer::memory::MemorySigner;
-    type Hdl<Store> = SyncHandler<
-        Sendable,
-        Store,
-        MockConnection,
-        OpenPolicy,
-        CountLeadingZeroBytes,
-        TokioSpawn,
-        1,
-    >;
-    <Sendable as NodeTasks<
-        'static,
-        Store,
-        MockConnection,
-        crate::connection::message::SyncMessage,
-        Hdl<Store>,
-        OpenPolicy,
-        MemorySigner,
-        CountLeadingZeroBytes,
-        1,
-    >>::storage_powerbox(backend, Arc::new(OpenPolicy), cache, spawner)
+    use crate::subduction::StorageTasks;
+    <Sendable as StorageTasks<Store, OpenPolicy, 1>>::storage_powerbox(
+        backend,
+        Arc::new(OpenPolicy),
+        cache,
+        spawner,
+    )
 }
 async fn settled(fetcher: &Fetcher<Sendable, MemoryStorage>) {
     let _attempt = fetcher.coordination().prepare_read().await;
@@ -809,33 +791,18 @@ async fn cloned_powerboxes_manage_capabilities_from_the_first_write() {
 
 #[tokio::test]
 async fn local_execution_owns_completion_without_a_network_listener() {
-    use crate::{
-        connection::test_utils::{ChannelMockConnection, TokioSpawn},
-        handler::sync::SyncHandler,
-        subduction::NodeTasks,
-    };
+    use crate::{connection::test_utils::TokioSpawn, subduction::StorageTasks};
     use future_form::Local;
-    use subduction_crypto::signer::memory::MemorySigner;
-    type Conn = ChannelMockConnection<crate::connection::message::SyncMessage>;
-    type Hdl =
-        SyncHandler<Local, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn, 1>;
     tokio::task::LocalSet::new()
         .run_until(async {
             let backend = MemoryStorage::new();
             let (started, release) = backend.gate_next_commit();
             let cache = Arc::new(Cache::new());
-            let storage = <Local as NodeTasks<
-                'static,
-                MemoryStorage,
-                Conn,
-                crate::connection::message::SyncMessage,
-                Hdl,
-                OpenPolicy,
-                MemorySigner,
-                CountLeadingZeroBytes,
-                1,
-            >>::storage_powerbox(
-                backend, Arc::new(OpenPolicy), cache.clone(), TokioSpawn
+            let storage = <Local as StorageTasks<MemoryStorage, OpenPolicy, 1>>::storage_powerbox(
+                backend,
+                Arc::new(OpenPolicy),
+                cache.clone(),
+                TokioSpawn,
             );
             let putter = storage.local_putter(ID);
             let mut waiter = Box::pin(putter.save_commit(item(1).await));

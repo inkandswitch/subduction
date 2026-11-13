@@ -26,6 +26,7 @@ use sedimentree_core::{
 };
 use subduction_core::{
     connection::test_utils::TokioSpawn,
+    effects::config::Config,
     handler::sync::SyncHandler,
     handshake::audience::{Audience, DiscoveryId},
     nonce_cache::NonceCache,
@@ -51,24 +52,15 @@ const REQUEST_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(5_000);
 const HANDSHAKE_MAX_DRIFT: Duration = Duration::from_secs(60);
 const SERVICE_NAME: &str = "test-service";
 
+type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, FuturesTimerTimeout, TokioSpawn>;
+
 type TestSubduction = Arc<
     Subduction<
         'static,
         Sendable,
-        MemoryStorage,
+        Cfg,
         MessageTransport<HttpLongPollTransport>,
-        SyncHandler<
-            Sendable,
-            MemoryStorage,
-            MessageTransport<HttpLongPollTransport>,
-            OpenPolicy,
-            CountLeadingZeroBytes,
-            TokioSpawn,
-        >,
-        OpenPolicy,
-        MemorySigner,
-        FuturesTimerTimeout,
-        TokioSpawn,
+        SyncHandler<Sendable, Cfg, MessageTransport<HttpLongPollTransport>, CountLeadingZeroBytes>,
         CountLeadingZeroBytes,
     >,
 >;

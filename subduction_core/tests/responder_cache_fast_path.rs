@@ -37,6 +37,7 @@ use sedimentree_core::{
 use subduction_core::{
     authenticated::{Authenticated, Direction},
     connection::test_utils::{ChannelTransport, InstantTimeout, TokioSpawn},
+    effects::config::Config,
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -215,22 +216,11 @@ impl Storage<Sendable> for CallCountingStorage {
     }
 }
 
-type CountingSyncHandler =
-    SyncHandler<Sendable, CallCountingStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>;
+type Cfg = Config<CallCountingStorage, OpenPolicy, MemorySigner, InstantTimeout, TokioSpawn>;
 
-type CountingSubduction = Arc<
-    Subduction<
-        'static,
-        Sendable,
-        CallCountingStorage,
-        Conn,
-        CountingSyncHandler,
-        OpenPolicy,
-        MemorySigner,
-        InstantTimeout,
-        TokioSpawn,
-    >,
->;
+type CountingSyncHandler = SyncHandler<Sendable, Cfg, Conn, CountLeadingZeroBytes>;
+
+type CountingSubduction = Arc<Subduction<'static, Sendable, Cfg, Conn, CountingSyncHandler>>;
 
 fn make_node(signer: MemorySigner, storage: CallCountingStorage) -> CountingSubduction {
     let (sd, _handler, listener, manager) = SubductionBuilder::new()

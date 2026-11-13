@@ -8,69 +8,27 @@
 use alloc::boxed::Box;
 use core::{
     future::Future,
-    marker::PhantomData,
     ops::Deref,
     pin::Pin,
     task::{Context, Poll},
 };
 
+use future_form::FutureForm;
 use futures::stream::{Abortable, Aborted};
-use sedimentree_core::depth::{CountLeadingZeroBytes, DepthMetric};
-use subduction_crypto::signer::Signer;
-
-use super::SubductionFutureForm;
-use crate::{
-    connection::Connection,
-    handler::Handler,
-    policy::{connection::ConnectionPolicy, storage::StoragePolicy},
-    spawn::Spawn,
-    storage::traits::Storage,
-    timeout::Timeout,
-};
 
 /// A future representing the listener task for Subduction.
 ///
 /// This lets the caller decide how they want to manage the listener's lifecycle,
 /// including the ability to abort it when needed.
 #[derive(Debug)]
-pub struct ListenerFuture<
-    'a,
-    Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>,
-    Store: Storage<Async>,
-    Conn: Connection<Async, Hdl::Message> + PartialEq + 'a,
-    Hdl: Handler<Async, Conn>,
-    Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
-    Sign: Signer<Async>,
-    Timer: Timeout<Async> + Clone,
-    Sp: Spawn<Async> + Clone,
-    Metric: DepthMetric = CountLeadingZeroBytes,
-    const SHARDS: usize = 256,
-> {
+pub struct ListenerFuture<'a, Async: FutureForm> {
     fut: Pin<Box<Abortable<Async::Future<'a, ()>>>>,
-    #[allow(clippy::type_complexity)]
-    _phantom: PhantomData<(Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric)>,
 }
 
-impl<
-    'a,
-    Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>,
-    Store: Storage<Async>,
-    Conn: Connection<Async, Hdl::Message> + PartialEq + 'a,
-    Hdl: Handler<Async, Conn>,
-    Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
-    Sign: Signer<Async>,
-    Timer: Timeout<Async> + Clone,
-    Sp: Spawn<Async> + Clone,
-    Metric: DepthMetric,
-    const SHARDS: usize,
-> ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
-{
+impl<'a, Async: FutureForm> ListenerFuture<'a, Async> {
     /// Create a new [`ListenerFuture`] wrapping the given abortable future.
     pub(crate) fn new(fut: Abortable<Async::Future<'a, ()>>) -> Self {
-        Self {
-            fut: Box::pin(fut),
-            _phantom: PhantomData,
-        }
+        Self { fut: Box::pin(fut) }
     }
 
     /// Check if the listener future has been aborted.
@@ -80,20 +38,7 @@ impl<
     }
 }
 
-impl<
-    'a,
-    Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>,
-    Store: Storage<Async>,
-    Conn: Connection<Async, Hdl::Message> + PartialEq + 'a,
-    Hdl: Handler<Async, Conn>,
-    Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
-    Sign: Signer<Async>,
-    Timer: Timeout<Async> + Clone,
-    Sp: Spawn<Async> + Clone,
-    Metric: DepthMetric,
-    const SHARDS: usize,
-> Deref for ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
-{
+impl<'a, Async: FutureForm> Deref for ListenerFuture<'a, Async> {
     type Target = Abortable<Async::Future<'a, ()>>;
 
     fn deref(&self) -> &Self::Target {
@@ -101,39 +46,10 @@ impl<
     }
 }
 
-impl<
-    'a,
-    Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>,
-    Store: Storage<Async>,
-    Conn: Connection<Async, Hdl::Message> + PartialEq + 'a,
-    Hdl: Handler<Async, Conn>,
-    Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
-    Sign: Signer<Async>,
-    Timer: Timeout<Async> + Clone,
-    Sp: Spawn<Async> + Clone,
-    Metric: DepthMetric,
-    const SHARDS: usize,
-> Future for ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
-{
+impl<Async: FutureForm> Future for ListenerFuture<'_, Async> {
     type Output = Result<(), Aborted>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.fut.as_mut().poll(cx)
     }
-}
-
-impl<
-    'a,
-    Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>,
-    Store: Storage<Async>,
-    Conn: Connection<Async, Hdl::Message> + PartialEq + 'a,
-    Hdl: Handler<Async, Conn>,
-    Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
-    Sign: Signer<Async>,
-    Timer: Timeout<Async> + Clone,
-    Sp: Spawn<Async> + Clone,
-    Metric: DepthMetric,
-    const SHARDS: usize,
-> Unpin for ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>
-{
 }

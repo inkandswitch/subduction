@@ -30,6 +30,7 @@ use subduction_core::{
         message::{RequestedData, SyncDiff, SyncMessage},
         test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn},
     },
+    effects::config::Config,
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -75,17 +76,15 @@ fn prop_upstream_peers_is_dialed_minus_originator() {
 
 type Conn = ChannelMockConnection<SyncMessage>;
 
+type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, InstantTimeout, TokioSpawn>;
+
 type Node = Arc<
     Subduction<
         'static,
         Sendable,
-        MemoryStorage,
+        Cfg,
         Conn,
-        SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>,
-        OpenPolicy,
-        MemorySigner,
-        InstantTimeout,
-        TokioSpawn,
+        SyncHandler<Sendable, Cfg, Conn, CountLeadingZeroBytes>,
     >,
 >;
 
