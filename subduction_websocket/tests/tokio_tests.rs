@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 use subduction_core::{
-    connection::{message::SyncMessage, Connection, Reconnect},
+    connection::{Connection, Reconnect, message::SyncMessage},
     effects::config::Config,
     handler::sync::SyncHandler,
     handshake::audience::Audience,
@@ -21,18 +21,18 @@ use subduction_core::{
     policy::open::OpenPolicy,
     remote_heads::RemoteHeads,
     storage::memory::MemoryStorage,
-    subduction::{builder::SubductionBuilder, listener_future::ListenerFuture, Subduction},
+    subduction::{Subduction, builder::SubductionBuilder, listener_future::ListenerFuture},
     timeout::call::CallTimeout,
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{
+    DEFAULT_MAX_MESSAGE_SIZE,
     tokio::{
-        client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn,
-        TrackedTokioSpawn,
+        TimeoutTokio, TokioSpawn, TrackedTokioSpawn, client::TokioWebSocketClient,
+        server::TokioWebSocketServer,
     },
     websocket::KeepAlive,
-    DEFAULT_MAX_MESSAGE_SIZE,
 };
 use testresult::TestResult;
 use tokio_util::task::TaskTracker;
