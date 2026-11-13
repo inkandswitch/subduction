@@ -88,7 +88,8 @@
 //! in its own tasks, so dropping an API waiter does not abandon store maintenance.
 //! If the executor drops an unfinished task, its guard marks the shared state
 //! closed: backend work may still be running, so readers cannot assume it has
-//! finished. Changes made directly through an unrelated storage handle are not
+//! finished. The store keeps the tree from before that write; see the design
+//! notes on a write lost mid-maintenance for when that matters. Changes made directly through an unrelated storage handle are not
 //! tracked here either.
 
 pub(crate) mod cache;
@@ -102,6 +103,7 @@ use alloc::{
     sync::{Arc, Weak},
     vec::Vec,
 };
+use async_lock::Mutex as AsyncMutex;
 use sedimentree_core::{
     collections::{Map, Set},
     id::SedimentreeId,
@@ -148,7 +150,7 @@ impl StorageState {
             id,
             owner: self.clone(),
             inner: Mutex::default(),
-            store: async_lock::Mutex::new(()),
+            store: AsyncMutex::new(()),
             changed: event_listener::Event::new(),
         });
         trees.insert(id, Arc::downgrade(&state));
@@ -199,7 +201,7 @@ struct TreeState {
     inner: Mutex<TreeInner>,
     /// Serializes this tree's store maintenance: read validation with
     /// populating, and writes with settlement. Store hits do not take it.
-    store: async_lock::Mutex<()>,
+    store: AsyncMutex<()>,
     changed: event_listener::Event,
 }
 

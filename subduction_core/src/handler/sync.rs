@@ -1308,8 +1308,8 @@ enum Source {
 ///
 /// [`Sedimentree::diff_remote_fingerprints`] returns a
 /// [`FingerprintDiff`](sedimentree_core::sedimentree::FingerprintDiff) that
-/// *borrows* from the tree, which cannot escape the sedimentree cache's
-/// shard lock (`with_entry` runs its closure under the lock). This type
+/// *borrows* from the tree, which cannot outlive the store entry checked out
+/// by `lookup` (dropped before any storage await). This type
 /// extracts everything `recv_batch_sync_request` needs as owned data: the
 /// ids to fetch from storage, the fingerprints to echo back, and the heads.
 struct ResponderDiff {

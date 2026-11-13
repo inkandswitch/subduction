@@ -33,6 +33,7 @@
 
 use alloc::vec::Vec;
 use core::{
+    fmt,
     hash::Hash,
     ops::{Deref, DerefMut},
     sync::atomic::{AtomicU64, Ordering},
@@ -480,8 +481,8 @@ impl<K: Hash + Ord, V> DerefMut for Checkout<K, V> {
     }
 }
 
-impl<K: Hash + Ord + core::fmt::Debug, V> core::fmt::Debug for Checkout<K, V> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl<K: Hash + Ord + fmt::Debug, V> fmt::Debug for Checkout<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Checkout")
             .field("key", &self.key)
             .finish_non_exhaustive()

@@ -24,7 +24,7 @@
 //!
 //! # The contract
 //!
-//! **Everything here is derived data.** Storage is the source of truth. An
+//! _Everything here is derived data._ Storage is the source of truth. An
 //! implementation may drop any entry at any time, and the node rebuilds it
 //! from storage on the next read. Never treat a store as durable, and never
 //! write to one except through this trait.
@@ -36,7 +36,7 @@
 //! | [`get`](MinimizedTreeStore::get) | Every read | Check out the resident tree, or report a miss with the tree's current [generation] |
 //! | [`populate`](MinimizedTreeStore::populate) | After a miss, once the tree is rebuilt from storage | Keep the tree, unless its generation moved since the miss |
 //! | [`merge`](MinimizedTreeStore::merge) | After a successful write | Merge the new data into a resident tree, and change the generation |
-//! | [`remove`](MinimizedTreeStore::remove) | After a failed write or a deletion | Drop the tree, and change the generation |
+//! | [`remove`](MinimizedTreeStore::remove) | After a failed write or a deletion, and to clear a bypassed tree | Drop the tree, and change the generation |
 //!
 //! [generation]: MinimizedTreeStore::Generation
 //!
@@ -53,7 +53,7 @@
 //! read storage (old)
 //!                                                                write a commit
 //!                                            (absent, g1) ◀───── merge on a miss: g0 → g1
-//! populate(old, seen: g0) ─────────────────▶ Stale (g1 ≠ g0) → re-read, retry
+//! populate(old, seen: g0) ─────────────────▶ Stale (g1 ≠ g0): not kept
 //! ```
 //!
 //! Within one process, the node's own coordination already orders these
@@ -65,8 +65,8 @@
 //!
 //! > [!WARNING]
 //! > A store that several nodes write to concurrently must enforce the
-//! > rules below itself. If it does not, it **loses updates and hides
-//! > commits** that are in storage, and nothing in the node can detect it.
+//! > rules below itself. If it does not, it _loses updates and hides
+//! > commits_ that are in storage, and nothing in the node can detect it.
 //!
 //! 1. **`populate` is a compare-and-set.** Checking `seen` against the
 //!    current generation and writing the tree must happen as one atomic
@@ -131,8 +131,9 @@ pub trait MinimizedTreeStore<Async: FutureForm>: Clone {
 
     /// A per-tree token that changes whenever the tree's stored state does.
     ///
-    /// Only compared for equality, never interpreted by the node. A store
-    /// used by one node can make this `()`.
+    /// The store compares it; the node only carries it from a miss to the
+    /// matching [`populate`](Self::populate). A store used by one node can
+    /// make this `()`.
     type Generation: Clone + 'static;
 
     /// A checked-out resident tree, owned rather than borrowed from the store.
@@ -154,7 +155,8 @@ pub trait MinimizedTreeStore<Async: FutureForm>: Clone {
     /// Keep a tree rebuilt from storage after a miss.
     ///
     /// Returns [`Populate::Stale`] if the tree's generation moved since
-    /// `seen`, so the node re-reads storage. If a tree is already resident
+    /// `seen`. The node then serves its read without keeping it; the next
+    /// read rebuilds the tree. If a tree is already resident
     /// and the generation still matches, keep the resident one and return
     /// [`Populate::Populated`].
     fn populate(
@@ -196,6 +198,6 @@ pub enum Populate {
     /// The generation still matched; the rebuilt tree is current.
     Populated,
 
-    /// The generation moved since the miss; re-read storage and retry.
+    /// The generation moved since the miss; the tree was not kept.
     Stale,
 }

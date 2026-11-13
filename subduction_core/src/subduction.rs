@@ -1115,7 +1115,7 @@ where
         tracing::debug!(tree = ?id, "getting local blobs for sedimentree");
 
         // Read blobs straight from durable storage. Storage is the source of
-        // truth, so we do not gate on in-RAM cache residency (an evicted tree
+        // truth, so we do not gate on minimized tree store residency (an evicted tree
         // must still return its blobs). `None` ⇔ storage holds nothing.
         let local_access = self.storage.local_fetcher(id);
         let mut results = Vec::new();
@@ -1571,7 +1571,7 @@ where
     ///
     /// The persistence half of [`add_built_batch`](Self::add_built_batch):
     /// it signs each payload, flushes to storage in a single `save_batch`
-    /// call, applies the in-memory updates under one shard lock, and
+    /// call, merges the updates into the minimized tree store, and
     /// minimizes once. It never contacts peers, so it returns the instant
     /// the write is durable — a wedged peer cannot stall it. Pair with
     /// [`sync_with_all_peers`](Self::sync_with_all_peers) (or let the host
@@ -2221,7 +2221,7 @@ where
         };
         tracing::debug!(count = peers.len(), "found peer(s)");
 
-        // Hydrate the tree once (from the LRU cache or storage) and share it
+        // Hydrate the tree once (from the tree store or storage) and share it
         // across all per-peer tasks, rather than re-reading it per peer. A
         // nonexistent tree syncs as empty.
         let shared_tree = self.get_or_hydrate(id).await?.unwrap_or_default();
@@ -2485,7 +2485,7 @@ where
     ) {
         tracing::info!("Requesting batch sync for all sedimentrees from all peers");
         // Enumerate from storage (complete across evictions); per-tree sync
-        // hydrates through the bounded LRU cache.
+        // hydrates through the minimized tree store.
         let tree_ids = self.sedimentree_ids().await;
 
         let mut sync_futures: FuturesUnordered<_> = tree_ids
@@ -2615,8 +2615,8 @@ where
     /// Get the current heads for every known sedimentree.
     ///
     /// Enumerates from durable storage so the result is complete even after
-    /// cold trees have been evicted from the in-RAM cache. Each tree is
-    /// hydrated on demand through the bounded LRU cache, so memory stays
+    /// cold trees have been evicted from the minimized tree store. Each tree
+    /// is hydrated on demand through the store, so a bounded store stays
     /// bounded across the sweep (an uncommon, potentially slow operation at
     /// large document counts).
     ///
@@ -2948,7 +2948,7 @@ where
         .await
     }
 
-    /// Re-minimize a sedimentree in the in-memory cache.
+    /// Re-minimize a sedimentree in the minimized tree store.
     ///
     /// Prunes dominated fragments and loose commits covered by fragments,
     /// keeping only the minimal covering. Storage retains the full history.
@@ -2956,7 +2956,7 @@ where
         ingest::minimize_tree(&self.minimized_tree_store, &self.depth_metric, id).await;
     }
 
-    /// Get a sedimentree from the in-memory LRU cache, hydrating it from
+    /// Get a sedimentree from the minimized tree store, hydrating it from
     /// durable storage on a miss. The returned tree is already minimized for
     /// wire use (fingerprint summaries / resolvers). Returns `None` if the
     /// tree does not exist. See [`ingest::get_or_hydrate`].
@@ -3365,10 +3365,10 @@ where
     ) {
         tracing::info!(peer = %peer_id, "requesting batch sync for all sedimentrees with peer");
         // Enumerate from storage (complete across evictions), mirroring
-        // `full_sync_with_all_peers`. Using the resident (LRU) set here would
+        // `full_sync_with_all_peers`. Using the resident set here would
         // silently skip cold/evicted documents, contradicting "all known".
-        // Each per-document `sync_with_peer` hydrates through the LRU cache, so
-        // the resident set stays bounded even across a full sweep.
+        // Each per-document `sync_with_peer` hydrates through the tree store,
+        // so a bounded store stays bounded even across a full sweep.
         let tree_ids = self.sedimentree_ids().await;
 
         // Shared results channel. Each spawned per-document task reports its
@@ -4235,20 +4235,19 @@ mod tests {
         (head, boundary, checkpoints, blob)
     }
 
-    /// Keystone invariant for the in-RAM sedimentree LRU cache: a tree must
-    /// be fully reconstructable from durable storage alone, with no help
-    /// from the in-RAM map.
+    /// Keystone invariant for the minimized tree store: a tree must be fully
+    /// reconstructable from durable storage alone, with no help from the
+    /// store.
     ///
-    /// Storage is the source of truth; the in-RAM
-    /// [`BoundedShardedMap`](crate::collections::bounded_sharded_map::BoundedShardedMap)
-    /// is a cache. Every write persists to storage *before* (or independent
-    /// of) the in-RAM mutation, so dropping a tree from RAM and reloading it
-    /// from storage is lossless. This test pins that invariant — if a future
-    /// change ever leaves data only in the in-RAM tree, eviction would
-    /// silently lose it and this test fails.
+    /// Storage is the source of truth; the store holds derived data. Every
+    /// write persists to storage *before* (or independent of) its store
+    /// update, so dropping a tree from the store and reloading it from
+    /// storage is lossless. This test pins that invariant — if a future
+    /// change ever leaves data only in the store, eviction would silently
+    /// lose it and this test fails.
     ///
     /// Procedure: write commits + fragments via the public store API,
-    /// snapshot the resident (minimized) tree, evict it from the in-RAM map
+    /// snapshot the resident (minimized) tree, evict it from the store
     /// *only* (`MemoryMinimizedTreeStore::evict` does not touch storage), rebuild
     /// from storage exactly as hydration does, and assert equality.
     #[tokio::test]
@@ -4305,7 +4304,7 @@ mod tests {
             .store_fragment(id, fhead, fboundary, &fcheckpoints, fblob)
             .await?;
 
-        // Snapshot the resident tree, then evict it from the in-RAM map
+        // Snapshot the resident tree, then evict it from the store
         // ONLY (this does not delete anything from storage). The writes ran
         // `minimize_tree`, so the resident wrapper is clean; take its inner
         // (minimal) tree for comparison with the rehydrated minimal form.
@@ -4318,7 +4317,7 @@ mod tests {
         assert!(evicted.is_some(), "tree should have been in the map");
         assert!(
             minimized_tree_store.get_cloned(id).await.is_none(),
-            "tree must be gone from the in-RAM map after eviction"
+            "tree must be gone from the store after eviction"
         );
 
         // Reconstruct purely from storage, exactly as hydration does.
@@ -4338,7 +4337,7 @@ mod tests {
 
         assert!(
             !loaded_commits.is_empty() || !loaded_fragments.is_empty(),
-            "storage must hold the persisted data after in-RAM eviction"
+            "storage must hold the persisted data after store eviction"
         );
 
         let rehydrated =

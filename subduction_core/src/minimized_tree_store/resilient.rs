@@ -153,7 +153,7 @@ impl Breaker {
             return true;
         }
         let n = self.skipped.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
-        n % self.probe_every == 0
+        n.is_multiple_of(self.probe_every)
     }
 
     fn succeeded(&self) {

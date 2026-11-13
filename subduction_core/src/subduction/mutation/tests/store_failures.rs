@@ -9,6 +9,8 @@ use crate::{
     minimized_tree_store::{Lookup, Populate},
     storage::state::cache::Resident,
 };
+use futures::future::BoxFuture;
+
 use core::{
     convert::Infallible,
     sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -69,10 +71,7 @@ impl MinimizedTreeStore<Sendable> for FlakyStore {
     type Generation = u64;
     type Entry = Checkout<SedimentreeId, MinimizedSedimentree>;
 
-    fn get(
-        &self,
-        id: SedimentreeId,
-    ) -> futures::future::BoxFuture<'_, Result<Lookup<Self::Entry, u64>, Injected>> {
+    fn get(&self, id: SedimentreeId) -> BoxFuture<'_, Result<Lookup<Self::Entry, u64>, Injected>> {
         Sendable::from_future(async move {
             self.switches.gets.fetch_add(1, Ordering::SeqCst);
             if self.switches.fail_get.load(Ordering::SeqCst) {
@@ -97,7 +96,7 @@ impl MinimizedTreeStore<Sendable> for FlakyStore {
         id: SedimentreeId,
         tree: MinimizedSedimentree,
         seen: u64,
-    ) -> futures::future::BoxFuture<'_, Result<Populate, Injected>> {
+    ) -> BoxFuture<'_, Result<Populate, Injected>> {
         Sendable::from_future(async move {
             self.switches.populates.fetch_add(1, Ordering::SeqCst);
             if self.switches.fail_populate.load(Ordering::SeqCst) {
@@ -113,11 +112,7 @@ impl MinimizedTreeStore<Sendable> for FlakyStore {
         })
     }
 
-    fn merge(
-        &self,
-        id: SedimentreeId,
-        update: Sedimentree,
-    ) -> futures::future::BoxFuture<'_, Result<(), Injected>> {
+    fn merge(&self, id: SedimentreeId, update: Sedimentree) -> BoxFuture<'_, Result<(), Injected>> {
         Sendable::from_future(async move {
             if self.switches.fail_merge.load(Ordering::SeqCst) {
                 return Err(Injected);
@@ -130,7 +125,7 @@ impl MinimizedTreeStore<Sendable> for FlakyStore {
         })
     }
 
-    fn remove(&self, id: SedimentreeId) -> futures::future::BoxFuture<'_, Result<(), Injected>> {
+    fn remove(&self, id: SedimentreeId) -> BoxFuture<'_, Result<(), Injected>> {
         Sendable::from_future(async move {
             self.switches.removes.fetch_add(1, Ordering::SeqCst);
             if self.switches.fail_remove.load(Ordering::SeqCst) {
@@ -198,20 +193,24 @@ async fn a_write_from_another_node_between_miss_and_populate_is_not_hidden() {
     assert_eq!(
         read.populate(old, &mut |tree| tree.loose_commits().count())
             .await,
+        Some(Some(1)),
+        "the old read is served, as a hit a moment earlier would have been"
+    );
+    assert_eq!(
+        store.resident_commits().await,
         None,
         "the generation moved, so the old read must not populate the store"
     );
-    assert_eq!(store.resident_commits().await, None);
     assert_eq!(
         commit_count(&store, &storage).await,
         Some(2),
-        "the retry reloads storage"
+        "the next read rebuilds from storage"
     );
     assert_eq!(store.resident_commits().await, Some(2));
 }
 
 #[tokio::test]
-async fn a_stale_populate_retries_until_the_generation_holds() {
+async fn a_stale_populate_serves_the_read_without_storing_it() {
     let (storage, store) = flaky_node();
     storage
         .local_putter(ID)
@@ -228,10 +227,14 @@ async fn a_stale_populate_retries_until_the_generation_holds() {
     assert_eq!(
         read.populate(Some(MinimizedSedimentree::default()), &mut |_| ())
             .await,
-        None
+        Some(Some(())),
+        "a stale populate serves the read instead of retrying"
     );
+    assert_eq!(store.count(|s| &s.populates), 1, "no retry");
+    assert_eq!(store.resident_commits().await, None, "nothing stored");
     assert_eq!(commit_count(&store, &storage).await, Some(1));
-    assert_eq!(store.count(|s| &s.populates), 2);
+    assert_eq!(store.count(|s| &s.populates), 2, "the next read populates");
+    assert_eq!(store.resident_commits().await, Some(1));
 }
 
 #[tokio::test]

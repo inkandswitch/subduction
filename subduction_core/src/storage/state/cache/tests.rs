@@ -2,8 +2,11 @@
 #![allow(clippy::expect_used, clippy::panic)]
 
 use super::*;
-use crate::{storage::state::StorageState, stored::StoredEvent};
-use alloc::sync::Arc;
+use crate::{
+    minimized_tree_store::memory::MemoryMinimizedTreeStore, storage::state::StorageState,
+    stored::StoredEvent,
+};
+use alloc::{boxed::Box, sync::Arc};
 use core::{
     cell::Cell,
     sync::atomic::{AtomicBool, Ordering},
@@ -12,7 +15,7 @@ use core::{
 use future_form::Sendable;
 use futures::{FutureExt, task::ArcWake};
 
-type Cache<const N: usize> = crate::minimized_tree_store::memory::MemoryMinimizedTreeStore<N>;
+type Cache<const N: usize> = MemoryMinimizedTreeStore<N>;
 
 const ID: SedimentreeId = SedimentreeId::new([71; 32]);
 
@@ -179,13 +182,12 @@ async fn losing_completion_before_poll_or_while_waiting_for_the_store_closes_obs
         let tree = state.tree(ID);
         let cache = Cache::<1>::new();
         let watch = state.watch(ID);
-        let mut writing =
-            alloc::boxed::Box::pin(tree.track_mutation().persist::<Sendable, _, _, _, _>(
-                &cache,
-                async { Ok::<_, ()>(()) },
-                Some(Sedimentree::default()),
-                Some(Vec::new()),
-            ));
+        let mut writing = Box::pin(tree.track_mutation().persist::<Sendable, _, _, _, _>(
+            &cache,
+            async { Ok::<_, ()>(()) },
+            Some(Sedimentree::default()),
+            Some(Vec::new()),
+        ));
         if poll {
             let _held = tree.state.store.lock().await;
             assert!(writing.as_mut().now_or_never().is_none());

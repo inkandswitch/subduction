@@ -2,13 +2,14 @@
 //!
 //! Callers cannot check a revision and populate later, or settle a mutation before
 //! its store maintenance: the raw operations are private to the parent module.
-//! Both paths here hold the tree's store lock across the store call and the
-//! brief tree-state update. Storage I/O runs before acquiring it, and mutation
-//! notifications run after releasing it. Store hits never take the lock.
+//! Every store call here except a plain lookup holds the tree's store lock,
+//! across the call and the brief tree-state update. Storage I/O runs before
+//! acquiring it, and mutation notifications run after releasing it. Store hits
+//! never take the lock.
 
 use super::{ReadAttempt, StorageState, TrackedMutation, TreeCoordination};
 use crate::{
-    minimized_tree_store::{Lookup, MinimizedTreeStore, Populate},
+    minimized_tree_store::{Lookup, MinimizedTreeStore},
     stored::StoredItem,
 };
 use alloc::vec::Vec;
@@ -116,11 +117,13 @@ pub(crate) struct CacheRead<'a, Async: FutureForm, Trees: MinimizedTreeStore<Asy
 impl<Async: FutureForm, Trees: MinimizedTreeStore<Async>> CacheRead<'_, Async, Trees> {
     /// Populate a still-current storage read, after running `inspect` on it.
     ///
-    /// The outer `None` means retry: a local mutation overlapped the read, or
-    /// the store reported a newer generation. This never adopts a tree another
-    /// operation made resident meanwhile; the caller's next lookup hits it.
-    /// `Some(None)` means a valid absent tree. `inspect` runs on the loaded
-    /// tree before it moves into the store, so it may run again on a retry.
+    /// The outer `None` means retry: a mutation on this node overlapped the
+    /// read. This never adopts a tree another operation made resident
+    /// meanwhile; the caller's next lookup hits it. If the store reports a
+    /// newer generation (another node wrote), the read is served but not
+    /// stored. `Some(None)` means a valid absent tree. `inspect` runs on the
+    /// loaded tree before it moves into the store, so it may run again on a
+    /// retry.
     pub(crate) async fn populate<Inspect, R>(
         self,
         loaded: Option<MinimizedSedimentree>,
@@ -145,14 +148,13 @@ impl<Async: FutureForm, Trees: MinimizedTreeStore<Async>> CacheRead<'_, Async, T
             return Some(None);
         };
         let result = inspect(&mut tree);
-        match self.store.populate(id, tree, seen).await {
-            Ok(Populate::Populated) => Some(Some(result)),
-            Ok(Populate::Stale) => None,
-            Err(error) => {
-                tracing::warn!(tree = ?id, %error, "minimized tree store populate failed");
-                Some(Some(result))
-            }
+        // On `Stale`, another node wrote since the miss. This read is no staler
+        // than a hit could be, so serve it; only storing it would be wrong.
+        // Retrying could rescan storage without bound under remote writes.
+        if let Err(error) = self.store.populate(id, tree, seen).await {
+            tracing::warn!(tree = ?id, %error, "minimized tree store populate failed");
         }
+        Some(Some(result))
     }
 }
 

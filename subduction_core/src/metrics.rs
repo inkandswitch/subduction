@@ -382,7 +382,7 @@ pub fn sedimentree_cache_miss() {
     metrics::counter!(names::SEDIMENTREE_CACHE_MISSES_TOTAL).increment(1);
 }
 
-/// Publish the current number of sedimentrees resident in the in-memory cache.
+/// Publish the current number of sedimentrees resident in the minimized tree store.
 #[inline]
 #[allow(clippy::cast_precision_loss)]
 pub fn set_sedimentree_cache_resident(count: usize) {
@@ -734,7 +734,7 @@ pub fn describe_all() {
     );
     metrics::describe_gauge!(
         names::SEDIMENTREE_CACHE_RESIDENT,
-        "Sedimentrees currently resident in the in-memory LRU cache."
+        "Sedimentrees currently resident in the minimized tree store."
     );
     metrics::describe_counter!(
         names::STORAGE_COMMITS_WRITTEN_TOTAL,

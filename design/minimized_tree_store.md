@@ -39,8 +39,11 @@ sequenceDiagram
     Note over S: no tree resident, but g0 → g1
     A->>S: populate(old tree, seen g0)
     S-->>A: Stale (g1 ≠ g0)
-    A->>St: re-read tree (includes c)
+    Note over A: serves its read, but the store keeps nothing
+    A->>S: next read misses, rebuilds from storage (includes c)
 ```
+
+A rejected populate is not retried. The rejected read is no staler than a hit could have been a moment earlier, and sync tolerates stale views, so the reader serves it and only declines to store it. Retrying would rescan storage without bound while other nodes keep writing.
 
 Each tree has a _generation_ that changes whenever its stored state does. A miss returns the current generation, and `populate` succeeds only if the generation still matches.
 
@@ -56,6 +59,12 @@ Each tree has a _generation_ that changes whenever its stored state does. A miss
 8. **A hit means the tree exists.** Keep empty trees exactly as populated, and never synthesize a hit.
 
 `populate` may or may not change the generation. Both are safe.
+
+## Known gap: a write lost mid-maintenance
+
+If the task running a write is dropped after storage accepts the write but before the store is updated, the store keeps the tree from before the write. The data is safe in storage, and the stale tree only ever lacks items, never adds them. Dropping an unsettled write also closes that node's storage coordination, so for a per-process store the stale tree goes away with the node.
+
+A shared store outlives the node. Sync usually heals it: a peer that holds the missing commit sees it absent from the stale tree's diff, sends it, and the newness check merges it in. If the dropped write's node was the commit's only holder, nodes sharing the store hide that commit until the entry is evicted. A background healer that re-removes such trees would close this; it is not implemented yet.
 
 ## Reclaiming markers
 

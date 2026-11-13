@@ -415,12 +415,12 @@ pub(crate) async fn get_or_hydrate<
     .await
 }
 
-/// Compute a sedimentree's heads, hydrating from storage on a cache miss.
+/// Compute a sedimentree's heads, hydrating from storage on a store miss.
 ///
-/// Like [`get_or_hydrate`] but returns only the heads, computing them inside
-/// the shard lock *without cloning the whole tree out* and without the
-/// double-minimization that `get_or_hydrate(...).heads()` incurred (one
-/// minimize in the cache, then a second inside [`Sedimentree::heads`]). On the
+/// Like [`get_or_hydrate`] but returns only the heads, computing them on the
+/// checked-out store entry *without cloning the whole tree out* and without
+/// the double-minimization that `get_or_hydrate(...).heads()` incurred (one
+/// minimize in the store, then a second inside [`Sedimentree::heads`]). On the
 /// resident-hit fast path — taken on every newly-accepted commit/fragment —
 /// this is a single dirty-gated minimize plus the head walk.
 ///

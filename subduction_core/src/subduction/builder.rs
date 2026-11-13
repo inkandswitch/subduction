@@ -525,8 +525,9 @@ impl<Sign, Sp, Store, Timer, Met, HeadsObserver, Trees>
     /// To bound memory, pass [`MemoryMinimizedTreeStore::with_capacity`]: the
     /// least-recently-used trees are evicted and rebuilt from storage on next
     /// access. To keep trees outside this process, pass your own
-    /// [`MinimizedTreeStore`](crate::minimized_tree_store::MinimizedTreeStore),
+    /// [`MinimizedTreeStore`],
     /// after reading its contract on sharing a store between nodes.
+    #[must_use]
     pub fn minimized_tree_store<NewTrees>(
         self,
         store: NewTrees,
