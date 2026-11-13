@@ -33,10 +33,13 @@
 
 use alloc::vec::Vec;
 use core::{
+    fmt,
     hash::Hash,
+    ops::{Deref, DerefMut},
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use async_lock::MutexGuardArc;
 use sedimentree_core::collections::Map;
 
 use crate::collections::sharded_map::ShardedMap;
@@ -212,6 +215,44 @@ impl<K: Hash + Ord, V, const N: usize> BoundedShardedMap<K, V, N> {
             &mut entry.0
         });
         f(entry)
+    }
+
+    /// Lock `key`'s shard and check out its resident value, recording an
+    /// access. Returns `None` if the key is absent.
+    ///
+    /// The shard stays locked until the [`Checkout`] drops, so keep it short
+    /// and never hold it across an `.await`.
+    pub async fn checkout(&self, key: &K) -> Option<Checkout<K, V>>
+    where
+        K: Clone,
+    {
+        let tick = self.next_tick();
+        let mut shard = self.inner.shared_shard_containing(key).lock_arc().await;
+        let entry = shard.get_mut(key)?;
+        if self.per_shard_capacity.is_some() {
+            entry.1 = tick;
+        }
+        Some(Checkout {
+            shard,
+            key: key.clone(),
+        })
+    }
+
+    /// Insert `value` for `key` unless it is already resident, evicting the
+    /// least-recently-used entry first if the shard is full. Returns whether
+    /// the value was inserted; a resident value is left untouched.
+    pub async fn insert_if_absent(&self, key: K, value: V) -> bool
+    where
+        K: Clone,
+    {
+        let tick = self.next_tick();
+        let mut shard = self.inner.get_shard_containing(&key).lock().await;
+        if shard.contains_key(&key) {
+            return false;
+        }
+        self.evict_if_full_locked(&mut shard, &key);
+        shard.insert(key, (value, tick));
+        true
     }
 
     /// Get-or-insert-default for `key`, then apply `f` to the value.
@@ -469,6 +510,51 @@ impl<K: Hash + Ord, V, const N: usize> BoundedShardedMap<K, V, N> {
     }
 }
 
+/// A resident value checked out of a [`BoundedShardedMap`], holding its
+/// shard lock until dropped.
+pub struct Checkout<K: Hash + Ord, V> {
+    shard: MutexGuardArc<Map<K, (V, Tick)>>,
+    key: K,
+}
+
+impl<K: Hash + Ord, V> Deref for Checkout<K, V> {
+    type Target = V;
+
+    #[allow(
+        clippy::expect_used,
+        reason = "the entry was resident when checked out, and the shard stays locked"
+    )]
+    fn deref(&self) -> &V {
+        &self
+            .shard
+            .get(&self.key)
+            .expect("checked-out entry is resident")
+            .0
+    }
+}
+
+impl<K: Hash + Ord, V> DerefMut for Checkout<K, V> {
+    #[allow(
+        clippy::expect_used,
+        reason = "the entry was resident when checked out, and the shard stays locked"
+    )]
+    fn deref_mut(&mut self) -> &mut V {
+        &mut self
+            .shard
+            .get_mut(&self.key)
+            .expect("checked-out entry is resident")
+            .0
+    }
+}
+
+impl<K: Hash + Ord + fmt::Debug, V> fmt::Debug for Checkout<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Checkout")
+            .field("key", &self.key)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<K: Hash + Ord, V, const N: usize> Default for BoundedShardedMap<K, V, N> {
     fn default() -> Self {
         Self::new()
@@ -524,6 +610,45 @@ mod tests {
         assert_eq!(map.get_cloned(&sid(1)).await, Some(11));
         assert!(map.get_cloned(&sid(2)).await.is_none(), "hit refreshed LRU");
         assert_eq!(map.get_cloned(&sid(3)).await, Some(30));
+    }
+
+    #[tokio::test]
+    async fn checkout_misses_without_inserting_and_mutates_hits_in_place() {
+        let map = single_shard_capped(2);
+        assert!(map.checkout(&sid(1)).await.is_none());
+        assert_eq!(map.len().await, 0, "a miss must not insert");
+
+        put(&map, 1, 10).await;
+        {
+            let mut entry = map.checkout(&sid(1)).await.expect("resident");
+            *entry += 1;
+        }
+        assert_eq!(map.get_cloned(&sid(1)).await, Some(11));
+    }
+
+    #[tokio::test]
+    async fn checkout_records_an_access() {
+        let map = single_shard_capped(2);
+        put(&map, 1, 10).await;
+        put(&map, 2, 20).await;
+        drop(map.checkout(&sid(1)).await);
+        put(&map, 3, 30).await;
+        assert!(
+            map.get_cloned(&sid(1)).await.is_some(),
+            "touched key survives"
+        );
+        assert!(
+            map.get_cloned(&sid(2)).await.is_none(),
+            "untouched key is evicted"
+        );
+    }
+
+    #[tokio::test]
+    async fn insert_if_absent_keeps_the_resident_value() {
+        let map = single_shard_capped(2);
+        assert!(map.insert_if_absent(sid(1), 10).await);
+        assert!(!map.insert_if_absent(sid(1), 99).await);
+        assert_eq!(map.get_cloned(&sid(1)).await, Some(10));
     }
 
     #[tokio::test]
