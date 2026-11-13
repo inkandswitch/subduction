@@ -50,7 +50,7 @@ Each tree has a _generation_ that changes whenever its stored state does. A miss
 2. **`merge` and `remove` change the generation even on a miss.** Without a resident tree, leave a _marker_: a generation with no tree. That's what the in-flight populate collides with.
 3. **A generation never repeats for a tree.** See [Reclaiming markers](#reclaiming-markers).
 4. **All four operations are serialized per tree.** A read-modify-write `merge` racing a `remove` can otherwise bring back a tree that storage no longer matches.
-5. **Store calls time out.** The node holds a per-tree lock across store maintenance, so a hung call stalls that tree's writes.
+5. **Store calls time out.** The node holds a per-tree lock across store maintenance, so a hung call stalls that tree's writes. `ResilientMinimizedTreeStore` adds this to any store: it bounds each call with the node's `Timeout` effect and opens a circuit breaker after a run of consecutive failures, so an outage costs no remote calls and degrades to reading storage directly.
 6. **Fail closed.** If maintenance after a write can't complete, invalidate the entry rather than keep it. The writing node bypasses the store for that tree, but other nodes don't know to.
 7. **Never write back an entry.** A `Hit` carries no generation, so a write back of a node's (minimized) copy can overwrite another node's merge. Minimization stays local to the reader.
 8. **A hit means the tree exists.** Keep empty trees exactly as populated, and never synthesize a hit.

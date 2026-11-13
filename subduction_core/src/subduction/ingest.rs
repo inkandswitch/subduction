@@ -83,8 +83,10 @@ pub(crate) async fn recv_batch_sync_response<
     WireMsg: Encode + Decode,
     Auth: StoragePolicy<Async>,
     Trees: MinimizedTreeStore<Async>,
+    Metric: DepthMetric,
 >(
     sedimentrees: &Trees,
+    depth_metric: &Metric,
     storage: &StoragePowerbox<Store, Auth, Async>,
     from: &PeerId,
     id: SedimentreeId,
@@ -231,7 +233,7 @@ pub(crate) async fn recv_batch_sync_response<
         // is added as we go, so `Set::insert` returns `false` for a head that
         // is in the tree *or* appeared earlier in this response.
         let (mut seen_commits, mut seen_fragments): (Set<CommitId>, Set<CommitId>) =
-            read_cached(sedimentrees, &putter.as_fetcher(), |tree| {
+            read_minimized(sedimentrees, depth_metric, &putter.as_fetcher(), |tree| {
                 (
                     commits
                         .iter()
@@ -280,8 +282,10 @@ pub(crate) async fn insert_commit_locally<
     Async: FutureForm,
     Store: Storage<Async>,
     Trees: MinimizedTreeStore<Async>,
+    Metric: DepthMetric,
 >(
     sedimentrees: &Trees,
+    depth_metric: &Metric,
     putter: &Putter<Async, Store>,
     verified_meta: VerifiedMeta<LooseCommit>,
 ) -> Result<bool, crate::storage::mutation::MutationError<Store::Error>> {
@@ -296,7 +300,7 @@ pub(crate) async fn insert_commit_locally<
     // O(1) on the resident hot path (no storage scan) and leaves the tree
     // resident so the add is a cheap hit. A `None` (tree not in storage)
     // means a brand-new tree, so the commit is necessarily new.
-    let was_added = read_cached(sedimentrees, &putter.as_fetcher(), |tree| {
+    let was_added = read_minimized(sedimentrees, depth_metric, &putter.as_fetcher(), |tree| {
         !tree.has_loose_commit(head)
     })
     .await?
@@ -314,8 +318,10 @@ pub(crate) async fn insert_fragment_locally<
     Async: FutureForm,
     Store: Storage<Async>,
     Trees: MinimizedTreeStore<Async>,
+    Metric: DepthMetric,
 >(
     sedimentrees: &Trees,
+    depth_metric: &Metric,
     putter: &Putter<Async, Store>,
     verified_meta: VerifiedMeta<Fragment>,
 ) -> Result<bool, crate::storage::mutation::MutationError<Store::Error>> {
@@ -324,7 +330,7 @@ pub(crate) async fn insert_fragment_locally<
 
     // Newness from pre-save tree state (resident or hydrated); see
     // `insert_commit_locally`.
-    let was_added = read_cached(sedimentrees, &putter.as_fetcher(), |tree| {
+    let was_added = read_minimized(sedimentrees, depth_metric, &putter.as_fetcher(), |tree| {
         !tree.has_fragment(head)
     })
     .await?
@@ -474,6 +480,7 @@ pub(crate) async fn load_tree<Async: FutureForm, Store: Storage<Async>>(
     ))))
 }
 
+#[cfg(test)]
 /// Read a tree from the store, loading it from storage if needed.
 /// Before populating the store with the loaded tree, check that no writes or
 /// deletes overlapped
@@ -492,6 +499,31 @@ where
     Inspect: FnMut(&mut MinimizedSedimentree) -> R,
 {
     read_cached_prepared(cache, fetcher, Count::Silent, |_| (), inspect).await
+}
+
+/// Read a tree for a write path's newness check, minimizing a freshly loaded
+/// tree before it populates the store, so the store never holds a dirty tree.
+async fn read_minimized<Async, Store, Trees, Metric, Inspect, R>(
+    cache: &Trees,
+    depth_metric: &Metric,
+    fetcher: &crate::storage::fetcher::Fetcher<Async, Store>,
+    inspect: Inspect,
+) -> Result<Option<R>, Store::Error>
+where
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Trees: MinimizedTreeStore<Async>,
+    Metric: DepthMetric,
+    Inspect: FnMut(&mut MinimizedSedimentree) -> R,
+{
+    read_cached_prepared(
+        cache,
+        fetcher,
+        Count::Silent,
+        |tree| tree.ensure_minimized(depth_metric),
+        inspect,
+    )
+    .await
 }
 
 /// Prepare each freshly loaded tree before populating the store with it.

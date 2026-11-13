@@ -16,6 +16,9 @@
 //!   below. Start from it when writing a networked store.
 //! - [`noop::NoopMinimizedTreeStore`] keeps nothing.
 //!
+//! [`resilient::ResilientMinimizedTreeStore`] wraps any of these, or your own,
+//! with per-call timeouts and a circuit breaker.
+//!
 //! Implement the trait to keep trees elsewhere: a shared store in front of
 //! many nodes, or a key-value service.
 //!
@@ -80,7 +83,9 @@
 //!
 //! An entry must never be written back: a `Hit` carries no generation, so
 //! a write-back can overwrite another node's merge. Store calls must time
-//! out, since the node holds a per-tree lock across store maintenance.
+//! out, since the node holds a per-tree lock across store maintenance: wrap
+//! a networked store in [`resilient::ResilientMinimizedTreeStore`], which
+//! bounds every call and stops calling a store that keeps failing.
 //!
 //! [`shared::SharedMemoryMinimizedTreeStore`] meets all of these, including
 //! safe reclamation of markers. The [design notes] cover the full rule set,
@@ -104,6 +109,7 @@
 
 pub mod memory;
 pub mod noop;
+pub mod resilient;
 pub mod shared;
 
 use core::{error::Error, ops::DerefMut};

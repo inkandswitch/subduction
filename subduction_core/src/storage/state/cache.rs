@@ -61,7 +61,11 @@ impl TreeCoordination {
         let id = self.state.id;
         let owner = &self.state.owner;
         if owner.is_bypassed(id) {
-            let _store = self.state.store.lock().await;
+            // Never queue behind another task's store maintenance: while the
+            // store is failing, a busy lock means read storage directly.
+            let Some(_store) = self.state.store.try_lock() else {
+                return Resident::Miss(None);
+            };
             if let Err(error) = store.remove(id).await {
                 tracing::warn!(tree = ?id, %error, "minimized tree store still failing; reading storage directly");
                 return Resident::Miss(None);
@@ -125,6 +129,12 @@ impl<Async: FutureForm, Trees: MinimizedTreeStore<Async>> CacheRead<'_, Async, T
     where
         Inspect: FnMut(&mut MinimizedSedimentree) -> R,
     {
+        // Nothing will be stored, so there is nothing for an overlapping
+        // write to make stale. The read still began after pending writes
+        // settled; skip the store lock and revision check.
+        let Some(seen) = self.seen else {
+            return Some(loaded.map(|mut tree| inspect(&mut tree)));
+        };
         let state = &self.attempt.coordination.state;
         let id = state.id;
         let _store = state.store.lock().await;
@@ -135,9 +145,6 @@ impl<Async: FutureForm, Trees: MinimizedTreeStore<Async>> CacheRead<'_, Async, T
             return Some(None);
         };
         let result = inspect(&mut tree);
-        let Some(seen) = self.seen else {
-            return Some(Some(result));
-        };
         match self.store.populate(id, tree, seen).await {
             Ok(Populate::Populated) => Some(Some(result)),
             Ok(Populate::Stale) => None,
