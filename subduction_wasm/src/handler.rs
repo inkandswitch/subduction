@@ -26,7 +26,7 @@ use crate::{
     policy::ephemeral::JsEphemeralPolicy,
     remote_heads::JsRemoteHeadsObserver,
     runtime::ManagedTransport,
-    subduction::{JsDepthMetric, WASM_SHARD_COUNT, WasmEffects, WasmSpawn},
+    subduction::{JsDepthMetric, WasmEffects, WasmSpawn},
     wire::WireMessage,
 };
 use sedimentree_wasm::storage::JsStorage;
@@ -141,14 +141,8 @@ impl Handler<Local, WasmConn> for WasmKeyhiveHandler {
 
 // ── WasmComposedHandler ──────────────────────────────────────────────
 
-type WasmSyncHandler = SyncHandler<
-    Local,
-    WasmEffects,
-    WasmConn,
-    JsDepthMetric,
-    { WASM_SHARD_COUNT },
-    JsRemoteHeadsObserver,
->;
+type WasmSyncHandler =
+    SyncHandler<Local, WasmEffects, WasmConn, JsDepthMetric, JsRemoteHeadsObserver>;
 
 type WasmEphemeralHandler =
     EphemeralHandler<Local, WasmConn, JsEphemeralPolicy, JsClock, WasmSpawn>;

@@ -18,7 +18,7 @@ impl<F: Fn()> DepthMetric for InspectDepth<F> {
 
 /// A cold tree with a fragment covering a loose commit. Minimization must
 /// actually consult the metric and remove the covered commit.
-async fn cold_tree() -> (StoragePowerbox<MemoryStorage, OpenPolicy>, Arc<Cache>) {
+async fn cold_tree() -> (StoragePowerbox<MemoryStorage, OpenPolicy>, Cache) {
     let (storage, cache) = managed(MemoryStorage::new(), TokioSpawn);
     // Leading zero bytes make this commit a fragment-range boundary.
     let commit = item(0).await;
@@ -41,7 +41,7 @@ async fn cold_tree() -> (StoragePowerbox<MemoryStorage, OpenPolicy>, Arc<Cache>)
         .save_batch(vec![commit], vec![fragment])
         .await
         .expect("seed cold storage");
-    assert!(cache.get_cloned(&ID).await.is_none());
+    assert!(cache.get_cloned(ID).await.is_none());
     (storage, cache)
 }
 
@@ -50,7 +50,7 @@ async fn cold_minimization_leaves_other_trees_in_the_shard_accessible() {
     let (storage, cache) = cold_tree().await;
     let other = SedimentreeId::new([84; 32]);
     cache
-        .get_or_insert_with(other, MinimizedSedimentree::default)
+        .insert_if_absent(other, MinimizedSedimentree::default())
         .await;
     let calls = Cell::new(0);
     let metric = InspectDepth(|| {
@@ -59,7 +59,7 @@ async fn cold_minimization_leaves_other_trees_in_the_shard_accessible() {
         // immediately, even while the loaded tree is being minimized.
         assert!(
             cache
-                .get_cloned(&other)
+                .get_cloned(other)
                 .now_or_never()
                 .expect("cold minimization must not hold the shard lock")
                 .is_some()
@@ -72,7 +72,7 @@ async fn cold_minimization_leaves_other_trees_in_the_shard_accessible() {
     assert!(calls.get() > 0, "fixture must exercise minimization");
     assert_eq!(tree.fragments().count(), 1);
     assert_eq!(tree.loose_commits().count(), 0);
-    assert!(!cache.get_cloned(&ID).await.expect("installed").is_dirty());
+    assert!(!cache.get_cloned(ID).await.expect("populated").is_dirty());
 
     let before = calls.get();
     let resident = ingest::get_or_hydrate(&cache, &storage, &metric, ID)
@@ -80,7 +80,7 @@ async fn cold_minimization_leaves_other_trees_in_the_shard_accessible() {
         .expect("resident read")
         .expect("exists");
     assert_eq!(resident, tree);
-    assert_eq!(calls.get(), before, "installed tree is already minimal");
+    assert_eq!(calls.get(), before, "populated tree is already minimal");
 }
 
 #[tokio::test]
@@ -92,7 +92,7 @@ async fn mutation_during_cold_minimization_forces_a_reload() {
     let metric = InspectDepth(|| {
         if first.replace(false) {
             // Deterministically interleave a partial write and invalidation
-            // between the scan and installation, while minimization runs.
+            // between the scan and populating the store, while minimization runs.
             let result = complete(
                 &cache,
                 &fetcher,
@@ -121,7 +121,7 @@ async fn mutation_during_cold_minimization_forces_a_reload() {
         1,
         "covered commit stays minimized"
     );
-    let resident = cache.get_cloned(&ID).await.expect("installed");
+    let resident = cache.get_cloned(ID).await.expect("populated");
     assert_eq!(resident.tree(), &tree);
     assert!(!resident.is_dirty());
 }
@@ -148,7 +148,7 @@ async fn cold_minimization_adopts_and_minimizes_a_newer_resident_entry() {
             .now_or_never()
             .expect("mutation must not wait on the cache lock")
             .expect("write");
-            // Another reader installs the newer full history, still dirty.
+            // Another reader populates the newer full history, still dirty.
             let newer = ingest::load_tree(&fetcher)
                 .now_or_never()
                 .expect("in-memory scan is ready")
@@ -156,9 +156,9 @@ async fn cold_minimization_adopts_and_minimizes_a_newer_resident_entry() {
                 .expect("exists");
             assert!(newer.is_dirty());
             cache
-                .get_or_insert_with(ID, || newer)
+                .insert_if_absent(ID, newer)
                 .now_or_never()
-                .expect("concurrent installation must not wait on the cache lock");
+                .expect("a concurrent populate must not wait on the store lock");
         }
     });
     let tree = ingest::get_or_hydrate(&cache, &storage, &metric, ID)
@@ -178,7 +178,7 @@ async fn cold_minimization_adopts_and_minimizes_a_newer_resident_entry() {
         1,
         "adopted entry must be minimized too"
     );
-    let resident = cache.get_cloned(&ID).await.expect("resident");
+    let resident = cache.get_cloned(ID).await.expect("resident");
     assert_eq!(resident.tree(), &tree);
     assert!(!resident.is_dirty());
 }

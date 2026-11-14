@@ -37,24 +37,24 @@
 //!     .signer(my_signer)
 //!     .storage(my_storage, Arc::new(my_policy))
 //!     .spawner(TokioSpawn)
+//!     .timer(TokioTimeout)
 //!     .discovery_id(DiscoveryId::new(b"sync.example.com"))
 //!     .nonce_cache(NonceCache::new(Duration::from_secs(300)))
-//!     .build();
+//!     .build::<Sendable, MyConnection>();
 //! ```
 //!
-//! For hydration from storage (e.g. Wasm), pre-populate the sedimentree
-//! map and pass it to the builder:
+//! Built trees are kept in a
+//! [`MinimizedTreeStore`](minimized_tree_store::MinimizedTreeStore), an
+//! unbounded in-memory one by default. Bound it, or supply your own store:
 //!
 //! ```ignore
-//! let sedimentrees = Arc::new(ShardedMap::new());
-//! // ... load from storage, populate sedimentrees ...
-//!
 //! let (subduction, handler, listener, manager) = SubductionBuilder::new()
 //!     .signer(my_signer)
 //!     .storage(my_storage, Arc::new(my_policy))
 //!     .spawner(WasmSpawn)
-//!     .sedimentrees(sedimentrees)
-//!     .build();
+//!     .timer(JsTimeout)
+//!     .minimized_tree_store(MemoryMinimizedTreeStore::with_capacity(1_024))
+//!     .build::<Local, MyConnection>();
 //! ```
 //!
 //! See the [`subduction`] module for the full **API guide** covering
@@ -115,6 +115,7 @@ pub mod connection;
 pub mod effects;
 pub mod handler;
 pub mod handshake;
+pub mod minimized_tree_store;
 pub mod multiplexer;
 pub mod nonce_cache;
 pub mod peer;

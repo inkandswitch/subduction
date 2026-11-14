@@ -58,14 +58,13 @@ async fn wait_until(mut predicate: impl FnMut() -> bool, failure: &str) {
 async fn builder_observer_receives_heads_updates() -> TestResult {
     let observer = RecordingObserver::default();
 
-    let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-            .signer(test_signer())
-            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-            .spawner(TokioSpawn)
-            .timer(InstantTimeout)
-            .heads_observer(observer.clone())
-            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
+    let (subduction, _handler, listener_fut, actor_fut) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .heads_observer(observer.clone())
+        .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     let actor_task = tokio::spawn(actor_fut);
     let listener_task = tokio::spawn(listener_fut);
@@ -105,14 +104,13 @@ async fn builder_observer_receives_heads_updates() -> TestResult {
 async fn stale_heads_updates_are_filtered() -> TestResult {
     let observer = RecordingObserver::default();
 
-    let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-            .signer(test_signer())
-            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-            .spawner(TokioSpawn)
-            .timer(InstantTimeout)
-            .heads_observer(observer.clone())
-            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
+    let (subduction, _handler, listener_fut, actor_fut) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .heads_observer(observer.clone())
+        .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     let actor_task = tokio::spawn(actor_fut);
     let listener_task = tokio::spawn(listener_fut);

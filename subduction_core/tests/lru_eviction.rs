@@ -19,6 +19,7 @@ use subduction_core::{
     connection::test_utils::{MockConnection, TokioSpawn, TokioTimeout},
     effects::config::Config,
     handler::sync::SyncHandler,
+    minimized_tree_store::memory::MemoryMinimizedTreeStore,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
@@ -40,7 +41,7 @@ fn capped_node(cap: usize) -> TestSubduction {
         .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
         .timer(TokioTimeout)
-        .max_resident_trees(cap)
+        .minimized_tree_store(MemoryMinimizedTreeStore::with_capacity(cap))
         .build::<Sendable, Conn>();
     tokio::spawn(listener);
     tokio::spawn(manager);
@@ -84,7 +85,7 @@ async fn store_one_commit(
 
 /// Total number of sedimentrees currently resident in the in-memory cache.
 async fn resident_count(sd: &TestSubduction) -> usize {
-    sd.sedimentrees().len().await
+    sd.minimized_tree_store().len().await
 }
 
 /// Number of trees to store. The builder uses the default 256 shards;
@@ -138,13 +139,13 @@ async fn reads_after_eviction_rehydrate_from_storage() -> TestResult {
     // And specifically: A is no longer resident (it was the oldest). If it
     // somehow is, evict it explicitly so the read below provably takes the
     // rehydrate path; assert at least that the cache is genuinely bounded.
-    if sd.sedimentrees().get_cloned(&a).await.is_some() {
+    if sd.minimized_tree_store().get_cloned(a).await.is_some() {
         // Extremely unlikely (A is oldest and the cache is full), but make
         // the rehydrate path deterministic regardless of hash distribution.
-        sd.sedimentrees().remove(&a).await;
+        sd.minimized_tree_store().evict(a).await;
     }
     assert!(
-        sd.sedimentrees().get_cloned(&a).await.is_none(),
+        sd.minimized_tree_store().get_cloned(a).await.is_none(),
         "A must be non-resident before the rehydrating read"
     );
 
@@ -225,9 +226,9 @@ async fn write_after_eviction_preserves_prior_history() -> TestResult {
         store_one_commit(&sd, sid(n), n.wrapping_add(1)).await?;
     }
     // Deterministically ensure A is not resident before the second write.
-    sd.sedimentrees().remove(&a).await;
+    sd.minimized_tree_store().evict(a).await;
     assert!(
-        sd.sedimentrees().get_cloned(&a).await.is_none(),
+        sd.minimized_tree_store().get_cloned(a).await.is_none(),
         "A must be evicted before the second write"
     );
 
