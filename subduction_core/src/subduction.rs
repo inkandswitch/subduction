@@ -98,8 +98,12 @@ use crate::{
     remote_heads::{RemoteHeads, RemoteHeadsNotifier},
     spawn::Spawn,
     storage::{
-        fetcher::Fetcher, mutation::MutationError, powerbox::StoragePowerbox, putter::Putter,
-        state::cache::Resident, traits::Storage,
+        fetcher::Fetcher,
+        mutation::{MutationError, Request, SpawnWorker, Submission},
+        powerbox::StoragePowerbox,
+        putter::Putter,
+        state::{StorageState, cache::Resident},
+        traits::Storage,
     },
     timeout::{Timeout, call::CallTimeout},
 };
@@ -115,7 +119,7 @@ use fragment_batch_item::FragmentBatchItem;
 use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::{
     FutureExt, StreamExt,
-    future::try_join_all,
+    future::{Either, select, try_join_all},
     stream::{AbortHandle, AbortRegistration, Abortable, FuturesUnordered},
 };
 use listener_future::ListenerFuture;
@@ -259,7 +263,7 @@ impl<
     Sign: Signer<Async>,
     Timer: Timeout<Async> + Clone + 'static,
     Sp: Spawn<Async> + Clone + Send + Sync + 'static,
-    Trees: MinimizedTreeStore<Async> + Send + Sync,
+    Trees: MinimizedTreeStore<Async>,
     Conn: Connection<Async, Hdl::Message> + PartialEq + 'a,
     Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
     Metric: DepthMetric,
@@ -3713,7 +3717,7 @@ pub trait StorageTasks<Store: Storage<Self>, Policy, Trees: MinimizedTreeStore<S
     Local where
         Store: Storage<Local> + 'static,
         Store::Error: 'static,
-        Trees: MinimizedTreeStore<Local> + Send + Sync + 'static
+        Trees: MinimizedTreeStore<Local> + 'static
 )]
 impl<Async: FutureForm, Store, Policy, Trees> StorageTasks<Store, Policy, Trees> for Async {
     fn storage_powerbox<Sp: Spawn<Self> + Clone + Send + Sync + 'static>(
@@ -3722,16 +3726,23 @@ impl<Async: FutureForm, Store, Policy, Trees> StorageTasks<Store, Policy, Trees>
         minimized_tree_store: Trees,
         spawner: Sp,
     ) -> StoragePowerbox<Store, Policy, Self> {
-        StoragePowerbox::new(
-            storage,
-            policy,
-            Arc::new(move |fetcher, operation| {
-                let (sender, receiver) = async_channel::bounded(1);
+        let (requests, inbox) = async_channel::unbounded::<Request<Self, Store>>();
+        let state = Arc::<StorageState>::default();
+        let shutdown = state.clone();
+        let task_spawner = spawner.clone();
+        // The worker owns the store, so a `Local` store need not be `Send`. It
+        // ends when the node shuts down, after starting every request already
+        // admitted, so it never keeps a runtime or a task set alive.
+        let worker = Async::from_future(async move {
+            let start = |request: Request<Async, Store>| {
+                let Request {
+                    fetcher,
+                    operation,
+                    tracked,
+                    reply,
+                } = request;
                 let minimized_tree_store = minimized_tree_store.clone();
-                // Admission covers submission too. A rejected, never-polled future
-                // must close validity even if its waiter disappears immediately.
-                let tracked = fetcher.coordination().track_mutation();
-                let _task = spawner.spawn(Async::from_future(async move {
+                let _task = task_spawner.spawn(Async::from_future(async move {
                     let update = operation.update();
                     // Avoid notification clones when nobody observes this tree.
                     // A watcher joining mid-write waits for settlement, then scans.
@@ -3752,10 +3763,29 @@ impl<Async: FutureForm, Store, Policy, Trees> StorageTasks<Store, Policy, Trees>
                         )
                         .await
                         .map_err(MutationError::Storage);
-                    drop(sender.try_send(result));
+                    drop(reply.try_send(result));
                 }));
-                receiver
-            }),
+            };
+            loop {
+                let received = core::pin::pin!(inbox.recv());
+                let closed = core::pin::pin!(shutdown.wait_closed());
+                match select(received, closed).await {
+                    Either::Left((Ok(request), _)) => start(request),
+                    Either::Left((Err(_), _)) | Either::Right(_) => break,
+                }
+            }
+            while let Ok(request) = inbox.try_recv() {
+                start(request);
+            }
+        });
+        let spawn: Arc<SpawnWorker<Self>> = Arc::new(move |worker| {
+            drop(spawner.spawn(worker));
+        });
+        StoragePowerbox::new(
+            storage,
+            policy,
+            state,
+            Submission::new(requests, worker, spawn),
         )
     }
 }
