@@ -18,6 +18,7 @@ use subduction_core::{
         message::{RemoveSubscriptions, SyncMessage},
         test_utils::{ChannelClosed, ChannelTransport, TokioSpawn, TokioTimeout},
     },
+    effects::config::Config,
     handler::Handler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -149,13 +150,9 @@ impl RemoteHeadsNotifier for RejectMessages {
 type Node = Subduction<
     'static,
     Sendable,
-    MemoryStorage,
+    Config<MemoryStorage, OpenPolicy, MemorySigner, TokioTimeout, TokioSpawn>,
     Conn,
     RejectMessages,
-    OpenPolicy,
-    MemorySigner,
-    TokioTimeout,
-    TokioSpawn,
 >;
 struct TestNode {
     core: Arc<Node>,

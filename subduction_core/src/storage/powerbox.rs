@@ -18,7 +18,7 @@ use subduction_crypto::verified_author::VerifiedAuthor;
 /// The authorization and execution boundary for storage capabilities.
 ///
 /// Every powerbox has a mutation runner from construction onward. Use the node
-/// builder, or [`NodeTasks::storage_powerbox`](crate::subduction::NodeTasks::storage_powerbox)
+/// builder, or [`StorageTasks::storage_powerbox`](crate::subduction::StorageTasks::storage_powerbox)
 /// when assembling a node and handler manually. There is no inline write mode.
 ///
 /// A backend and policy alone cannot construct a powerbox:

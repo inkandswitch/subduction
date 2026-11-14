@@ -23,6 +23,7 @@ use subduction_core::{
         message::SyncMessage,
         test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn, test_signer},
     },
+    effects::config::Config,
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -30,7 +31,7 @@ use subduction_core::{
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
 };
-use subduction_crypto::signed::Signed;
+use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
 use testresult::TestResult;
 
 /// Create a commit with matching blob metadata.
@@ -92,26 +93,17 @@ async fn make_mismatched_fragment(id: &SedimentreeId) -> (Signed<Fragment>, Blob
     (verified.into_signed(), actual_blob)
 }
 
+type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, InstantTimeout, TokioSpawn>;
+
 #[allow(clippy::type_complexity)]
 fn make_subduction() -> (
     Arc<
         Subduction<
             'static,
             Sendable,
-            MemoryStorage,
+            Cfg,
             ChannelMockConnection<SyncMessage>,
-            SyncHandler<
-                Sendable,
-                MemoryStorage,
-                ChannelMockConnection<SyncMessage>,
-                OpenPolicy,
-                CountLeadingZeroBytes,
-                TokioSpawn,
-            >,
-            OpenPolicy,
-            subduction_crypto::signer::memory::MemorySigner,
-            InstantTimeout,
-            TokioSpawn,
+            SyncHandler<Sendable, Cfg, ChannelMockConnection<SyncMessage>, CountLeadingZeroBytes>,
             CountLeadingZeroBytes,
         >,
     >,

@@ -22,6 +22,7 @@ use sedimentree_core::depth::CountLeadingZeroBytes;
 use subduction_core::{
     authenticated::Authenticated,
     connection::message::SyncMessage,
+    effects::config::Config,
     handler::{Handler, sync::SyncHandler},
     peer::id::PeerId,
     remote_heads::{RemoteHeads, RemoteHeadsNotifier},
@@ -29,12 +30,13 @@ use subduction_core::{
     subduction::error::{IoError, ListenError},
     transport::message::MessageTransport,
 };
+use subduction_crypto::signer::memory::MemorySigner;
 use subduction_ephemeral::{
     clock::std_clock::StdClock, handler::EphemeralHandler, policy::OpenEphemeralPolicy,
 };
 use subduction_keyhive::handler::{SendableKeyhiveHandler, SendableRuntimeProtocol};
 use subduction_redb_storage::RedbStorage;
-use subduction_websocket::tokio::TokioSpawn;
+use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::TokioSpawn};
 
 /// The concrete connection type used by the CLI server.
 pub(crate) type CliConn = MessageTransport<UnifiedTransport>;
@@ -56,7 +58,7 @@ pub(crate) type CliKeyhiveHandler = SendableKeyhiveHandler<
 >;
 
 /// Concrete `ListenError` for the CLI handler.
-type CliListenError = ListenError<Sendable, MetricsStorage<RedbStorage>, CliConn, CliWireMessage>;
+type CliListenError = ListenError<Sendable, CliStorage, CliConn, CliWireMessage>;
 
 /// Bundles the bounds the server's connection plumbing requires of a CLI
 /// handler, so [`CliHandler`] and [`CliHandlerOpenPolicy`] can be used
@@ -80,17 +82,16 @@ impl<H> CliWireHandler for H where
 {
 }
 
+/// The storage backend the CLI server persists to.
+pub(crate) type CliStorage = MetricsStorage<RedbStorage>;
+
+/// The effects the CLI server node is built from.
+pub(crate) type CliEffects =
+    Config<CliStorage, CliKeyhivePolicyHandle, MemorySigner, FuturesTimerTimeout, TokioSpawn>;
+
 /// The concrete sync handler type for the CLI server.
-pub(crate) type CliSyncHandler = Arc<
-    SyncHandler<
-        Sendable,
-        MetricsStorage<RedbStorage>,
-        CliConn,
-        CliKeyhivePolicyHandle,
-        CountLeadingZeroBytes,
-        TokioSpawn,
-    >,
->;
+pub(crate) type CliSyncHandler =
+    Arc<SyncHandler<Sendable, CliEffects, CliConn, CountLeadingZeroBytes>>;
 
 /// Server handler with keyhive disabled: keyhive (SUK) wire messages are
 /// dropped and disconnects are not forwarded to keyhive. Used by `--auth open`
@@ -261,7 +262,7 @@ impl Handler<Sendable, CliConn> for CliHandlerOpenPolicy {
 fn convert_sync_listen_error(
     err: ListenError<
         Sendable,
-        MetricsStorage<RedbStorage>,
+        CliStorage,
         CliConn,
         subduction_core::connection::message::SyncMessage,
     >,

@@ -21,6 +21,7 @@ use subduction_core::{
         managed::CallError,
         test_utils::{PausableChannelTransport, TokioSpawn, TokioTimeout},
     },
+    effects::config::Config,
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -34,22 +35,11 @@ use testresult::TestResult;
 
 type Conn = MessageTransport<PausableChannelTransport>;
 
-type TestSyncHandler =
-    SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>;
+type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, TokioTimeout, TokioSpawn>;
 
-type TestSubduction = Arc<
-    Subduction<
-        'static,
-        Sendable,
-        MemoryStorage,
-        Conn,
-        TestSyncHandler,
-        OpenPolicy,
-        MemorySigner,
-        TokioTimeout,
-        TokioSpawn,
-    >,
->;
+type TestSyncHandler = SyncHandler<Sendable, Cfg, Conn, CountLeadingZeroBytes>;
+
+type TestSubduction = Arc<Subduction<'static, Sendable, Cfg, Conn, TestSyncHandler>>;
 
 /// The configured default deadline under test. Short so the test is fast, but
 /// far larger than the per-poll slack so the timing assertion is robust.

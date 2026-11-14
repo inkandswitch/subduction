@@ -69,6 +69,7 @@ use sedimentree_core::{
 use subduction_core::{
     authenticated::{Authenticated, Direction},
     connection::test_utils::{ChannelTransport, InstantTimeout, TokioSpawn},
+    effects::config::Config,
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -82,22 +83,11 @@ use tokio::runtime::Builder as RuntimeBuilder;
 
 type Conn = MessageTransport<ChannelTransport>;
 
-type TestSyncHandler =
-    SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>;
+type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, InstantTimeout, TokioSpawn>;
 
-type Node = Arc<
-    Subduction<
-        'static,
-        Sendable,
-        MemoryStorage,
-        Conn,
-        TestSyncHandler,
-        OpenPolicy,
-        MemorySigner,
-        InstantTimeout,
-        TokioSpawn,
-    >,
->;
+type TestSyncHandler = SyncHandler<Sendable, Cfg, Conn, CountLeadingZeroBytes>;
+
+type Node = Arc<Subduction<'static, Sendable, Cfg, Conn, TestSyncHandler>>;
 
 /// Worker-thread counts to sweep. The crux question: does adding cores move the
 /// wall-clock — and does the spawning driver convert cores into speedup the

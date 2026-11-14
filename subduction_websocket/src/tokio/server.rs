@@ -1,6 +1,6 @@
 //! # Subduction WebSocket server for Tokio
 
-use subduction_core::timeout::Timeout;
+use subduction_core::{effects::config::Config, timeout::Timeout};
 
 use crate::{
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
@@ -59,6 +59,7 @@ pub struct TokioWebSocketServer<
     S::Error: 'static + Send + Sync,
     P::PutDisallowed: Send + 'static,
     P::FetchDisallowed: Send + 'static,
+    P::ConnectionDisallowed: Send + 'static,
 {
     subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
     address: SocketAddr,
@@ -94,6 +95,7 @@ where
     P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
     P::PutDisallowed: Send + 'static,
     P::FetchDisallowed: Send + 'static,
+    P::ConnectionDisallowed: Send + 'static,
     Sig: 'static + Send + Sync + Signer<Sendable>,
     M: 'static + Send + Sync + DepthMetric,
     O: 'static + Send + Sync + Timeout<Sendable> + core::fmt::Debug,
@@ -123,6 +125,7 @@ where
     S::Error: 'static + Send + Sync,
     P::PutDisallowed: Send + 'static,
     P::FetchDisallowed: Send + 'static,
+    P::ConnectionDisallowed: Send + 'static,
 {
     /// Create a new [`TokioWebSocketServer`] to manage connections to a [`Subduction`].
     ///
@@ -878,17 +881,15 @@ where
     }
 }
 
+type Cfg<S, P, Sig, O> = Config<S, P, Sig, O, TrackedTokioSpawn>;
+
 type TokioWebSocketSubduction<S, P, Sig, O, M> = Arc<
     Subduction<
         'static,
         Sendable,
-        S,
+        Cfg<S, P, Sig, O>,
         MessageTransport<UnifiedWebSocket>,
-        SyncHandler<Sendable, S, MessageTransport<UnifiedWebSocket>, P, M, TrackedTokioSpawn>,
-        P,
-        Sig,
-        O,
-        TrackedTokioSpawn,
+        SyncHandler<Sendable, Cfg<S, P, Sig, O>, MessageTransport<UnifiedWebSocket>, M>,
         M,
     >,
 >;

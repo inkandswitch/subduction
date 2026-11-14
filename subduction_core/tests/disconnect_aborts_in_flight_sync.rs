@@ -30,6 +30,7 @@ use subduction_core::{
         managed::CallError,
         test_utils::{PausableChannelTransport, TokioSpawn, TokioTimeout},
     },
+    effects::config::Config,
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -44,22 +45,11 @@ use testresult::TestResult;
 
 type Conn = MessageTransport<PausableChannelTransport>;
 
-type TestSyncHandler =
-    SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>;
+type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, TokioTimeout, TokioSpawn>;
 
-type TestSubduction = Arc<
-    Subduction<
-        'static,
-        Sendable,
-        MemoryStorage,
-        Conn,
-        TestSyncHandler,
-        OpenPolicy,
-        MemorySigner,
-        TokioTimeout,
-        TokioSpawn,
-    >,
->;
+type TestSyncHandler = SyncHandler<Sendable, Cfg, Conn, CountLeadingZeroBytes>;
+
+type TestSubduction = Arc<Subduction<'static, Sendable, Cfg, Conn, TestSyncHandler>>;
 
 fn make_signer(seed: u8) -> MemorySigner {
     MemorySigner::from_bytes(&[seed; 32])
@@ -722,24 +712,15 @@ impl Spawn<Sendable> for CountingSpawn {
 
 type CountingConn = MessageTransport<PausableChannelTransport>;
 
+type CountingCfg = Config<MemoryStorage, OpenPolicy, MemorySigner, TokioTimeout, CountingSpawn>;
+
 type CountingSubduction = Arc<
     Subduction<
         'static,
         Sendable,
-        MemoryStorage,
+        CountingCfg,
         CountingConn,
-        SyncHandler<
-            Sendable,
-            MemoryStorage,
-            CountingConn,
-            OpenPolicy,
-            CountLeadingZeroBytes,
-            CountingSpawn,
-        >,
-        OpenPolicy,
-        MemorySigner,
-        TokioTimeout,
-        CountingSpawn,
+        SyncHandler<Sendable, CountingCfg, CountingConn, CountLeadingZeroBytes>,
     >,
 >;
 
