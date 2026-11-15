@@ -21,6 +21,34 @@ const LENGTH_PREFIX_SIZE: usize = 4;
 /// WebSocket and HTTP long-poll transports.
 const MAX_FRAME_SIZE: usize = 50 * 1024 * 1024;
 
+/// Bytes read at a time while receiving a frame.
+///
+/// A frame's buffer grows only as its bytes arrive, so memory follows what a
+/// peer actually sends, not the length it declares.
+const READ_CHUNK: usize = 64 * 1024;
+
+/// Extend `buf` toward `len` bytes and return the unfilled tail to read into
+/// next, or `None` once `buf` holds all `len` bytes.
+///
+/// Each tail is at most [`READ_CHUNK`] long. Capacity grows geometrically, so
+/// a frame takes about log₂ reallocations, but it stays below twice what has
+/// arrived plus one chunk, and ends at exactly `len`.
+fn next_chunk(buf: &mut Vec<u8>, len: usize) -> Option<&mut [u8]> {
+    let filled = buf.len();
+    if filled >= len {
+        return None;
+    }
+
+    let end = filled + READ_CHUNK.min(len - filled);
+    if end > buf.capacity() {
+        let target = buf.capacity().saturating_mul(2).max(end).min(len);
+        buf.reserve_exact(target - filled);
+    }
+
+    buf.resize(end, 0);
+    Some(buf.split_at_mut(filled).1)
+}
+
 /// Read a length-prefixed message from a QUIC recv stream.
 ///
 /// Returns [`StreamError::FrameTooLarge`] if the peer sends a length
@@ -38,8 +66,13 @@ pub(crate) async fn read_framed(recv: &mut RecvStream) -> Result<Vec<u8>, Stream
         });
     }
 
-    let mut buf = vec![0u8; len];
-    recv.read_exact(&mut buf).await?;
+    // A peer can declare a large frame and then send nothing, so grow the
+    // buffer as bytes arrive rather than allocating `len` up front.
+    let mut buf = Vec::new();
+    while let Some(chunk) = next_chunk(&mut buf, len) {
+        recv.read_exact(chunk).await?;
+    }
+
     Ok(buf)
 }
 
@@ -230,7 +263,51 @@ pub async fn sender_task(
 mod tests {
     use iroh::endpoint::{ReadError, ReadExactError};
 
-    use super::{StreamError, StreamReadErrorKind};
+    use super::{READ_CHUNK, StreamError, StreamReadErrorKind, next_chunk};
+
+    /// Filling every tail [`next_chunk`] hands out reassembles the frame in
+    /// order, with each tail at most one chunk, capacity below twice what has
+    /// arrived plus one chunk, and a final capacity of exactly the frame
+    /// length, for lengths from zero to past ten chunks.
+    #[test]
+    #[allow(clippy::expect_used, reason = "test-only conversions")]
+    fn next_chunk_reassembles_any_length_within_its_memory_bound() {
+        bolero::check!().with_type::<(u8, u16, bool)>().for_each(
+            |&(chunks, offset, near_boundary)| {
+                // Half the cases sit within 2 bytes of a chunk boundary, the rest
+                // anywhere inside a chunk; up to ten whole chunks either way.
+                let whole = usize::from(chunks % 11) * READ_CHUNK;
+                let len = if near_boundary {
+                    (whole + usize::from(offset % 5)).saturating_sub(2)
+                } else {
+                    whole + usize::from(offset)
+                };
+                let byte = |i: usize| u8::try_from(i % 251).expect("below 251");
+
+                let mut buf = Vec::new();
+                loop {
+                    let filled = buf.len();
+                    let Some(tail) = next_chunk(&mut buf, len) else {
+                        break;
+                    };
+                    assert!(
+                        (1..=READ_CHUNK).contains(&tail.len()),
+                        "tail of {} at {filled}",
+                        tail.len()
+                    );
+                    for (offset, slot) in tail.iter_mut().enumerate() {
+                        *slot = byte(filled + offset);
+                    }
+                    assert!(buf.capacity() <= len);
+                    assert!(buf.capacity() < 2 * (filled + READ_CHUNK));
+                }
+
+                assert_eq!(buf.len(), len);
+                assert_eq!(buf.capacity(), len);
+                assert!(buf.iter().enumerate().all(|(i, &b)| b == byte(i)));
+            },
+        );
+    }
 
     /// An over-cap frame classifies as `OverCapacity` and closes with the
     /// 1009 (Message Too Big) application code.
