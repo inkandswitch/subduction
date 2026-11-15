@@ -9,14 +9,16 @@ use alloc::vec::Vec;
 use future_form::Sendable;
 use futures::FutureExt;
 use iroh::endpoint::{RecvStream, SendStream};
-use subduction_core::handshake::Handshake;
+use subduction_core::handshake::{self, Handshake};
 
 use crate::error::StreamError;
 
 /// A handshake adapter over a QUIC bi-directional stream.
 ///
 /// Implements [`Handshake<Sendable>`] using the same length-prefixed framing
-/// as the main connection. After the handshake completes, call
+/// as the main connection. The peer is not authenticated yet, so inbound
+/// handshake frames are capped at [`handshake::MAX_MESSAGE_SIZE`], not at the
+/// connection's frame limit. After the handshake completes, call
 /// [`into_parts`](Self::into_parts) to recover the stream halves for use
 /// by the listener and sender tasks.
 pub struct IrohHandshake {
@@ -57,7 +59,7 @@ impl Handshake<Sendable> for IrohHandshake {
     fn recv(
         &mut self,
     ) -> <Sendable as future_form::FutureForm>::Future<'_, Result<Vec<u8>, Self::Error>> {
-        async move { crate::tasks::read_framed(&mut self.recv, crate::DEFAULT_MAX_FRAME_SIZE).await }
+        async move { crate::tasks::read_framed(&mut self.recv, handshake::MAX_MESSAGE_SIZE).await }
             .boxed()
     }
 }

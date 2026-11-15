@@ -81,9 +81,10 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
         }
     }
 
-    /// Set the maximum request body size.
+    /// Set the maximum request body size for `POST /lp/send`.
     ///
-    /// A larger body is answered with `413 Payload Too Large`.
+    /// A larger body is answered with `413 Payload Too Large`. Handshake
+    /// bodies are always capped at [`handshake::MAX_MESSAGE_SIZE`].
     #[must_use]
     pub const fn with_max_body_size(mut self, size: usize) -> Self {
         self.max_body_size = size;
@@ -153,11 +154,13 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
     ///
     /// The client sends `Signed<Challenge>` bytes in the request body.
     /// The server responds with `Signed<Response>` bytes and a session ID header.
+    /// The client is not authenticated yet, so its body is capped at
+    /// [`handshake::MAX_MESSAGE_SIZE`], not at the configured body limit.
     async fn handle_handshake(
         &self,
         req: Request<Incoming>,
     ) -> Result<Response<Full<Bytes>>, ServerError> {
-        let body = read_body(req, self.max_body_size).await?;
+        let body = read_body(req, handshake::MAX_MESSAGE_SIZE).await?;
 
         let response_slot: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
 

@@ -93,6 +93,15 @@ use response::{Response, ResponseValidationError};
 #[allow(unknown_lints, clippy::duration_suboptimal_units)]
 pub const MAX_PLAUSIBLE_DRIFT: Duration = Duration::from_secs(10 * 60);
 
+/// The largest handshake message a transport needs to accept.
+///
+/// Handshake messages arrive before the peer is authenticated, so a
+/// transport should read them under this limit rather than its general
+/// message limit, which an operator may raise to hundreds of MiB. Current
+/// messages are under 200 bytes (see [`HandshakeMessage`]); the rest is
+/// headroom for later protocol versions.
+pub const MAX_MESSAGE_SIZE: usize = 64 * 1024;
+
 /// Maximum clock drift tolerated during simultaneous open handshakes.
 #[allow(unknown_lints, clippy::duration_suboptimal_units)]
 const SIMULTANEOUS_OPEN_MAX_DRIFT: Duration = Duration::from_secs(10 * 60);

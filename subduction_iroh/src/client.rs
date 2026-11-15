@@ -54,7 +54,8 @@ impl core::fmt::Debug for ConnectResult {
 ///
 /// An inbound frame longer than `max_frame_size` closes the connection with
 /// code 1009; [`DEFAULT_MAX_FRAME_SIZE`](crate::DEFAULT_MAX_FRAME_SIZE) is the
-/// usual choice.
+/// usual choice. Handshake frames are always capped at
+/// [`handshake::MAX_MESSAGE_SIZE`].
 ///
 /// Returns a [`ConnectResult`] containing the authenticated connection and
 /// background tasks that must be spawned.

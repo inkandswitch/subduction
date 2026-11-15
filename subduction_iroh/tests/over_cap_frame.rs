@@ -5,7 +5,8 @@
 //! `recv_bytes` is notified immediately, and the QUIC connection is closed with
 //! application error code 1009 (Message Too Big), the QUIC analog of a
 //! WebSocket Close(Size) frame. A frame within the limit is delivered whole,
-//! including when the limit is above the default.
+//! including when the limit is above the default. Handshake frames, which
+//! arrive before the peer is authenticated, have a small fixed limit.
 
 #![allow(
     clippy::expect_used,
@@ -19,10 +20,15 @@ use std::time::Duration;
 
 use future_form::Sendable;
 use iroh::endpoint::{Connection, Endpoint, presets};
-use subduction_core::{peer::id::PeerId, transport::Transport};
+use subduction_core::{
+    handshake::{self, Handshake},
+    peer::id::PeerId,
+    transport::Transport,
+};
 use subduction_iroh::{
     DEFAULT_MAX_FRAME_SIZE,
-    error::{RecvError, RunError},
+    error::{RecvError, RunError, StreamError},
+    handshake::IrohHandshake,
     tasks::listener_task,
     transport::IrohTransport,
 };
@@ -202,5 +208,37 @@ async fn a_limit_above_the_default_is_honoured() -> TestResult {
     );
     assert!(outcome.received.is_err(), "no message was completed");
     assert_eq!(close_code(&outcome.client).await, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_handshake_frame_over_the_handshake_limit_is_rejected() -> TestResult {
+    let (server_ep, client_ep) = endpoints().await;
+    let server_addr = server_ep.addr();
+
+    let server_join = tokio::spawn(async move {
+        let conn = server_ep
+            .accept()
+            .await
+            .expect("incoming")
+            .await
+            .expect("accept connection");
+        let (send, recv) = conn.accept_bi().await.expect("accept bi-stream");
+        let result = IrohHandshake::new(send, recv).recv().await;
+        (server_ep, conn, result)
+    });
+
+    let client = client_ep.connect(server_addr, TEST_ALPN).await?;
+    let (mut send, _recv) = client.open_bi().await?;
+    send.write_all(&u32::try_from(handshake::MAX_MESSAGE_SIZE + 1)?.to_be_bytes())
+        .await?;
+    send.write_all(&[0; 16]).await?;
+
+    let (_server_ep, _conn, result) =
+        tokio::time::timeout(Duration::from_secs(10), server_join).await??;
+    let Err(StreamError::FrameTooLarge { max, .. }) = result else {
+        panic!("expected FrameTooLarge, got {result:?}");
+    };
+    assert_eq!(max, handshake::MAX_MESSAGE_SIZE);
     Ok(())
 }

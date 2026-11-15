@@ -27,7 +27,10 @@ use sedimentree_core::{
 use subduction_core::{
     connection::test_utils::TokioSpawn,
     handler::sync::SyncHandler,
-    handshake::audience::{Audience, DiscoveryId},
+    handshake::{
+        self,
+        audience::{Audience, DiscoveryId},
+    },
     nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -874,6 +877,25 @@ async fn connect_wrong_discovery_service_rejected() -> TestResult {
     Ok(())
 }
 
+/// A handshake body arrives before the client is authenticated, so it is
+/// capped at `handshake::MAX_MESSAGE_SIZE`, far below the configured body
+/// limit, and an oversized one is refused with 413 rather than 500.
+#[tokio::test]
+async fn oversized_handshake_body_is_refused_with_413() -> TestResult {
+    init_tracing();
+
+    let server = TestServer::start(100).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("http://{}/lp/handshake", server.address))
+        .body(vec![0u8; handshake::MAX_MESSAGE_SIZE + 1])
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::PAYLOAD_TOO_LARGE);
+    Ok(())
+}
+
 /// `with_max_body_size` caps what an authenticated client may send: a body at
 /// the limit is accepted, and one byte more is refused with 413.
 #[tokio::test]
@@ -945,13 +967,11 @@ fn chunked(data: &[u8]) -> Vec<u8> {
 /// request (400), not "too large".
 #[tokio::test]
 async fn streamed_bodies_are_refused_by_the_right_status() -> TestResult {
-    const LIMIT: usize = 64 * 1024;
-
     init_tracing();
 
-    let server = TestServer::start_with_body_limit(103, LIMIT).await;
+    let server = TestServer::start(103).await;
 
-    let oversized = chunked(&vec![0u8; LIMIT + 1]);
+    let oversized = chunked(&vec![0u8; handshake::MAX_MESSAGE_SIZE + 1]);
     assert_eq!(
         post_chunked(server.address, "/lp/handshake", &oversized).await?,
         413

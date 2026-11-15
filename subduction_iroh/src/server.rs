@@ -53,7 +53,9 @@ impl core::fmt::Debug for AcceptResult {
 /// Waits for an incoming QUIC connection, completes the TLS handshake,
 /// accepts a bi-directional stream, and runs the Subduction handshake
 /// to authenticate the remote peer. An inbound frame longer than
-/// `max_frame_size` closes the connection with code 1009.
+/// `max_frame_size` closes the connection with code 1009. Handshake frames
+/// arrive before the peer is authenticated, so they are always capped at
+/// [`handshake::MAX_MESSAGE_SIZE`].
 ///
 /// # Errors
 ///
