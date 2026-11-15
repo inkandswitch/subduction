@@ -23,6 +23,7 @@ use tungstenite::{
 };
 
 use crate::{
+    counted::InboundProgress,
     error::{DisconnectionError, RecvError, RunError, SendError},
     sleep::Sleeper,
 };
@@ -41,6 +42,11 @@ const OUTBOUND_CHANNEL_CAPACITY: usize = 1024;
 /// ceiling, a peer whose transport drains our frames but whose protocol
 /// endpoint never answers pings — a frame-swallowing middlebox, or a
 /// proxy in front of a dead backend — would evade the reaper indefinitely.
+///
+/// Inbound bytes reset this count, as a pong does: a peer still sending to
+/// us is alive, and its pong is only queued behind the frame it is sending.
+/// A browser sends each message as one frame, so a large upload can hold
+/// the pong back for longer than this ceiling.
 ///
 /// Only delivered pings count: an undelivered ping reflects our own
 /// congestion, not the peer, so it accrues no evidence against them.
@@ -97,7 +103,9 @@ impl Outbound {
 /// A peer that misses [`missed_pong_threshold`] consecutive pongs is
 /// declared dead; total detection latency is
 /// `missed_pong_threshold × (ping_interval + pong_timeout)` for a peer
-/// making no write progress. A peer whose connection keeps completing
+/// making no progress. A peer that is still sending us bytes is alive,
+/// however late its pong: the pong is queued behind those bytes, so
+/// neither count advances against it. A peer whose connection keeps completing
 /// data writes (saturated but draining) is forgiven fast-path misses, but
 /// delivered pings that go unanswered accumulate toward
 /// [`MAX_UNANSWERED_PINGS`], so worst-case detection for a
@@ -232,7 +240,8 @@ pub enum KeepAliveOutcome {
     /// a connection making write progress: a peer whose transport drains
     /// our frames but whose remote endpoint never pongs (frame-swallowing
     /// middlebox, WS proxy in front of a dead backend) — a different
-    /// operational signal than a silent socket.
+    /// operational signal than a silent socket. It never fires while bytes
+    /// are arriving from the peer.
     #[error("keepalive task exited: {unanswered} consecutive pings unanswered")]
     StaleNoPong {
         /// Consecutive delivered-but-unanswered pings at the moment of close.
@@ -337,18 +346,31 @@ struct KeepAliveSignals {
     /// and cleared by the keepalive task at window end, where it counts as
     /// a delivered ping.
     ping_injected: Arc<AtomicBool>,
+
+    /// Advanced by the [`Counted`](crate::counted::Counted) stream under
+    /// tungstenite on each read that returns data, including reads of a frame
+    /// that is not complete yet. The keepalive treats any advance as proof
+    /// the peer is alive: its pong is queued behind the bytes still arriving.
+    inbound: InboundProgress,
 }
 
 impl KeepAliveSignals {
+    /// Signals with an inbound counter that nothing feeds.
     fn new() -> Self {
+        Self::watching(InboundProgress::new())
+    }
+
+    /// Signals whose inbound evidence comes from `inbound`.
+    fn watching(inbound: InboundProgress) -> Self {
         Self {
             // Initial values are irrelevant: the keepalive loop clears the
             // pong and injected flags at each window boundary, and the
-            // progress counter is only compared against its own snapshots.
+            // progress counters are only compared against their own snapshots.
             pong_received: Arc::new(AtomicBool::new(false)),
             data_write_progress: Arc::new(AtomicU64::new(0)),
             ping_requested: Arc::new(AtomicBool::new(false)),
             ping_injected: Arc::new(AtomicBool::new(false)),
+            inbound,
         }
     }
 }
@@ -434,13 +456,14 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
         impl Future<Output = Result<(), RunError>> + use<T, Async>,
     ) {
         tracing::info!(peer = %peer_id, keepalive = false, "new WebSocket connection");
-        Self::new_inner(ws, peer_id)
+        Self::new_inner(ws, peer_id, KeepAliveSignals::new())
     }
 
     /// Shared body of [`Self::new`] and [`Self::new_with_keepalive`].
     fn new_inner(
         ws: WebSocketStream<T>,
         peer_id: PeerId,
+        signals: KeepAliveSignals,
     ) -> (
         Self,
         impl Future<Output = Result<(), RunError>> + use<T, Async>,
@@ -450,7 +473,6 @@ impl<T: AsyncRead + AsyncWrite + Unpin, Async: FutureForm> WebSocket<T, Async> {
         let (outbound_tx, outbound_rx) =
             async_channel::bounded::<Outbound>(OUTBOUND_CHANNEL_CAPACITY);
         let chan_id = rand::random::<u64>();
-        let signals = KeepAliveSignals::new();
 
         let ws_sender = Arc::new(Mutex::new(Some(ws_writer)));
         // This channel doesn't carry any messages and is purely used to signal cancellation to the
@@ -730,6 +752,11 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T, Sendable> {
     /// [`KeepAliveOutcome::StaleNoPong`]; the rest of the stack observes
     /// the disconnect through the normal channel-closed paths.
     ///
+    /// `inbound` comes from the [`Counted`](crate::counted::Counted) stream
+    /// that `ws` was built on, wrapped before the WebSocket upgrade. It lets
+    /// the keepalive see a frame that is still arriving: without it, a peer
+    /// uploading one large message looks dead until the message completes.
+    ///
     /// # Pong asymmetry
     ///
     /// Outbound *ping* delivery is guaranteed under drainage, but our
@@ -751,6 +778,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T, Sendable> {
     /// block when needed.
     pub fn new_with_keepalive<S: Sleeper<Sendable> + Send>(
         ws: WebSocketStream<T>,
+        inbound: InboundProgress,
         peer_id: PeerId,
         keepalive: KeepAlive,
         sleeper: S,
@@ -760,7 +788,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T, Sendable> {
         KeepAliveTask<Sendable>,
     ) {
         tracing::info!(peer = %peer_id, keepalive = true, "new WebSocket connection");
-        let (this, sender_task) = Self::new_inner(ws, peer_id);
+        let (this, sender_task) = Self::new_inner(ws, peer_id, KeepAliveSignals::watching(inbound));
 
         let body = keepalive_loop::<S, Sendable>(
             keepalive,
@@ -873,13 +901,14 @@ impl ReadErrorKind {
 /// queue the sender task injects it between frames — see
 /// [`KeepAliveSignals::ping_requested`]) → window elapses → evaluate.
 ///
-/// A cycle counts as alive if either a Pong arrived (end-to-end liveness)
-/// or the sender completed at least one *data* write during the cycle
-/// (`data_write_progress` advanced). The progress gate stops a saturated
-/// but draining connection from being reaped just because its outbound
-/// queue happened to be full at the ping instant; a wedged socket makes
-/// no write progress, so it still accumulates misses and is reaped at the
-/// threshold.
+/// A cycle counts as alive if a Pong arrived (end-to-end liveness), if
+/// inbound bytes arrived (the peer is writing; its pong is queued behind
+/// them), or if the sender completed at least one *data* write during the
+/// cycle (`data_write_progress` advanced). The write-progress gate stops a
+/// saturated but draining connection from being reaped just because its
+/// outbound queue happened to be full at the ping instant; a wedged socket
+/// makes no write progress, so it still accumulates misses and is reaped at
+/// the threshold.
 #[allow(
     clippy::too_many_lines,
     reason = "a deliberately linear liveness state machine; the extractable \
@@ -901,21 +930,24 @@ where
     // One liveness detector, two patience levels over the same ping/pong
     // evidence stream:
     //
-    //  - `consecutive_misses` (reset by pong OR data-write progress):
-    //    fast path, `missed_pong_threshold` cycles (~80 s balanced).
-    //    Catches wedged/dead connections where nothing moves.
+    //  - `consecutive_misses` (reset by pong, inbound bytes, or data-write
+    //    progress): fast path, `missed_pong_threshold` cycles (~80 s
+    //    balanced). Catches wedged/dead connections where nothing moves.
     //
-    //  - `unanswered_pings` (reset by pong ONLY; counts only pings that
-    //    were actually delivered to the outbound queue): patient path,
-    //    MAX_UNANSWERED_PINGS cycles (~5.3 min balanced). Catches
-    //    transports that keep draining data while the remote protocol
-    //    stack never answers — exactly the peers progress forgives.
+    //  - `unanswered_pings` (reset by pong or inbound bytes; counts only
+    //    pings that were actually delivered to the outbound queue): patient
+    //    path, MAX_UNANSWERED_PINGS cycles (~5.3 min balanced). Catches
+    //    transports that keep draining our data while the remote protocol
+    //    stack never answers — exactly the peers write progress forgives.
+    //    Inbound bytes reset it because a peer that is writing to us is
+    //    alive: its pong is only queued behind what it is sending.
     let mut consecutive_misses: u32 = 0;
     let mut unanswered_pings: u8 = 0;
     let threshold = config.missed_pong_threshold.get();
 
     loop {
         let progress_snapshot = signals.data_write_progress.load(Ordering::Relaxed);
+        let inbound_snapshot = signals.inbound.load();
 
         sleeper.sleep(config.ping_interval).await;
 
@@ -994,6 +1026,22 @@ where
         if signals.pong_received.swap(false, Ordering::Relaxed) {
             if consecutive_misses > 0 || unanswered_pings > 0 {
                 tracing::debug!(peer = %peer_id, "keepalive: pong received; counters reset");
+            }
+            consecutive_misses = 0;
+            unanswered_pings = 0;
+            continue;
+        }
+
+        // No pong, but the peer is still sending: a browser sends each
+        // message as one frame, and its pong cannot go out until the frame
+        // ends. Treat arriving bytes like a pong for both counters, or a
+        // long upload is reaped at the ceiling instead.
+        if signals.inbound.load() != inbound_snapshot {
+            if consecutive_misses > 0 || unanswered_pings > 0 {
+                tracing::debug!(
+                    peer = %peer_id,
+                    "keepalive: inbound bytes arrived; counters reset"
+                );
             }
             consecutive_misses = 0;
             unanswered_pings = 0;
@@ -1710,6 +1758,124 @@ mod tests {
             inbound_writer.is_closed(),
             "stale connection must be torn down"
         );
+
+        outbound_tx.close();
+        drop(drain.await);
+        Ok(())
+    }
+
+    /// A peer still sending us bytes is alive, however late its pong: a
+    /// browser uploading one large message cannot pong until the frame ends.
+    /// Pings are delivered and never answered, and nothing is written, so
+    /// only inbound progress can keep this connection open.
+    ///
+    /// Ignoring inbound progress reaps at 2 × 60 = 120 ms (`Timeout`).
+    /// Letting it reset only the miss counter reaps at the unanswered-ping
+    /// ceiling, 8 × 60 = 480 ms (`StaleNoPong`). The window runs past both.
+    #[tokio::test(start_paused = true)]
+    async fn keepalive_does_not_reap_peer_whose_bytes_keep_arriving() -> TestResult {
+        let (outbound_tx, outbound_rx) = async_channel::bounded::<Outbound>(16);
+        let (inbound_writer, _inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
+        let signals = KeepAliveSignals::new();
+
+        let drain = tokio::spawn(async move { while outbound_rx.recv().await.is_ok() {} });
+        let uploader = {
+            let inbound = signals.inbound.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(15)).await;
+                    inbound.record();
+                }
+            })
+        };
+
+        let config = KeepAlive {
+            ping_interval: Duration::from_millis(40),
+            pong_timeout: Duration::from_millis(20),
+            missed_pong_threshold: nz(2),
+        };
+
+        let outcome_or_timeout = tokio::time::timeout(
+            Duration::from_millis(650),
+            keepalive_loop(
+                config,
+                PeerId::new([42u8; 32]),
+                outbound_tx.clone(),
+                inbound_writer.clone(),
+                signals.clone(),
+                TokioSleeper,
+            ),
+        )
+        .await;
+        uploader.abort();
+
+        if let Ok(unexpected) = outcome_or_timeout {
+            return Err(format!(
+                "keepalive must not reap a peer whose bytes keep arriving, got {unexpected:?}"
+            )
+            .into());
+        }
+        assert!(!inbound_writer.is_closed());
+
+        outbound_tx.close();
+        drop(drain.await);
+        Ok(())
+    }
+
+    /// Inbound progress proves liveness only while it lasts: once a peer
+    /// stops sending partway through a frame, it is reaped at the miss
+    /// threshold, counted from the first cycle with no bytes.
+    #[tokio::test(start_paused = true)]
+    async fn keepalive_reaps_peer_whose_bytes_stop_arriving() -> TestResult {
+        let (outbound_tx, outbound_rx) = async_channel::bounded::<Outbound>(16);
+        let (inbound_writer, _inbound_reader) = async_channel::bounded::<Vec<u8>>(16);
+        let signals = KeepAliveSignals::new();
+
+        let drain = tokio::spawn(async move { while outbound_rx.recv().await.is_ok() {} });
+        // Bytes at 14, 28, …, 196 ms, then nothing. 14 ms never lands on a
+        // cycle boundary (multiples of 60 ms), so each read falls inside one
+        // cycle.
+        let uploader = {
+            let inbound = signals.inbound.clone();
+            tokio::spawn(async move {
+                for _ in 0..14 {
+                    tokio::time::sleep(Duration::from_millis(14)).await;
+                    inbound.record();
+                }
+            })
+        };
+
+        let config = KeepAlive {
+            ping_interval: Duration::from_millis(40),
+            pong_timeout: Duration::from_millis(20),
+            missed_pong_threshold: nz(2),
+        };
+
+        let start = tokio::time::Instant::now();
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(10),
+            keepalive_loop(
+                config,
+                PeerId::new([42u8; 32]),
+                outbound_tx.clone(),
+                inbound_writer.clone(),
+                signals.clone(),
+                TokioSleeper,
+            ),
+        )
+        .await
+        .map_err(|_| "a peer that stopped sending must still be reaped")?;
+        let elapsed = start.elapsed();
+        uploader.await?;
+
+        let KeepAliveOutcome::Timeout { missed } = outcome else {
+            return Err(format!("expected Timeout outcome, got {outcome:?}").into());
+        };
+        assert_eq!(missed, 2);
+        // The cycle ending at 240 ms saw the last byte (196 ms); the cycles
+        // ending at 300 and 360 ms are the two misses.
+        assert_eq!(elapsed, Duration::from_millis(360));
+        assert!(inbound_writer.is_closed());
 
         outbound_tx.close();
         drop(drain.await);

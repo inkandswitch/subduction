@@ -22,6 +22,7 @@ http = { workspace = true, features = ["std"] }
 hyper = { workspace = true }
 hyper-util = { workspace = true, features = ["tokio"] }
 subduction_core = { workspace = true, features = ["std"] }
+subduction_websocket = { workspace = true, features = ["std"] }
 thiserror = { workspace = true, features = ["std"] }
 tracing = { workspace = true, features = ["std"] }
 tungstenite = { workspace = true }

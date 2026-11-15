@@ -3,14 +3,15 @@
 use subduction_core::timeout::Timeout;
 
 use crate::{
+    counted::Counted,
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
     sleep::TokioSleeper,
-    tokio::{TrackedTokioSpawn, unified::UnifiedWebSocket},
+    tokio::{TrackedTokioSpawn, stream::dial, unified::UnifiedWebSocket},
     websocket::{KeepAlive, WebSocket},
 };
 
 use alloc::sync::Arc;
-use async_tungstenite::tokio::{accept_hdr_async_with_config, connect_async_with_config};
+use async_tungstenite::tokio::accept_hdr_async_with_config;
 use core::{
     net::SocketAddr,
     sync::atomic::{AtomicBool, Ordering},
@@ -283,7 +284,10 @@ where
                                         ws_config.max_message_size = Some(max_message_size);
                                         ws_config.max_frame_size = Some(max_message_size);
 
-                                        // Step 1: WebSocket protocol upgrade
+                                        // Step 1: WebSocket protocol upgrade, over a
+                                        // socket whose inbound reads the keepalive sees
+                                        let tcp = Counted::new(tcp);
+                                        let inbound = tcp.progress();
                                         let ws_stream = match accept_hdr_async_with_config(tcp, NoCallback, Some(ws_config)).await {
                                             Ok(ws) => ws,
                                             Err(e) => {
@@ -310,6 +314,7 @@ where
                                                 let (ws, sender_fut, keepalive_task) =
                                                     WebSocket::new_with_keepalive(
                                                         ws_handshake.into_inner(),
+                                                        inbound,
                                                         peer_id,
                                                         keepalive,
                                                         TokioSleeper,
@@ -622,7 +627,7 @@ where
         let mut ws_config = WebSocketConfig::default();
         ws_config.max_message_size = Some(self.max_message_size);
         ws_config.max_frame_size = Some(self.max_message_size);
-        let (ws_stream, _resp) = connect_async_with_config(uri, Some(ws_config))
+        let (ws_stream, inbound) = dial(uri, Some(ws_config))
             .await
             .map_err(TryConnectError::WebSocket)?;
 
@@ -645,6 +650,7 @@ where
             move |ws_handshake, peer_id| {
                 let (ws, sender_fut, keepalive_task) = WebSocket::new_with_keepalive(
                     ws_handshake.into_inner(),
+                    inbound,
                     peer_id,
                     keepalive,
                     TokioSleeper,
@@ -755,7 +761,7 @@ where
         let mut ws_config = WebSocketConfig::default();
         ws_config.max_message_size = Some(self.max_message_size);
         ws_config.max_frame_size = Some(self.max_message_size);
-        let (ws_stream, _resp) = connect_async_with_config(uri, Some(ws_config))
+        let (ws_stream, inbound) = dial(uri, Some(ws_config))
             .await
             .map_err(TryConnectError::WebSocket)?;
 
@@ -778,6 +784,7 @@ where
             move |ws_handshake, peer_id| {
                 let (ws, sender_fut, keepalive_task) = WebSocket::new_with_keepalive(
                     ws_handshake.into_inner(),
+                    inbound,
                     peer_id,
                     keepalive,
                     TokioSleeper,
