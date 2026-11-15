@@ -52,6 +52,10 @@ impl core::fmt::Debug for ConnectResult {
 /// ALPN, opens a bi-directional stream, and runs the Subduction handshake
 /// to mutually authenticate both peers.
 ///
+/// An inbound frame longer than `max_frame_size` closes the connection with
+/// code 1009; [`DEFAULT_MAX_FRAME_SIZE`](crate::DEFAULT_MAX_FRAME_SIZE) is the
+/// usual choice.
+///
 /// Returns a [`ConnectResult`] containing the authenticated connection and
 /// background tasks that must be spawned.
 ///
@@ -64,8 +68,8 @@ impl core::fmt::Debug for ConnectResult {
 ///
 /// ```ignore
 /// let result = connect(
-///     &endpoint, addr, Duration::from_secs(30), timeout,
-///     &signer, Audience::known(peer_id),
+///     &endpoint, addr, &signer, Audience::known(peer_id),
+///     subduction_iroh::DEFAULT_MAX_FRAME_SIZE,
 /// ).await?;
 /// tokio::spawn(result.listener_task);
 /// tokio::spawn(result.sender_task);
@@ -76,6 +80,7 @@ pub async fn connect<S>(
     addr: EndpointAddr,
     signer: &S,
     audience: Audience,
+    max_frame_size: usize,
 ) -> Result<ConnectResult, ConnectError>
 where
     S: Signer<Sendable>,
@@ -102,8 +107,9 @@ where
                 let (conn, outbound_rx) = IrohTransport::new(peer_id, quic_conn_clone);
 
                 let listener_conn = conn.clone();
-                let listener_task: BoxFuture<'static, Result<(), RunError>> =
-                    Box::pin(crate::tasks::listener_task(listener_conn, recv_stream));
+                let listener_task: BoxFuture<'static, Result<(), RunError>> = Box::pin(
+                    crate::tasks::listener_task(listener_conn, recv_stream, max_frame_size),
+                );
                 let sender_task: BoxFuture<'static, Result<(), RunError>> =
                     Box::pin(crate::tasks::sender_task(send_stream, outbound_rx));
 

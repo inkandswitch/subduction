@@ -57,6 +57,7 @@ impl Handshake<Sendable> for IrohHandshake {
     fn recv(
         &mut self,
     ) -> <Sendable as future_form::FutureForm>::Future<'_, Result<Vec<u8>, Self::Error>> {
-        async move { crate::tasks::read_framed(&mut self.recv).await }.boxed()
+        async move { crate::tasks::read_framed(&mut self.recv, crate::DEFAULT_MAX_FRAME_SIZE).await }
+            .boxed()
     }
 }

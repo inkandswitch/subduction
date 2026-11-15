@@ -37,7 +37,7 @@ use subduction_core::{
     transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
-use subduction_iroh::transport::IrohTransport;
+use subduction_iroh::{DEFAULT_MAX_FRAME_SIZE, transport::IrohTransport};
 use subduction_websocket::timeout::FuturesTimerTimeout;
 use testresult::TestResult;
 
@@ -152,6 +152,7 @@ impl TestServer {
                     peer_id,
                     None,
                     HANDSHAKE_MAX_DRIFT,
+                    DEFAULT_MAX_FRAME_SIZE,
                 )
                 .await
                 {
@@ -206,6 +207,7 @@ impl TestClient {
             server_addr,
             &sig,
             Audience::known(server.peer_id),
+            DEFAULT_MAX_FRAME_SIZE,
         )
         .await
         .expect("client connect");
@@ -262,6 +264,7 @@ impl TestServerDiscover {
                     peer_id,
                     discovery_audience,
                     HANDSHAKE_MAX_DRIFT,
+                    DEFAULT_MAX_FRAME_SIZE,
                 )
                 .await
                 {
@@ -309,6 +312,7 @@ impl TestClient {
             server_addr,
             &sig,
             Audience::discover(service_name.as_bytes()),
+            DEFAULT_MAX_FRAME_SIZE,
         )
         .await
         .expect("client connect (discover)");
@@ -821,6 +825,7 @@ async fn discovery_wrong_service_name_rejected() -> TestResult {
         server_addr,
         &sig,
         Audience::discover(b"service-beta"), // wrong service name
+        DEFAULT_MAX_FRAME_SIZE,
     )
     .await;
 
@@ -1034,6 +1039,7 @@ async fn endpoint_shutdown_stops_accept() -> TestResult {
             peer_id,
             None,
             HANDSHAKE_MAX_DRIFT,
+            DEFAULT_MAX_FRAME_SIZE,
         )
         .await
         {
@@ -1060,6 +1066,7 @@ async fn endpoint_shutdown_stops_accept() -> TestResult {
         server_addr,
         &client_sig,
         Audience::known(peer_id),
+        DEFAULT_MAX_FRAME_SIZE,
     )
     .await;
 

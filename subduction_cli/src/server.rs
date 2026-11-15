@@ -841,6 +841,7 @@ where
                             server_peer_id,
                             discovery_audience,
                             handshake_max_drift,
+                            subduction_iroh::DEFAULT_MAX_FRAME_SIZE,
                         ) => {
                             match result {
                                 Ok(accepted) => {
@@ -1540,7 +1541,14 @@ async fn try_connect_iroh<H: CliWireHandler>(
 
     let audience = Audience::discover(service_name.as_bytes());
 
-    let connect_result = subduction_iroh::client::connect(endpoint, addr, signer, audience).await?;
+    let connect_result = subduction_iroh::client::connect(
+        endpoint,
+        addr,
+        signer,
+        audience,
+        subduction_iroh::DEFAULT_MAX_FRAME_SIZE,
+    )
+    .await?;
 
     let authenticated = connect_result.authenticated;
     let listener_task = connect_result.listener_task;

@@ -15,12 +15,6 @@ use crate::{
 /// Length-prefix size (4 bytes, big-endian u32).
 const LENGTH_PREFIX_SIZE: usize = 4;
 
-/// Maximum frame size (50 MiB).
-///
-/// Matches `DEFAULT_MAX_MESSAGE_SIZE` / `DEFAULT_MAX_BODY_SIZE` in the
-/// WebSocket and HTTP long-poll transports.
-const MAX_FRAME_SIZE: usize = 50 * 1024 * 1024;
-
 /// Bytes read at a time while receiving a frame.
 ///
 /// A frame's buffer grows only as its bytes arrive, so memory follows what a
@@ -52,17 +46,20 @@ fn next_chunk(buf: &mut Vec<u8>, len: usize) -> Option<&mut [u8]> {
 /// Read a length-prefixed message from a QUIC recv stream.
 ///
 /// Returns [`StreamError::FrameTooLarge`] if the peer sends a length
-/// prefix exceeding [`MAX_FRAME_SIZE`], preventing OOM from a
+/// prefix exceeding `max_frame_size`, preventing OOM from a
 /// malicious or buggy peer.
-pub(crate) async fn read_framed(recv: &mut RecvStream) -> Result<Vec<u8>, StreamError> {
+pub(crate) async fn read_framed(
+    recv: &mut RecvStream,
+    max_frame_size: usize,
+) -> Result<Vec<u8>, StreamError> {
     let mut len_buf = [0u8; LENGTH_PREFIX_SIZE];
     recv.read_exact(&mut len_buf).await?;
     let len = u32::from_be_bytes(len_buf) as usize;
 
-    if len > MAX_FRAME_SIZE {
+    if len > max_frame_size {
         return Err(StreamError::FrameTooLarge {
             actual: len,
-            max: MAX_FRAME_SIZE,
+            max: max_frame_size,
         });
     }
 
@@ -164,14 +161,20 @@ impl StreamReadErrorKind {
 /// `recv_bytes` is notified immediately, and the QUIC connection is closed with
 /// an application error code reflecting the reason.
 ///
+/// A frame longer than `max_frame_size` is over capacity.
+///
 /// # Errors
 ///
 /// Returns an error if reading from the stream or dispatching fails.
-pub async fn listener_task(conn: IrohTransport, mut recv: RecvStream) -> Result<(), RunError> {
+pub async fn listener_task(
+    conn: IrohTransport,
+    mut recv: RecvStream,
+    max_frame_size: usize,
+) -> Result<(), RunError> {
     let peer_id = conn.quic_connection().remote_id();
     tracing::info!(peer = %peer_id, "starting iroh listener task");
 
-    let outcome = read_loop(&conn, &mut recv, peer_id).await;
+    let outcome = read_loop(&conn, &mut recv, max_frame_size, peer_id).await;
 
     // Uniform teardown: close the inbound channel (notifying any parked
     // `recv_bytes`) and the QUIC connection with a code reflecting the outcome.
@@ -201,10 +204,11 @@ pub async fn listener_task(conn: IrohTransport, mut recv: RecvStream) -> Result<
 async fn read_loop(
     conn: &IrohTransport,
     recv: &mut RecvStream,
+    max_frame_size: usize,
     peer_id: impl core::fmt::Display,
 ) -> Result<(), RunError> {
     loop {
-        let bytes = match read_framed(recv).await {
+        let bytes = match read_framed(recv, max_frame_size).await {
             Ok(b) => b,
             Err(e) => {
                 match StreamReadErrorKind::classify(&e) {
