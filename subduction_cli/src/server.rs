@@ -118,12 +118,19 @@ pub(crate) struct ServerArgs {
     #[arg(short, long, default_value = "5")]
     pub(crate) timeout: u64,
 
-    /// Maximum WebSocket message size in bytes (default: 50 MiB).
+    /// Maximum message size in bytes for every transport (default: 50 MiB).
     ///
-    /// This sets the aggregate-message limit. If `--max-frame-size` is
-    /// not set, individual frames are capped at the same value (browsers
-    /// commonly send unfragmented frames, so having the two limits equal
-    /// avoids a silent 16 MiB rejection at the tungstenite default).
+    /// This caps the WebSocket messages, HTTP long-poll request bodies, and
+    /// iroh frames this server receives. Peers don't negotiate it, so every
+    /// peer on a path needs a limit at least this large: a peer rejects a
+    /// message over its own limit. WebSocket and iroh close the connection
+    /// (code 1009); long-poll answers `413 Payload Too Large`.
+    ///
+    /// For WebSocket, this sets the aggregate-message limit. If
+    /// `--max-frame-size` is not set, individual frames are capped at the
+    /// same value (browsers commonly send unfragmented frames, so having the
+    /// two limits equal avoids a silent 16 MiB rejection at the tungstenite
+    /// default).
     #[arg(long, default_value_t = DEFAULT_MAX_MESSAGE_SIZE)]
     pub(crate) max_message_size: usize,
 
@@ -678,7 +685,8 @@ where
         discovery_audience,
         handshake_max_drift,
         FuturesTimerTimeout,
-    );
+    )
+    .with_max_body_size(args.max_message_size);
 
     // Bind the TCP listener
     let tcp_listener = TcpListener::bind(addr).await?;
@@ -820,6 +828,7 @@ where
         let iroh_subduction = subduction.clone();
         let iroh_signer = signer.clone();
         let iroh_nonce_cache = NonceCache::default();
+        let iroh_max_frame_size = args.max_message_size;
         let iroh_ep = iroh_endpoint.clone();
         let iroh_cancel = token.child_token();
         let iroh_ephemeral = ephemeral.clone();
@@ -841,7 +850,7 @@ where
                             server_peer_id,
                             discovery_audience,
                             handshake_max_drift,
-                            subduction_iroh::DEFAULT_MAX_FRAME_SIZE,
+                            iroh_max_frame_size,
                         ) => {
                             match result {
                                 Ok(accepted) => {
@@ -894,6 +903,7 @@ where
             let peer_cancel = token.clone();
             let peer_service_name = service_name.clone();
             let peer_keyhive = keyhive_protocol.clone();
+            let peer_max_frame_size = args.max_message_size;
 
             tokio::spawn(async move {
                 match try_connect_iroh(
@@ -904,6 +914,7 @@ where
                     peer_keyhive.as_ref(),
                     &peer_signer,
                     &peer_service_name,
+                    peer_max_frame_size,
                     peer_cancel,
                 )
                 .await
@@ -1534,6 +1545,7 @@ async fn try_connect_iroh<H: CliWireHandler>(
     keyhive_proto: Option<&CliKeyhiveProtocol>,
     signer: &MemorySigner,
     service_name: &str,
+    max_frame_size: usize,
     cancel: CancellationToken,
 ) -> Result<PeerId, eyre::Error> {
     let node_id = addr.id;
@@ -1541,14 +1553,8 @@ async fn try_connect_iroh<H: CliWireHandler>(
 
     let audience = Audience::discover(service_name.as_bytes());
 
-    let connect_result = subduction_iroh::client::connect(
-        endpoint,
-        addr,
-        signer,
-        audience,
-        subduction_iroh::DEFAULT_MAX_FRAME_SIZE,
-    )
-    .await?;
+    let connect_result =
+        subduction_iroh::client::connect(endpoint, addr, signer, audience, max_frame_size).await?;
 
     let authenticated = connect_result.authenticated;
     let listener_task = connect_result.listener_task;

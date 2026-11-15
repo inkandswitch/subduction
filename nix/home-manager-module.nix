@@ -107,9 +107,11 @@ in {
         type = lib.types.int;
         default = 52428800; # 50 MiB
         description = ''
-          Maximum WebSocket message size in bytes.
+          Maximum message size in bytes for every transport: WebSocket
+          messages, HTTP long-poll request bodies, and iroh frames. Every
+          peer on a path needs a limit at least this large.
 
-          Sets the aggregate-message limit passed to the server. If
+          For WebSocket, this sets the aggregate-message limit. If
           {option}`services.subduction.server.maxFrameSize` is left
           unset, individual WebSocket frames are capped at the same
           value — browsers commonly send unfragmented frames, so

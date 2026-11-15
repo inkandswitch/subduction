@@ -131,7 +131,8 @@ subduction_cli server --socket 0.0.0.0:8080 --key-file ./key
 | `-t, --timeout <SECS>` | `5` | Request timeout in seconds |
 | `--handshake-max-drift <SECS>` | `600` | Maximum clock drift allowed during handshake |
 | `--service-name <NAME>` | socket address | Service name for discovery mode handshake |
-| `--max-message-size <BYTES>` | `52428800` (50 MB) | Maximum WebSocket message size |
+| `--max-message-size <BYTES>` | `52428800` (50 MiB) | Maximum size of a received message on every transport: WebSocket messages, HTTP long-poll request bodies, and iroh frames |
+| `--max-frame-size <BYTES>` | `--max-message-size` | Maximum WebSocket frame size. Leave unset unless you need fragmentation with a smaller per-frame cap |
 
 #### Transport Options
 
