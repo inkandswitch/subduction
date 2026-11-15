@@ -16,10 +16,10 @@ use alloc::{string::ToString, sync::Arc, vec::Vec};
 use core::time::Duration;
 
 use async_lock::Mutex;
-use http_body_util::{BodyExt, Full, Limited};
+use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
 use hyper::{
     Method, Request, Response, StatusCode,
-    body::{Bytes, Incoming},
+    body::{Body, Bytes, Incoming},
 };
 use subduction_core::{
     authenticated::Authenticated,
@@ -82,6 +82,8 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
     }
 
     /// Set the maximum request body size.
+    ///
+    /// A larger body is answered with `413 Payload Too Large`.
     #[must_use]
     pub const fn with_max_body_size(mut self, size: usize) -> Self {
         self.max_body_size = size;
@@ -134,8 +136,15 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
         match response {
             Ok(resp) => Ok(resp),
             Err(e) => {
-                tracing::error!(error = %e, "handler error");
-                Ok(error_response(StatusCode::INTERNAL_SERVER_ERROR, &e)?)
+                let status = e.status();
+                // A 4xx is the client's fault, not ours: tell it why, but
+                // don't log an error.
+                if status.is_client_error() {
+                    tracing::warn!(error = %e, %status, "request rejected");
+                } else {
+                    tracing::error!(error = %e, %status, "handler error");
+                }
+                Ok(error_response(status, &e)?)
             }
         }
     }
@@ -380,14 +389,25 @@ fn extract_session_id<T>(req: &Request<T>) -> Result<SessionId, ServerError> {
 
 /// Read the request body up to `max_size` bytes.
 ///
-/// Uses [`Limited`] to enforce the size limit at the streaming level,
-/// rejecting oversized bodies before they are fully buffered in memory.
+/// A body whose declared length (`Content-Length`) is over the limit is
+/// refused without reading any of it. Otherwise [`Limited`] enforces the limit
+/// while streaming, so an oversized body is never fully buffered.
 async fn read_body(req: Request<Incoming>, max_size: usize) -> Result<Vec<u8>, ServerError> {
-    let limited = Limited::new(req.into_body(), max_size);
-    let collected = limited
+    let max = u64::try_from(max_size).unwrap_or(u64::MAX);
+    if req.body().size_hint().lower() > max {
+        return Err(ServerError::BodyTooLarge);
+    }
+
+    let collected = Limited::new(req.into_body(), max_size)
         .collect()
         .await
-        .map_err(|_| ServerError::BodyTooLarge)?;
+        .map_err(|e| {
+            if e.is::<LengthLimitError>() {
+                ServerError::BodyTooLarge
+            } else {
+                ServerError::BodyRead(e)
+            }
+        })?;
 
     Ok(collected.to_bytes().to_vec())
 }
