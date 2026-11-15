@@ -307,11 +307,20 @@ Unlike signed payloads, sync messages are not signed — they're authenticated b
 
 ## Message Size Limits
 
-All transports enforce a maximum message size (default **50 MiB**). Messages exceeding this limit are rejected at the transport layer before deserialization. The limit is configurable per transport:
+Each transport enforces a maximum size (default **50 MiB**) on the messages it receives. A message over the limit is rejected at the transport layer before deserialization. The limit is configurable per transport, and the CLI's `--max-message-size` sets all three:
 
-- WebSocket: `DEFAULT_MAX_MESSAGE_SIZE` (50 MiB)
-- HTTP long-poll: `DEFAULT_MAX_BODY_SIZE` (50 MiB)
-- Iroh/QUIC: `MAX_FRAME_SIZE` (50 MiB, enforced in length-prefix framing)
+| Transport      | Default                                                              | Over the limit                                |
+|----------------|----------------------------------------------------------------------|-----------------------------------------------|
+| WebSocket      | `DEFAULT_MAX_MESSAGE_SIZE` (50 MiB)                                  | Connection closed with code 1009              |
+| HTTP long-poll | `DEFAULT_MAX_BODY_SIZE` (50 MiB)                                     | Request answered with `413 Payload Too Large` |
+| Iroh/QUIC      | `DEFAULT_MAX_FRAME_SIZE` (50 MiB, checked against the length prefix) | Connection closed with code 1009              |
+
+Peers do not negotiate the limit, and no transport checks outbound messages against it (iroh only checks that a frame fits its 4-byte length prefix). A message larger than the receiver's limit is rejected by the receiver, so every peer on a path needs a limit at least as large as the largest message it will be sent.
+
+Handshake messages arrive before the peer is authenticated, so iroh and long-poll read them under the fixed `handshake::MAX_MESSAGE_SIZE` (64 KiB) instead of the configured limit. WebSocket reads them under its general limit. An oversized handshake message fails the handshake rather than closing with 1009: iroh drops the connection (code 0), and long-poll answers `413 Payload Too Large`.
+
+> [!WARNING]
+> The long-poll _client_ does not limit response bodies yet. It trusts the server it connects to: a hostile server can answer `POST /lp/recv` with a body large enough to exhaust the client's memory.
 
 ## Signed Payload Formats
 
