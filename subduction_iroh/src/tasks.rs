@@ -78,19 +78,17 @@ pub(crate) async fn read_framed(recv: &mut RecvStream) -> Result<Vec<u8>, Stream
 
 /// Write a length-prefixed message to a QUIC send stream.
 ///
-/// Returns [`StreamError::FrameTooLarge`] if `data` exceeds
-/// [`MAX_FRAME_SIZE`].
+/// Outbound size is bounded only by what the 4-byte prefix can express. The
+/// receiver enforces its own limit, as on the other transports: a peer with a
+/// smaller limit closes the connection with code 1009.
+///
+/// Returns [`StreamError::FrameTooLarge`] if `data` is longer than 4 GiB.
 pub(crate) async fn write_framed(send: &mut SendStream, data: &[u8]) -> Result<(), StreamError> {
-    if data.len() > MAX_FRAME_SIZE {
-        return Err(StreamError::FrameTooLarge {
-            actual: data.len(),
-            max: MAX_FRAME_SIZE,
-        });
-    }
+    let len = u32::try_from(data.len()).map_err(|_| StreamError::FrameTooLarge {
+        actual: data.len(),
+        max: u32::MAX as usize,
+    })?;
 
-    // SAFETY: length fits in u32 because MAX_FRAME_SIZE (50 MiB) < u32::MAX (4 GiB).
-    #[allow(clippy::cast_possible_truncation)]
-    let len = data.len() as u32;
     send.write_all(&len.to_be_bytes())
         .await
         .map_err(StreamError::Write)?;
@@ -240,7 +238,8 @@ async fn read_loop(
 /// Background task: drains the outbound channel and writes framed messages
 /// to the QUIC send stream.
 ///
-/// Exits when the outbound channel is closed.
+/// Exits when the outbound channel is closed. A message too long for one
+/// frame is dropped and logged, so the connection stays usable.
 ///
 /// # Errors
 ///
@@ -252,7 +251,17 @@ pub async fn sender_task(
     tracing::info!("starting iroh sender task");
 
     while let Ok(bytes) = outbound_rx.recv().await {
-        write_framed(&mut send, &bytes).await?;
+        match write_framed(&mut send, &bytes).await {
+            Ok(()) => {}
+            Err(StreamError::FrameTooLarge { actual, max }) => {
+                tracing::error!(
+                    bytes = actual,
+                    max,
+                    "outbound message too long for a frame; dropped"
+                );
+            }
+            Err(e) => return Err(e.into()),
+        }
     }
 
     tracing::info!("sender task: outbound channel closed, shutting down");
