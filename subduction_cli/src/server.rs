@@ -118,7 +118,8 @@ pub(crate) struct ServerArgs {
     #[arg(short, long, default_value = "5")]
     pub(crate) timeout: u64,
 
-    /// Maximum message size in bytes for every transport (default: 50 MiB).
+    /// Maximum message size in bytes for every transport (default: 50 MiB,
+    /// minimum: 64 KiB).
     ///
     /// This caps the WebSocket messages, HTTP long-poll request bodies, and
     /// iroh frames this server receives. Peers don't negotiate it, so every
@@ -131,7 +132,7 @@ pub(crate) struct ServerArgs {
     /// same value (browsers commonly send unfragmented frames, so having the
     /// two limits equal avoids a silent 16 MiB rejection at the tungstenite
     /// default).
-    #[arg(long, default_value_t = DEFAULT_MAX_MESSAGE_SIZE)]
+    #[arg(long, default_value_t = DEFAULT_MAX_MESSAGE_SIZE, value_parser = message_size)]
     pub(crate) max_message_size: usize,
 
     /// Override for the maximum WebSocket frame size in bytes. When
@@ -141,7 +142,11 @@ pub(crate) struct ServerArgs {
     /// Most deployments should leave this unset. Only useful if you need
     /// WebSocket frame fragmentation with a smaller per-frame cap than
     /// the aggregate message size.
-    #[arg(long = "max-frame-size", value_name = "MAX_FRAME_SIZE")]
+    #[arg(
+        long = "max-frame-size",
+        value_name = "MAX_FRAME_SIZE",
+        value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..)
+    )]
     pub(crate) max_frame_size_override: Option<usize>,
 
     /// Metrics server port (Prometheus endpoint)
@@ -281,6 +286,22 @@ impl ServerArgs {
         self.max_frame_size_override
             .unwrap_or(self.max_message_size)
     }
+}
+
+/// The smallest `--max-message-size` the server accepts (64 KiB).
+///
+/// Nothing useful syncs under this, so a smaller value is almost certainly a
+/// mistake, such as a missing unit.
+const MIN_MESSAGE_SIZE: usize = 64 * 1024;
+
+/// Parse `--max-message-size`, refusing values below [`MIN_MESSAGE_SIZE`].
+fn message_size(arg: &str) -> Result<usize, MessageSizeError> {
+    let size = arg.parse()?;
+    if size < MIN_MESSAGE_SIZE {
+        return Err(MessageSizeError::TooSmall { size });
+    }
+
+    Ok(size)
 }
 
 /// Default interval for refreshing storage metrics (1 minute).
@@ -1603,12 +1624,51 @@ async fn try_connect_iroh<H: CliWireHandler>(
     Ok(remote_id)
 }
 
+/// Why a `--max-message-size` value was refused.
+#[derive(Debug, thiserror::Error)]
+enum MessageSizeError {
+    /// Not a whole number of bytes.
+    #[error(transparent)]
+    Parse(#[from] core::num::ParseIntError),
+
+    /// Below [`MIN_MESSAGE_SIZE`].
+    #[error("{size} bytes is below the minimum of {MIN_MESSAGE_SIZE} bytes (64 KiB)")]
+    TooSmall {
+        /// The value given.
+        size: usize,
+    },
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::panic)]
 mod tests {
     use clap::Parser;
 
-    use super::{AuthMode, ServerArgs};
+    use super::{AuthMode, MIN_MESSAGE_SIZE, MessageSizeError, ServerArgs, message_size};
+
+    #[test]
+    fn message_size_accepts_the_minimum_and_nothing_below_it() {
+        assert_eq!(
+            message_size(&MIN_MESSAGE_SIZE.to_string()).ok(),
+            Some(MIN_MESSAGE_SIZE)
+        );
+        let below = MIN_MESSAGE_SIZE - 1;
+        assert!(matches!(
+            message_size(&below.to_string()),
+            Err(MessageSizeError::TooSmall { size }) if size == below
+        ));
+        assert!(matches!(
+            message_size("50MiB"),
+            Err(MessageSizeError::Parse(_))
+        ));
+    }
+
+    #[test]
+    fn max_frame_size_may_be_below_the_message_minimum() {
+        let args = parse(&["--max-frame-size", "16384"]);
+        assert_eq!(args.max_frame_size(), 16384);
+        assert!(ServerArgs::try_parse_from(["server", "--max-frame-size", "0"]).is_err());
+    }
 
     fn parse(extra: &[&str]) -> ServerArgs {
         let mut argv = vec!["server"];
