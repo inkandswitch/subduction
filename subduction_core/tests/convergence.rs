@@ -21,6 +21,7 @@ use sedimentree_core::{
 use subduction_core::{
     authenticated::{Authenticated, Direction},
     connection::test_utils::{ChannelTransport, InstantTimeout, TokioSpawn},
+    effects::config::Config,
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -34,22 +35,11 @@ use testresult::TestResult;
 
 type Conn = MessageTransport<ChannelTransport>;
 
-type TestSyncHandler =
-    SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>;
+type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, InstantTimeout, TokioSpawn>;
 
-type TestSubduction = Arc<
-    Subduction<
-        'static,
-        Sendable,
-        MemoryStorage,
-        Conn,
-        TestSyncHandler,
-        OpenPolicy,
-        MemorySigner,
-        InstantTimeout,
-        TokioSpawn,
-    >,
->;
+type TestSyncHandler = SyncHandler<Sendable, Cfg, Conn, CountLeadingZeroBytes>;
+
+type TestSubduction = Arc<Subduction<'static, Sendable, Cfg, Conn, TestSyncHandler>>;
 
 fn make_signer(seed: u8) -> MemorySigner {
     MemorySigner::from_bytes(&[seed; 32])
@@ -400,23 +390,10 @@ impl DepthMetric for AlwaysDeep {
 
 type DeepConn = MessageTransport<ChannelTransport>;
 
-type DeepSyncHandler =
-    SyncHandler<Sendable, MemoryStorage, DeepConn, OpenPolicy, AlwaysDeep, TokioSpawn>;
+type DeepSyncHandler = SyncHandler<Sendable, Cfg, DeepConn, AlwaysDeep>;
 
-type DeepSubduction = Arc<
-    Subduction<
-        'static,
-        Sendable,
-        MemoryStorage,
-        DeepConn,
-        DeepSyncHandler,
-        OpenPolicy,
-        MemorySigner,
-        InstantTimeout,
-        TokioSpawn,
-        AlwaysDeep,
-    >,
->;
+type DeepSubduction =
+    Arc<Subduction<'static, Sendable, Cfg, DeepConn, DeepSyncHandler, AlwaysDeep>>;
 
 fn make_deep_node(signer: MemorySigner) -> DeepSubduction {
     let (sd, _handler, listener, manager) = SubductionBuilder::new()

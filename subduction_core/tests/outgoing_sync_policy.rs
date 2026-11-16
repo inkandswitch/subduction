@@ -19,6 +19,7 @@ use subduction_core::{
         },
         test_utils::{ChannelMockConnection, TokioSpawn, TokioTimeout, test_signer},
     },
+    effects::config::Config,
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
@@ -96,19 +97,9 @@ impl StoragePolicy<Sendable> for Policy {
 }
 
 type Conn = ChannelMockConnection<SyncMessage>;
-type Handler =
-    SyncHandler<Sendable, MemoryStorage, Conn, Policy, CountLeadingZeroBytes, TokioSpawn>;
-type Node = Subduction<
-    'static,
-    Sendable,
-    MemoryStorage,
-    Conn,
-    Handler,
-    Policy,
-    MemorySigner,
-    TokioTimeout,
-    TokioSpawn,
->;
+type Cfg = Config<MemoryStorage, Policy, MemorySigner, TokioTimeout, TokioSpawn>;
+type Handler = SyncHandler<Sendable, Cfg, Conn, CountLeadingZeroBytes>;
+type Node = Subduction<'static, Sendable, Cfg, Conn, Handler>;
 
 fn node() -> (Arc<Node>, async_channel::Receiver<(PeerId, SedimentreeId)>) {
     let (checked, checks) = async_channel::unbounded();

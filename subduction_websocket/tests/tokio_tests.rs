@@ -13,6 +13,7 @@ use std::{
 };
 use subduction_core::{
     connection::{Connection, Reconnect, message::SyncMessage},
+    effects::config::Config,
     handler::sync::SyncHandler,
     handshake::audience::Audience,
     nonce_cache::NonceCache,
@@ -71,86 +72,45 @@ fn random_commit_id() -> CommitId {
     CommitId::new(bytes)
 }
 
+type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, TimeoutTokio, TokioSpawn>;
+
 type TestSubduction = Arc<
     Subduction<
         'static,
         Sendable,
-        MemoryStorage,
+        Cfg,
         TokioWebSocketClient<MemorySigner>,
-        SyncHandler<
-            Sendable,
-            MemoryStorage,
-            TokioWebSocketClient<MemorySigner>,
-            OpenPolicy,
-            CountLeadingZeroBytes,
-            TokioSpawn,
-        >,
-        OpenPolicy,
-        MemorySigner,
-        TimeoutTokio,
-        TokioSpawn,
+        SyncHandler<Sendable, Cfg, TokioWebSocketClient<MemorySigner>, CountLeadingZeroBytes>,
     >,
 >;
 
-type TestHandler = Arc<
-    SyncHandler<
-        Sendable,
-        MemoryStorage,
-        TokioWebSocketClient<MemorySigner>,
-        OpenPolicy,
-        CountLeadingZeroBytes,
-        TokioSpawn,
-    >,
->;
+type TestHandler =
+    Arc<SyncHandler<Sendable, Cfg, TokioWebSocketClient<MemorySigner>, CountLeadingZeroBytes>>;
+
+type TrackedCfg = Config<MemoryStorage, OpenPolicy, MemorySigner, TimeoutTokio, TrackedTokioSpawn>;
 
 type ServerSubduction = Arc<
     Subduction<
         'static,
         Sendable,
-        MemoryStorage,
+        TrackedCfg,
         MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>,
         SyncHandler<
             Sendable,
-            MemoryStorage,
+            TrackedCfg,
             MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>,
-            OpenPolicy,
             CountLeadingZeroBytes,
-            TrackedTokioSpawn,
         >,
-        OpenPolicy,
-        MemorySigner,
-        TimeoutTokio,
-        TrackedTokioSpawn,
     >,
 >;
 
 type ServerHandler = Arc<
     SyncHandler<
         Sendable,
-        MemoryStorage,
+        TrackedCfg,
         MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>,
-        OpenPolicy,
         CountLeadingZeroBytes,
-        TrackedTokioSpawn,
     >,
->;
-
-type ClientSyncHandler = SyncHandler<
-    Sendable,
-    MemoryStorage,
-    TokioWebSocketClient<MemorySigner>,
-    OpenPolicy,
-    CountLeadingZeroBytes,
-    TokioSpawn,
->;
-
-type ServerSyncHandler = SyncHandler<
-    Sendable,
-    MemoryStorage,
-    MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>,
-    OpenPolicy,
-    CountLeadingZeroBytes,
-    TrackedTokioSpawn,
 >;
 
 #[allow(clippy::type_complexity)]
@@ -159,18 +119,7 @@ fn setup_client_subduction(
 ) -> (
     TestSubduction,
     TestHandler,
-    ListenerFuture<
-        'static,
-        Sendable,
-        MemoryStorage,
-        TokioWebSocketClient<MemorySigner>,
-        ClientSyncHandler,
-        OpenPolicy,
-        MemorySigner,
-        TimeoutTokio,
-        TokioSpawn,
-        CountLeadingZeroBytes,
-    >,
+    ListenerFuture<'static, Sendable>,
     subduction_core::connection::manager::ManagerFuture<Sendable>,
 ) {
     SubductionBuilder::new()
@@ -187,18 +136,7 @@ fn setup_server_subduction(
 ) -> (
     ServerSubduction,
     ServerHandler,
-    ListenerFuture<
-        'static,
-        Sendable,
-        MemoryStorage,
-        MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket>,
-        ServerSyncHandler,
-        OpenPolicy,
-        MemorySigner,
-        TimeoutTokio,
-        TrackedTokioSpawn,
-        CountLeadingZeroBytes,
-    >,
+    ListenerFuture<'static, Sendable>,
     subduction_core::connection::manager::ManagerFuture<Sendable>,
 ) {
     SubductionBuilder::new()

@@ -17,6 +17,11 @@ use crate::peer::id::PeerId;
 /// [`Subduction::authorize_put`].
 pub trait StoragePolicy<Async: FutureForm> {
     /// Error type returned when fetch is disallowed.
+    ///
+    /// [`HasStoragePolicy`] mirrors the bounds on this and `PutDisallowed`;
+    /// change both together.
+    ///
+    /// [`HasStoragePolicy`]: crate::effects::policy::HasStoragePolicy
     type FetchDisallowed: Error;
 
     /// Error type returned when put is disallowed.

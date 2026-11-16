@@ -24,6 +24,7 @@ use subduction_crypto::signer::memory::MemorySigner;
 use super::{Connection, message::SyncMessage};
 use crate::{
     authenticated::{Authenticated, Direction},
+    effects::config::Config,
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -785,6 +786,8 @@ impl Spawn<Local> for TokioSpawn {
     }
 }
 
+type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, InstantTimeout, TokioSpawn>;
+
 /// Create a new Subduction instance for testing with default settings.
 #[allow(clippy::type_complexity)]
 pub fn new_test_subduction() -> (
@@ -792,20 +795,9 @@ pub fn new_test_subduction() -> (
         Subduction<
             'static,
             Sendable,
-            MemoryStorage,
+            Cfg,
             MockConnection,
-            SyncHandler<
-                Sendable,
-                MemoryStorage,
-                MockConnection,
-                OpenPolicy,
-                CountLeadingZeroBytes,
-                TokioSpawn,
-            >,
-            OpenPolicy,
-            MemorySigner,
-            InstantTimeout,
-            TokioSpawn,
+            SyncHandler<Sendable, Cfg, MockConnection, CountLeadingZeroBytes>,
             CountLeadingZeroBytes,
         >,
     >,

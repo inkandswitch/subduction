@@ -34,6 +34,7 @@ use sedimentree_core::{
 };
 use subduction_core::{
     connection::test_utils::TokioSpawn,
+    effects::config::Config,
     handler::sync::SyncHandler,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
@@ -53,24 +54,15 @@ const SYNC_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(10_000);
 const SERVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
+type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, FuturesTimerTimeout, TokioSpawn>;
+
 type TestSubduction = Arc<
     Subduction<
         'static,
         Sendable,
-        MemoryStorage,
+        Cfg,
         MessageTransport<HttpLongPollTransport>,
-        SyncHandler<
-            Sendable,
-            MemoryStorage,
-            MessageTransport<HttpLongPollTransport>,
-            OpenPolicy,
-            CountLeadingZeroBytes,
-            TokioSpawn,
-        >,
-        OpenPolicy,
-        MemorySigner,
-        FuturesTimerTimeout,
-        TokioSpawn,
+        SyncHandler<Sendable, Cfg, MessageTransport<HttpLongPollTransport>, CountLeadingZeroBytes>,
         CountLeadingZeroBytes,
     >,
 >;

@@ -10,6 +10,7 @@ use std::{collections::BTreeSet, sync::Arc, time::Duration};
 use subduction_core::{
     authenticated::{Authenticated, Direction},
     connection::test_utils::{PausableChannelTransport, TokioSpawn, TokioTimeout},
+    effects::config::Config,
     handler::sync::SyncHandler,
     policy::open::OpenPolicy,
     storage::{memory::MemoryStorage, traits::Storage},
@@ -21,21 +22,10 @@ use subduction_core::{
 use subduction_crypto::signer::memory::MemorySigner;
 
 type Conn = MessageTransport<PausableChannelTransport>;
-type Handler =
-    SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>;
-type Node = Arc<
-    Subduction<
-        'static,
-        Sendable,
-        MemoryStorage,
-        Conn,
-        Handler,
-        OpenPolicy,
-        MemorySigner,
-        TokioTimeout,
-        TokioSpawn,
-    >,
->;
+type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, TokioTimeout, TokioSpawn>;
+
+type Handler = SyncHandler<Sendable, Cfg, Conn, CountLeadingZeroBytes>;
+type Node = Arc<Subduction<'static, Sendable, Cfg, Conn, Handler>>;
 fn node(seed: u8, storage: MemoryStorage) -> Node {
     node_with_timeout(seed, storage, Duration::from_secs(5))
 }

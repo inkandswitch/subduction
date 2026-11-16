@@ -431,40 +431,12 @@ async fn an_attempt_keeps_its_tree_registered_and_ignores_other_trees() {
 #[tokio::test]
 async fn fetcher_clones_and_put_capabilities_share_coordination() {
     use crate::{
-        collections::bounded_sharded_map::BoundedShardedMap,
-        connection::{
-            message::SyncMessage,
-            test_utils::{MockConnection, TokioSpawn},
-        },
-        handler::sync::SyncHandler,
-        policy::open::OpenPolicy,
-        storage::memory::MemoryStorage,
-        subduction::NodeTasks,
+        collections::bounded_sharded_map::BoundedShardedMap, connection::test_utils::TokioSpawn,
+        policy::open::OpenPolicy, storage::memory::MemoryStorage, subduction::StorageTasks,
     };
     use future_form::Sendable;
-    use sedimentree_core::depth::CountLeadingZeroBytes;
-    use subduction_crypto::signer::memory::MemorySigner;
 
-    type Hdl = SyncHandler<
-        Sendable,
-        MemoryStorage,
-        MockConnection,
-        OpenPolicy,
-        CountLeadingZeroBytes,
-        TokioSpawn,
-        1,
-    >;
-    let storage = <Sendable as NodeTasks<
-        'static,
-        MemoryStorage,
-        MockConnection,
-        SyncMessage,
-        Hdl,
-        OpenPolicy,
-        MemorySigner,
-        CountLeadingZeroBytes,
-        1,
-    >>::storage_powerbox(
+    let storage = <Sendable as StorageTasks<MemoryStorage, OpenPolicy, 1>>::storage_powerbox(
         MemoryStorage::new(),
         Arc::new(OpenPolicy),
         Arc::new(BoundedShardedMap::new()),

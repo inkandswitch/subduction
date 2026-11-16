@@ -25,6 +25,7 @@ use subduction_core::{
         message::SyncMessage,
         test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn, test_signer},
     },
+    effects::config::Config,
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -32,11 +33,16 @@ use subduction_core::{
     storage::memory::MemoryStorage,
     subduction::builder::SubductionBuilder,
 };
+use subduction_crypto::signer::memory::MemorySigner;
 use testresult::TestResult;
 
 type Conn = ChannelMockConnection<SyncMessage>;
-type InnerHandler =
-    SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>;
+type InnerHandler = SyncHandler<
+    Sendable,
+    Config<MemoryStorage, OpenPolicy, MemorySigner, InstantTimeout, TokioSpawn>,
+    Conn,
+    CountLeadingZeroBytes,
+>;
 
 /// Must match `MAX_INFLIGHT_DISPATCH_PER_PEER` in `connection::manager`. That
 /// constant is crate-private, so we pin it here; if it changes, the

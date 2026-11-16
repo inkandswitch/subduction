@@ -51,6 +51,7 @@ use sedimentree_core::{
 use sedimentree_wasm::storage::{JsStorage, JsStorageError};
 use subduction_core::{
     collections::bounded_sharded_map::BoundedShardedMap,
+    effects::config::Config,
     handler::sync::SyncHandler,
     handshake::audience::DiscoveryId,
     multiplexer::DEFAULT_ROUNDTRIP_TIMEOUT,
@@ -58,7 +59,7 @@ use subduction_core::{
     peer::{counter::PeerCounter, id::PeerId},
     spawn::Spawn,
     subduction::{
-        NodeTasks, Subduction,
+        StorageTasks, Subduction,
         per_peer_sync::{PeerSyncEntry, PerPeerSync},
         request::FragmentRequested,
     },
@@ -90,16 +91,14 @@ pub type NodeConnection = MessageTransport<ManagedTransport>;
 pub type PeerSyncResult = PeerSyncEntry<NodeConnection, Local, JsTransportError>;
 /// Core broadcast result, without a JS map wrapper.
 pub type PeerSyncResults = PerPeerSync<NodeConnection, Local, JsTransportError>;
+/// The effects every Wasm node is built from.
+pub(crate) type WasmEffects = Config<JsStorage, JsPolicy, JsSigner, JsTimeout, WasmSpawn>;
 type NodeCore = Subduction<
     'static,
     Local,
-    JsStorage,
+    WasmEffects,
     NodeConnection,
     WasmComposedHandler,
-    JsPolicy,
-    JsSigner,
-    JsTimeout,
-    WasmSpawn,
     JsDepthMetric,
     WASM_SHARD_COUNT,
 >;
@@ -165,22 +164,13 @@ impl Node {
         let connections = Arc::new(Mutex::new(Map::new()));
         let subscriptions = Arc::new(Mutex::new(Map::new()));
         let sedimentrees = Arc::new(BoundedShardedMap::new().with_capacity(max_resident));
-        let powerbox = <Local as NodeTasks<
-            'static,
-            JsStorage,
-            NodeConnection,
-            WireMessage,
-            WasmComposedHandler,
-            JsPolicy,
-            JsSigner,
-            JsDepthMetric,
-            WASM_SHARD_COUNT,
-        >>::storage_powerbox(
-            opts_storage,
-            Arc::new(policy),
-            sedimentrees.clone(),
-            spawner.clone(),
-        );
+        let powerbox =
+            <Local as StorageTasks<JsStorage, JsPolicy, WASM_SHARD_COUNT>>::storage_powerbox(
+                opts_storage,
+                Arc::new(policy),
+                sedimentrees.clone(),
+                spawner.clone(),
+            );
 
         let observer = match opts.on_remote_heads() {
             Some(f) => JsRemoteHeadsObserver::with_callback(f),

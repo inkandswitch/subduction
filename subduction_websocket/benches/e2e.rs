@@ -60,6 +60,7 @@ use sedimentree_core::{
 use sedimentree_fs_storage::FsStorage;
 use subduction_core::{
     connection::message::SyncMessage,
+    effects::config::Config,
     handler::sync::SyncHandler,
     handshake::{self, Handshake, audience::Audience},
     nonce_cache::NonceCache,
@@ -209,24 +210,15 @@ impl Drop for FsServerGuard {
     }
 }
 
+type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, TimeoutTokio, TrackedTokioSpawn>;
+
 type ClientSubduction = Arc<
     Subduction<
         'static,
         Sendable,
-        MemoryStorage,
+        Cfg,
         TokioWebSocketClient<MemorySigner>,
-        SyncHandler<
-            Sendable,
-            MemoryStorage,
-            TokioWebSocketClient<MemorySigner>,
-            OpenPolicy,
-            CountLeadingZeroBytes,
-            TrackedTokioSpawn,
-        >,
-        OpenPolicy,
-        MemorySigner,
-        TimeoutTokio,
-        TrackedTokioSpawn,
+        SyncHandler<Sendable, Cfg, TokioWebSocketClient<MemorySigner>, CountLeadingZeroBytes>,
     >,
 >;
 

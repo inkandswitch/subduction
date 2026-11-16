@@ -1,5 +1,7 @@
 //! Error types for the top-level `Subduction`.
 
+use core::fmt;
+
 use future_form::FutureForm;
 use sedimentree_core::{blob::Blob, crypto::digest::Digest, id::SedimentreeId};
 use thiserror::Error;
@@ -45,7 +47,7 @@ pub enum HydrationError<Async: FutureForm, Store: Storage<Async>> {
 /// An error that can occur during I/O operations.
 ///
 /// This covers storage and network connection errors.
-#[derive(Debug, Error)]
+#[derive(Error)]
 pub enum IoError<
     Async: FutureForm + ?Sized,
     Store: Storage<Async>,
@@ -97,8 +99,30 @@ where
     }
 }
 
+// Manual impl: a derive would demand `Debug` on `Async`, `Store`, `Conn`,
+// and `WireMsg`, though only their error types are stored.
+impl<Async, Store, Conn, WireMsg> fmt::Debug for IoError<Async, Store, Conn, WireMsg>
+where
+    Async: FutureForm + ?Sized,
+    Store: Storage<Async>,
+    Conn: Connection<Async, WireMsg>,
+    WireMsg: Encode + Decode,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Storage(e) => f.debug_tuple("Storage").field(e).finish(),
+            Self::StorageInterrupted => f.write_str("StorageInterrupted"),
+            Self::Load(e) => f.debug_tuple("Load").field(e).finish(),
+            Self::ConnSend(e) => f.debug_tuple("ConnSend").field(e).finish(),
+            Self::ConnRecv(e) => f.debug_tuple("ConnRecv").field(e).finish(),
+            Self::ConnCall(e) => f.debug_tuple("ConnCall").field(e).finish(),
+            Self::BlobMismatch(e) => f.debug_tuple("BlobMismatch").field(e).finish(),
+        }
+    }
+}
+
 /// An error that can occur while handling a batch sync request.
-#[derive(Debug, Error)]
+#[derive(Error)]
 pub enum ListenError<
     Async: FutureForm + ?Sized,
     Store: Storage<Async>,
@@ -112,6 +136,22 @@ pub enum ListenError<
     /// Tried to send a message to a closed channel.
     #[error("tried to send to closed channel")]
     TrySendError,
+}
+
+// Manual impl for the same reason as `IoError`'s.
+impl<Async, Store, Conn, WireMsg> fmt::Debug for ListenError<Async, Store, Conn, WireMsg>
+where
+    Async: FutureForm + ?Sized,
+    Store: Storage<Async>,
+    Conn: Connection<Async, WireMsg>,
+    WireMsg: Encode + Decode,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::IoError(e) => f.debug_tuple("IoError").field(e).finish(),
+            Self::TrySendError => f.write_str("TrySendError"),
+        }
+    }
 }
 
 /// An error that can occur when adding a new connection.

@@ -112,6 +112,7 @@ extern crate alloc;
 pub mod authenticated;
 pub mod collections;
 pub mod connection;
+pub mod effects;
 pub mod handler;
 pub mod handshake;
 pub mod multiplexer;

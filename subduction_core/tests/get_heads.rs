@@ -27,6 +27,7 @@ use sedimentree_core::{
 };
 use subduction_core::{
     connection::test_utils::{MockConnection, TokioSpawn, TokioTimeout},
+    effects::config::Config,
     handler::sync::SyncHandler,
     policy::open::OpenPolicy,
     storage::traits::Storage,
@@ -37,17 +38,15 @@ use subduction_crypto::signer::memory::MemorySigner;
 use testresult::TestResult;
 
 type Conn = MockConnection;
+type Cfg = Config<ProbeStorage, OpenPolicy, MemorySigner, TokioTimeout, TokioSpawn>;
+
 type Node = Arc<
     Subduction<
         'static,
         Sendable,
-        ProbeStorage,
+        Cfg,
         Conn,
-        SyncHandler<Sendable, ProbeStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>,
-        OpenPolicy,
-        MemorySigner,
-        TokioTimeout,
-        TokioSpawn,
+        SyncHandler<Sendable, Cfg, Conn, CountLeadingZeroBytes>,
     >,
 >;
 

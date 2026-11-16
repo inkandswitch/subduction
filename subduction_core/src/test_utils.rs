@@ -43,6 +43,7 @@ use crate::{
             PausableChannelTransport, TokioSpawn,
         },
     },
+    effects::config::Config,
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -58,18 +59,17 @@ pub const WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 /// A node built on the in-process channel transport.
 pub type ChannelConn = MessageTransport<ChannelTransport>;
 
+/// The effects a [`TestNode`] is built from, with timer `Timer`.
+pub type TestEffects<Timer> = Config<MemoryStorage, OpenPolicy, MemorySigner, Timer, TokioSpawn>;
+
 /// A running test node over connection type `Conn`, with timer `Timer`.
 pub type TestNode<Conn, Timer> = Arc<
     Subduction<
         'static,
         Sendable,
-        MemoryStorage,
+        TestEffects<Timer>,
         Conn,
-        SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>,
-        OpenPolicy,
-        MemorySigner,
-        Timer,
-        TokioSpawn,
+        SyncHandler<Sendable, TestEffects<Timer>, Conn, CountLeadingZeroBytes>,
     >,
 >;
 

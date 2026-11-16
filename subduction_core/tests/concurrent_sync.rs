@@ -33,6 +33,7 @@ use sedimentree_core::{
 use subduction_core::{
     authenticated::{Authenticated, Direction},
     connection::test_utils::{ChannelTransport, InstantTimeout, TokioSpawn},
+    effects::config::Config,
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -272,28 +273,11 @@ impl Storage<Sendable> for ConcurrencyTrackingStorage {
 // Test helpers
 // ---------------------------------------------------------------------------
 
-type TrackingSyncHandler = SyncHandler<
-    Sendable,
-    ConcurrencyTrackingStorage,
-    Conn,
-    OpenPolicy,
-    CountLeadingZeroBytes,
-    TokioSpawn,
->;
+type Cfg = Config<ConcurrencyTrackingStorage, OpenPolicy, MemorySigner, InstantTimeout, TokioSpawn>;
 
-type TrackingSubduction = Arc<
-    Subduction<
-        'static,
-        Sendable,
-        ConcurrencyTrackingStorage,
-        Conn,
-        TrackingSyncHandler,
-        OpenPolicy,
-        MemorySigner,
-        InstantTimeout,
-        TokioSpawn,
-    >,
->;
+type TrackingSyncHandler = SyncHandler<Sendable, Cfg, Conn, CountLeadingZeroBytes>;
+
+type TrackingSubduction = Arc<Subduction<'static, Sendable, Cfg, Conn, TrackingSyncHandler>>;
 
 fn make_signer(seed: u8) -> MemorySigner {
     MemorySigner::from_bytes(&[seed; 32])

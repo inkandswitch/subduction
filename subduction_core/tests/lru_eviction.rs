@@ -17,6 +17,7 @@ use sedimentree_core::{
 };
 use subduction_core::{
     connection::test_utils::{MockConnection, TokioSpawn, TokioTimeout},
+    effects::config::Config,
     handler::sync::SyncHandler,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
@@ -26,21 +27,10 @@ use subduction_crypto::signer::memory::MemorySigner;
 use testresult::TestResult;
 
 type Conn = MockConnection;
-type TestSyncHandler =
-    SyncHandler<Sendable, MemoryStorage, Conn, OpenPolicy, CountLeadingZeroBytes, TokioSpawn>;
-type TestSubduction = Arc<
-    Subduction<
-        'static,
-        Sendable,
-        MemoryStorage,
-        Conn,
-        TestSyncHandler,
-        OpenPolicy,
-        MemorySigner,
-        TokioTimeout,
-        TokioSpawn,
-    >,
->;
+type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, TokioTimeout, TokioSpawn>;
+
+type TestSyncHandler = SyncHandler<Sendable, Cfg, Conn, CountLeadingZeroBytes>;
+type TestSubduction = Arc<Subduction<'static, Sendable, Cfg, Conn, TestSyncHandler>>;
 
 /// Build a node whose in-memory sedimentree cache is capped at `cap`
 /// resident trees.

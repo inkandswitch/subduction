@@ -17,6 +17,7 @@ use subduction_core::{
             InstantTimeout, MockConnection, TokioSpawn, new_test_subduction, test_signer,
         },
     },
+    effects::config::Config,
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -25,23 +26,14 @@ use subduction_core::{
     subduction::Subduction,
 };
 use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
+type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, InstantTimeout, TokioSpawn>;
+
 type Node = Subduction<
     'static,
     Sendable,
-    MemoryStorage,
+    Cfg,
     MockConnection,
-    SyncHandler<
-        Sendable,
-        MemoryStorage,
-        MockConnection,
-        OpenPolicy,
-        CountLeadingZeroBytes,
-        TokioSpawn,
-    >,
-    OpenPolicy,
-    MemorySigner,
-    InstantTimeout,
-    TokioSpawn,
+    SyncHandler<Sendable, Cfg, MockConnection, CountLeadingZeroBytes>,
     CountLeadingZeroBytes,
 >;
 const ID: SedimentreeId = SedimentreeId::new([81; 32]);

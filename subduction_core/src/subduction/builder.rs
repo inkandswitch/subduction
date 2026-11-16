@@ -1,7 +1,7 @@
 //! Type-safe builder for [`Subduction`] instances.
 //!
 //! Eliminates the boilerplate of constructing shared state, wiring up
-//! a [`SyncHandler`], and passing 11 arguments to [`Subduction::new`].
+//! a [`SyncHandler`], and passing 13 arguments to [`Subduction::new`].
 //!
 //! # Required Fields
 //!
@@ -35,12 +35,30 @@
 //!     .signer(signer)
 //!     .storage(my_storage, Arc::new(policy))
 //!     .spawner(TokioSpawn)
+//!     .timer(InstantTimeout)
 //!     .discovery_id(discovery_id)
 //!     .build::<Sendable, MyConnection>();
+//!
+//! // Name the node type where it is stored or returned; nothing else fixes
+//! // the shard count, so a fully unconstrained result fails to infer `SHARDS`.
+//! type MyCfg = Config<MyStorage, MyPolicy, MemorySigner, InstantTimeout, TokioSpawn>;
+//! type MyHandler = SyncHandler<Sendable, MyCfg, MyConnection, CountLeadingZeroBytes>;
+//! type MyNode = Subduction<'static, Sendable, MyCfg, MyConnection, MyHandler>;
+//!
+//! let node: Arc<MyNode> = subduction;
 //! ```
 //!
+//! `TokioSpawn`, `InstantTimeout`, and the mock connections live in
+//! `subduction_core::connection::test_utils`, behind the `test_utils`
+//! feature. Production nodes supply their own.
+//!
+//! The builder always produces a [`Config`] node. For an effects type of
+//! your own, use [`Subduction::with_effects`].
+//!
 //! [`Subduction`]: super::Subduction
+//! [`Config`]: crate::effects::config::Config
 //! [`Subduction::new`]: super::Subduction::new
+//! [`Subduction::with_effects`]: super::Subduction::with_effects
 //! [`SyncHandler`]: crate::handler::sync::SyncHandler
 //! [`build`]: SubductionBuilder::build
 //! [`build_with_handler`]: SubductionBuilder::build_with_handler
@@ -76,6 +94,7 @@ use crate::{
         managed::{ManagedCall, ManagedConnection},
         message::SyncMessage,
     },
+    effects::config::Config,
     handler::{Handler, sync::SyncHandler},
     handshake::audience::DiscoveryId,
     multiplexer::DEFAULT_ROUNDTRIP_TIMEOUT,
@@ -174,7 +193,8 @@ impl<const SHARDS: usize>
     /// calling [`build`](SubductionBuilder::build).
     ///
     /// The const generic `SHARDS` controls the number of shards in the
-    /// internal [`BoundedShardedMap`]. Defaults to 256 if not specified.
+    /// internal [`BoundedShardedMap`]. The struct declares a default of 256,
+    /// but inference does not use it: name the node type to fix `SHARDS`.
     #[must_use]
     pub fn new() -> Self {
         SubductionBuilder {
@@ -258,8 +278,8 @@ impl<Sign, Store, Timer, Metric, HeadsObserver, const SHARDS: usize>
     /// Set the task spawner for background work.
     ///
     /// This is a required field. Common implementations:
-    /// - `TokioSpawn` for native async (requires `Sendable`)
-    /// - `WasmSpawn` for browser environments (requires `Local`)
+    /// - `subduction_websocket::tokio::TokioSpawn` for native async (`Sendable`)
+    /// - `WasmSpawn` for browser environments (`Local` only)
     pub fn spawner<Sp>(
         self,
         spawner: Sp,
@@ -303,11 +323,12 @@ impl<Sign, Sp, Timer, Metric, HeadsObserver, const SHARDS: usize>
     ///
     /// This is a required field. The `storage` backend provides
     /// persistence, and the `policy` controls per-peer access.
-    pub fn storage<Store, Auth>(
+    pub fn storage<Store, Policy>(
         self,
         storage: Store,
-        policy: Arc<Auth>,
-    ) -> SubductionBuilder<Sign, Sp, (Store, Arc<Auth>), Timer, Metric, HeadsObserver, SHARDS> {
+        policy: Arc<Policy>,
+    ) -> SubductionBuilder<Sign, Sp, (Store, Arc<Policy>), Timer, Metric, HeadsObserver, SHARDS>
+    {
         let Self {
             signer,
             spawner,
@@ -588,12 +609,12 @@ impl<
     Sign,
     Sp,
     Store,
-    Auth,
+    Policy,
     Timer,
     Metric: DepthMetric,
     HeadsObserver: RemoteHeadsObserver,
     const SHARDS: usize,
-> SubductionBuilder<Sign, Sp, (Store, Arc<Auth>), Timer, Metric, HeadsObserver, SHARDS>
+> SubductionBuilder<Sign, Sp, (Store, Arc<Policy>), Timer, Metric, HeadsObserver, SHARDS>
 {
     /// Build a [`Subduction`] instance with the default [`SyncHandler`].
     ///
@@ -605,10 +626,9 @@ impl<
     ///
     /// # Type Parameters
     ///
-    /// - `F` — Future form (`Sendable` or `Local`). Usually inferred
-    ///   from the spawner and context.
-    /// - `C` — Connection type. Inferred from usage or specified via
-    ///   turbofish.
+    /// - `Async` — Future form (`Sendable` or `Local`). Not inferred;
+    ///   name it in the turbofish.
+    /// - `Conn` — Connection type. Name it in the turbofish too.
     ///
     /// # Example
     ///
@@ -628,61 +648,76 @@ impl<
             Subduction<
                 'a,
                 Async,
-                Store,
+                Config<Store, Policy, Sign, Timer, Sp>,
                 Conn,
-                SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, HeadsObserver>,
-                Auth,
-                Sign,
-                Timer,
-                Sp,
+                SyncHandler<
+                    Async,
+                    Config<Store, Policy, Sign, Timer, Sp>,
+                    Conn,
+                    Metric,
+                    SHARDS,
+                    HeadsObserver,
+                >,
                 Metric,
                 SHARDS,
             >,
         >,
-        Arc<SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, HeadsObserver>>,
-        ListenerFuture<
-            'a,
-            Async,
-            Store,
-            Conn,
-            SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, HeadsObserver>,
-            Auth,
-            Sign,
-            Timer,
-            Sp,
-            Metric,
-            SHARDS,
+        Arc<
+            SyncHandler<
+                Async,
+                Config<Store, Policy, Sign, Timer, Sp>,
+                Conn,
+                Metric,
+                SHARDS,
+                HeadsObserver,
+            >,
         >,
+        ListenerFuture<'a, Async>,
         crate::connection::manager::ManagerFuture<Async>,
     )
     where
-        Async: SubductionFutureForm<'a, Store, Conn, SyncMessage, Auth, Sign, Metric, SHARDS>
-            + 'static,
+        Async: SubductionFutureForm<'a, Conn, SyncMessage> + 'static,
         Async: NodeTasks<
                 'a,
-                Store,
+                Config<Store, Policy, Sign, Timer, Sp>,
                 Conn,
                 SyncMessage,
-                SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, HeadsObserver>,
-                Auth,
-                Sign,
+                SyncHandler<
+                    Async,
+                    Config<Store, Policy, Sign, Timer, Sp>,
+                    Conn,
+                    Metric,
+                    SHARDS,
+                    HeadsObserver,
+                >,
                 Metric,
                 SHARDS,
             >,
         Store: Storage<Async>,
         Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'a,
-        Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
+        Policy: ConnectionPolicy<Async> + StoragePolicy<Async>,
         Sign: Signer<Async>,
-        Timer: Timeout<Async> + Clone + Send + Sync + 'a,
+        Timer: Timeout<Async> + Clone + 'a,
         Sp: Spawn<Async> + Clone + Send + Sync + 'static,
         'a: 'static,
         Metric: Clone,
-        SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, HeadsObserver>:
-            Handler<Async, Conn, Message = SyncMessage>,
-        <SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, HeadsObserver> as Handler<
+        SyncHandler<
             Async,
+            Config<Store, Policy, Sign, Timer, Sp>,
             Conn,
-        >>::HandlerError: Into<ListenError<Async, Store, Conn, SyncMessage>>,
+            Metric,
+            SHARDS,
+            HeadsObserver,
+        >: Handler<Async, Conn, Message = SyncMessage>,
+        <SyncHandler<
+            Async,
+            Config<Store, Policy, Sign, Timer, Sp>,
+            Conn,
+            Metric,
+            SHARDS,
+            HeadsObserver,
+        > as Handler<Async, Conn>>::HandlerError:
+            Into<ListenError<Async, Store, Conn, SyncMessage>>,
         ManagedConnection<Conn, Async, Timer>: ManagedCall<
                 Async,
                 SyncMessage,
@@ -747,8 +782,8 @@ impl<
     }
 }
 
-impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
-    SubductionBuilder<Sign, Sp, (Store, Arc<Auth>), Timer, Metric, NoRemoteHeadsObserver, SHARDS>
+impl<Sign, Sp, Store, Policy, Timer, Metric: DepthMetric, const SHARDS: usize>
+    SubductionBuilder<Sign, Sp, (Store, Arc<Policy>), Timer, Metric, NoRemoteHeadsObserver, SHARDS>
 {
     /// Build a [`Subduction`] instance with a custom [`Handler`].
     ///
@@ -790,19 +825,36 @@ impl<Sign, Sp, Store, Auth, Timer, Metric: DepthMetric, const SHARDS: usize>
         self,
         handler: Arc<Hdl>,
     ) -> (
-        Arc<Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>>,
-        ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
+        Arc<
+            Subduction<
+                'a,
+                Async,
+                Config<Store, Policy, Sign, Timer, Sp>,
+                Conn,
+                Hdl,
+                Metric,
+                SHARDS,
+            >,
+        >,
+        ListenerFuture<'a, Async>,
         crate::connection::manager::ManagerFuture<Async>,
     )
     where
-        Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>
-            + 'static,
-        Async: NodeTasks<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
+        Async: SubductionFutureForm<'a, Conn, Hdl::Message> + 'static,
+        Async: NodeTasks<
+                'a,
+                Config<Store, Policy, Sign, Timer, Sp>,
+                Conn,
+                Hdl::Message,
+                Hdl,
+                Metric,
+                SHARDS,
+            >,
         Store: Storage<Async>,
         Conn: Connection<Async, Hdl::Message> + PartialEq + Clone + 'a,
-        Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
+        Policy: ConnectionPolicy<Async> + StoragePolicy<Async>,
         Sign: Signer<Async>,
-        Timer: Timeout<Async> + Clone + Send + Sync + 'a,
+        Timer: Timeout<Async> + Clone + 'a,
         Sp: Spawn<Async> + Clone + Send + Sync + 'static,
         'a: 'static,
         Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
@@ -858,12 +910,12 @@ impl<
     Sign,
     Sp,
     Store,
-    Auth,
+    Policy,
     Timer,
     Metric: DepthMetric,
     HeadsObserver: RemoteHeadsObserver,
     const SHARDS: usize,
-> SubductionBuilder<Sign, Sp, (Store, Arc<Auth>), Timer, Metric, HeadsObserver, SHARDS>
+> SubductionBuilder<Sign, Sp, (Store, Arc<Policy>), Timer, Metric, HeadsObserver, SHARDS>
 {
     /// Build a [`Subduction`] instance with a composed [`Handler`].
     ///
@@ -892,39 +944,76 @@ impl<
     pub fn build_composed<'a, Async, Conn, Hdl, X>(
         self,
         compose: impl FnOnce(
-            Arc<SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, HeadsObserver>>,
+            Arc<
+                SyncHandler<
+                    Async,
+                    Config<Store, Policy, Sign, Timer, Sp>,
+                    Conn,
+                    Metric,
+                    SHARDS,
+                    HeadsObserver,
+                >,
+            >,
         ) -> (Arc<Hdl>, X),
     ) -> (
-        Arc<Subduction<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>>,
-        ListenerFuture<'a, Async, Store, Conn, Hdl, Auth, Sign, Timer, Sp, Metric, SHARDS>,
+        Arc<
+            Subduction<
+                'a,
+                Async,
+                Config<Store, Policy, Sign, Timer, Sp>,
+                Conn,
+                Hdl,
+                Metric,
+                SHARDS,
+            >,
+        >,
+        ListenerFuture<'a, Async>,
         crate::connection::manager::ManagerFuture<Async>,
         X,
     )
     where
-        Async: SubductionFutureForm<'a, Store, Conn, Hdl::Message, Auth, Sign, Metric, SHARDS>
-            + 'static,
-        Async: NodeTasks<'a, Store, Conn, Hdl::Message, Hdl, Auth, Sign, Metric, SHARDS>,
+        Async: SubductionFutureForm<'a, Conn, Hdl::Message> + 'static,
+        Async: NodeTasks<
+                'a,
+                Config<Store, Policy, Sign, Timer, Sp>,
+                Conn,
+                Hdl::Message,
+                Hdl,
+                Metric,
+                SHARDS,
+            >,
         Store: Storage<Async>,
         Conn: Connection<Async, Hdl::Message>
             + Connection<Async, SyncMessage>
             + PartialEq
             + Clone
             + 'a,
-        Auth: ConnectionPolicy<Async> + StoragePolicy<Async>,
+        Policy: ConnectionPolicy<Async> + StoragePolicy<Async>,
         Sign: Signer<Async>,
-        Timer: Timeout<Async> + Clone + Send + Sync + 'a,
+        Timer: Timeout<Async> + Clone + 'a,
         Sp: Spawn<Async> + Clone + Send + Sync + 'static,
         'a: 'static,
         Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
         Hdl::Message: From<SyncMessage>,
         Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
         Metric: Clone,
-        SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, HeadsObserver>:
-            Handler<Async, Conn, Message = SyncMessage>,
-        <SyncHandler<Async, Store, Conn, Auth, Metric, Sp, SHARDS, HeadsObserver> as Handler<
+        SyncHandler<
             Async,
+            Config<Store, Policy, Sign, Timer, Sp>,
             Conn,
-        >>::HandlerError: Into<ListenError<Async, Store, Conn, SyncMessage>>,
+            Metric,
+            SHARDS,
+            HeadsObserver,
+        >: Handler<Async, Conn, Message = SyncMessage>,
+        <SyncHandler<
+            Async,
+            Config<Store, Policy, Sign, Timer, Sp>,
+            Conn,
+            Metric,
+            SHARDS,
+            HeadsObserver,
+        > as Handler<Async, Conn>>::HandlerError:
+            Into<ListenError<Async, Store, Conn, SyncMessage>>,
         ManagedConnection<Conn, Async, Timer>: ManagedCall<
                 Async,
                 Hdl::Message,

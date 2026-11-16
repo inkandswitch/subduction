@@ -23,6 +23,7 @@ use subduction_core::{
         message::{BatchSyncRequest, RequestId, SyncMessage},
         test_utils::{ChannelMockConnection, ChannelTransport, InstantTimeout, TokioSpawn},
     },
+    effects::config::Config,
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, open::OpenPolicy, storage::StoragePolicy},
@@ -36,17 +37,15 @@ use testresult::TestResult;
 
 type Conn = MessageTransport<ChannelTransport>;
 
+type Cfg<P> = Config<MemoryStorage, P, MemorySigner, InstantTimeout, TokioSpawn>;
+
 type Node<P> = Arc<
     Subduction<
         'static,
         Sendable,
-        MemoryStorage,
+        Cfg<P>,
         Conn,
-        SyncHandler<Sendable, MemoryStorage, Conn, P, CountLeadingZeroBytes, TokioSpawn>,
-        P,
-        MemorySigner,
-        InstantTimeout,
-        TokioSpawn,
+        SyncHandler<Sendable, Cfg<P>, Conn, CountLeadingZeroBytes>,
     >,
 >;
 
@@ -141,7 +140,7 @@ fn make_signer(seed: u8) -> MemorySigner {
 
 /// Policy bounds `Subduction` needs in a `Sendable` (tokio) test harness.
 trait TestPolicy:
-    ConnectionPolicy<Sendable>
+    ConnectionPolicy<Sendable, ConnectionDisallowed: Send>
     + StoragePolicy<Sendable, FetchDisallowed: Send, PutDisallowed: Send>
     + Send
     + Sync
@@ -150,7 +149,7 @@ trait TestPolicy:
 }
 
 impl<P> TestPolicy for P where
-    P: ConnectionPolicy<Sendable>
+    P: ConnectionPolicy<Sendable, ConnectionDisallowed: Send>
         + StoragePolicy<Sendable, FetchDisallowed: Send, PutDisallowed: Send>
         + Send
         + Sync

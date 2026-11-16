@@ -59,28 +59,46 @@ The `#[future_form::future_form(Sendable, Local)]` macro generates two impl bloc
 
 ### Generic Parameters on Subduction
 
-The main `Subduction` struct has many generic parameters:
+A node has five side effects: storage, policy, signing, spawning, and timing.
+Giving each its own type parameter made every node and handler type long and
+let the two drift apart, so `Subduction` bundles them into one effects
+parameter `E`. The whole sync stack is still assembled at *compile time*, with
+little dynamic dispatch on hot paths.
+
+The struct (bounds simplified; see `subduction_core/src/subduction.rs` for the
+real ones):
 
 ```rust
 pub struct Subduction<
     'a,
-    F: FutureForm,           // Sendable or Local
-    S: Storage<F>,           // Storage backend
-    C: Connection<F>,        // Network connection type
-    P: ConnectionPolicy<F> + StoragePolicy<F>,  // Access control
-    M: DepthMetric,          // Hash → depth mapping
-    const N: usize,          // ShardedMap shard count
+    Async: FutureForm,                            // Sendable or Local
+    E: Effects<Async>,                            // Storage, policy, signer, timer, spawner
+    Conn: Connection<Async, Hdl::Message>,        // Network connection type
+    Hdl: Handler<Async, Conn>,                    // Wire protocol handler
+    Metric: DepthMetric = CountLeadingZeroBytes,  // Hash → depth mapping
+    const SHARDS: usize = 256,                    // ShardedMap shard count
 >
 ```
 
-This looks intimidating but serves a purpose: *compile-time configuration*. The entire sync stack is assembled at compile time with little dynamic dispatch for hot paths.
+`E` names each effect as an associated type (`E::Storage`, `E::Policy`, …)
+through one capability trait per effect, two for policy (`HasStorage`,
+`HasStoragePolicy`, `HasConnectionPolicy`, …), in `subduction_core::effects`.
+The stock implementation is the phantom `effects::config::Config`, with slots
+in order storage, policy, signer, timer, spawner; `Subduction::new` and the
+builder infer it from the components you pass in. Consumers bound `E` only by
+what they use: `SyncHandler` never sees a signer or timer.
+
+Thread-safety is per form. `Effects<Async>` is form-agnostic; generic code
+that spawns node work bounds `E: SendableEffects` (every component
+`Send + Sync`, every error `Send`) or `E: LocalEffects` (`'static` only; on
+`Local`, everything but the spawner may be `!Send`).
 
 **Typical instantiations:**
 
-| Context      | F          | S           | C                  | M                       |
-|--------------|------------|-------------|--------------------| ------------------------|
-| CLI server   | `Sendable` | `FsStorage` | `UnifiedWebSocket` | `CountLeadingZeroBytes` |
-| Wasm browser | `Local`    | `JsStorage` | `JsConnection`     | `WasmHashMetric`        |
+| Deployment   | Async      | E              | Conn               | Metric                  |
+|--------------|------------|----------------|--------------------|-------------------------|
+| CLI server   | `Sendable` | `CliEffects`   | `CliConn`          | `CountLeadingZeroBytes` |
+| Wasm browser | `Local`    | `WasmEffects`  | `NodeConnection`   | `JsDepthMetric`         |
 
 ### Policy Traits: Capability-Based Access Control
 

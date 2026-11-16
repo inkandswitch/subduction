@@ -15,6 +15,7 @@ use std::{sync::Arc, time::Duration};
 use subduction_core::{
     authenticated::Authenticated,
     connection::stats::SyncStats,
+    effects::config::Config,
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
@@ -26,25 +27,11 @@ use subduction_core::{
 };
 
 pub(crate) type Connection = Authenticated<MessageTransport<ErasedTransport>, Sendable>;
-type Handler<S, P> = SyncHandler<
-    Sendable,
-    S,
-    MessageTransport<ErasedTransport>,
-    P,
-    CountLeadingZeroBytes,
-    ManagedSpawn,
->;
-type Node<S, P> = Subduction<
-    'static,
-    Sendable,
-    S,
-    MessageTransport<ErasedTransport>,
-    Handler<S, P>,
-    P,
-    SharedSigner,
-    Timer,
-    ManagedSpawn,
->;
+type Cfg<S, P> = Config<S, P, SharedSigner, Timer, ManagedSpawn>;
+type Handler<S, P> =
+    SyncHandler<Sendable, Cfg<S, P>, MessageTransport<ErasedTransport>, CountLeadingZeroBytes>;
+type Node<S, P> =
+    Subduction<'static, Sendable, Cfg<S, P>, MessageTransport<ErasedTransport>, Handler<S, P>>;
 
 /// Existing local-response sync result, not a remote acknowledgement.
 #[derive(Debug, Clone)]
