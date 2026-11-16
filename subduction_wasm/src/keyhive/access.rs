@@ -4,7 +4,6 @@ use alloc::{
     collections::{BTreeMap, BTreeSet},
     format,
     string::String,
-    sync::Arc,
     vec::Vec,
 };
 use core::fmt;
@@ -15,7 +14,8 @@ use futures::FutureExt;
 use js_sys::{Array, Map, Promise, Reflect, Uint8Array};
 use keyhive_crypto::identifier::Identifier;
 use subduction_keyhive::{
-    AgentEventIndex, AgentId, KeyhiveAccess, KeyhiveCodec, message::EventHash,
+    AgentEventIndex, AgentId, ArchiveBytes, KeyhiveAccess, NotIngested, Undecodable,
+    message::{EventBytes, EventHash},
 };
 use wasm_bindgen::{JsCast, prelude::*};
 use wasm_bindgen_futures::JsFuture;
@@ -163,18 +163,7 @@ impl KeyhiveAccessError {
     }
 }
 
-/// An encoded keyhive event (a `KH` frame).
-///
-/// The protocol never looks inside an event. Keyhive decodes and verifies it
-/// on ingest.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EventBytes(pub Vec<u8>);
-
-/// An encoded keyhive archive.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ArchiveBytes(pub Vec<u8>);
-
-/// [`KeyhiveCodec`] and [`KeyhiveAccess`] over a [`JsKeyhiveAccess`].
+/// [`KeyhiveAccess`] over a [`JsKeyhiveAccess`].
 #[derive(Debug, Clone)]
 pub struct WasmKeyhive(JsKeyhiveAccess);
 
@@ -304,29 +293,9 @@ fn agent_hashes(all: &JsValue) -> AccessResult<BTreeMap<AgentId, BTreeSet<EventH
     Ok(out)
 }
 
-impl KeyhiveCodec for WasmKeyhive {
-    type Event = EventBytes;
-    type Archive = ArchiveBytes;
+impl KeyhiveAccess<Local> for WasmKeyhive {
     type Error = KeyhiveAccessError;
 
-    fn encode_event(event: &EventBytes) -> Vec<u8> {
-        event.0.clone()
-    }
-
-    fn decode_event(bytes: &[u8]) -> AccessResult<EventBytes> {
-        Ok(EventBytes(bytes.to_vec()))
-    }
-
-    fn encode_archive(archive: &ArchiveBytes) -> Vec<u8> {
-        archive.0.clone()
-    }
-
-    fn decode_archive(bytes: &[u8]) -> AccessResult<ArchiveBytes> {
-        Ok(ArchiveBytes(bytes.to_vec()))
-    }
-}
-
-impl KeyhiveAccess<Local> for WasmKeyhive {
     fn total_ops(&self) -> <Local as FutureForm>::Future<'_, AccessResult<u64>> {
         async move {
             const METHOD: &str = "totalOps";
@@ -379,9 +348,7 @@ impl KeyhiveAccess<Local> for WasmKeyhive {
             let events = settle(METHOD, self.0.js_events_for_agent(id)).await?;
             entries(&events, METHOD)?
                 .into_iter()
-                .map(|(hash, event)| {
-                    Ok((array32(&hash, METHOD)?, EventBytes(bytes(&event, METHOD)?)))
-                })
+                .map(|(hash, event)| Ok((array32(&hash, METHOD)?, bytes(&event, METHOD)?)))
                 .collect()
         }
         .boxed_local()
@@ -390,7 +357,7 @@ impl KeyhiveAccess<Local> for WasmKeyhive {
     fn all_agent_events<'a>(
         &'a self,
         skip: &'a BTreeSet<EventHash>,
-    ) -> <Local as FutureForm>::Future<'a, AccessResult<AgentEventIndex<EventBytes>>> {
+    ) -> <Local as FutureForm>::Future<'a, AccessResult<AgentEventIndex>> {
         async move {
             const METHOD: &str = "allAgentEvents";
             let all = settle(METHOD, self.0.js_all_agent_events()).await?;
@@ -402,7 +369,7 @@ impl KeyhiveAccess<Local> for WasmKeyhive {
                 let hash = array32(&hash, METHOD)?;
                 // A skipped event's bytes stay in JavaScript.
                 if !skip.contains(&hash) {
-                    events.push((hash, EventBytes(bytes(&event, METHOD)?)));
+                    events.push((hash, bytes(&event, METHOD)?));
                 }
             }
 
@@ -432,18 +399,23 @@ impl KeyhiveAccess<Local> for WasmKeyhive {
     fn ingest_events(
         &self,
         events: Vec<EventBytes>,
-    ) -> <Local as FutureForm>::Future<'_, AccessResult<Vec<Arc<EventBytes>>>> {
+    ) -> <Local as FutureForm>::Future<'_, AccessResult<NotIngested>> {
+        // `ingestEvents` throws on an event that does not decode, so nothing
+        // is reported as undecodable.
         async move {
             const METHOD: &str = "ingestEvents";
             let array: Array = events
                 .iter()
-                .map(|e| JsValue::from(Uint8Array::from(e.0.as_slice())))
+                .map(|e| JsValue::from(Uint8Array::from(e.as_slice())))
                 .collect();
             let pending = settle(METHOD, self.0.js_ingest_events(array)).await?;
-            iterate(&pending, METHOD)?
-                .iter()
-                .map(|e| Ok(Arc::new(EventBytes(bytes(e, METHOD)?))))
-                .collect()
+            Ok(NotIngested {
+                pending: iterate(&pending, METHOD)?
+                    .iter()
+                    .map(|e| bytes(e, METHOD))
+                    .collect::<AccessResult<_>>()?,
+                undecodable: Vec::new(),
+            })
         }
         .boxed_local()
     }
@@ -456,7 +428,7 @@ impl KeyhiveAccess<Local> for WasmKeyhive {
             const METHOD: &str = "receiveContactCard";
             let card = Uint8Array::from(card);
             let event = settle(METHOD, self.0.js_receive_contact_card(card)).await?;
-            Ok(EventBytes(bytes(&event, METHOD)?))
+            bytes(&event, METHOD)
         }
         .boxed_local()
     }
@@ -465,20 +437,21 @@ impl KeyhiveAccess<Local> for WasmKeyhive {
         async move {
             const METHOD: &str = "toArchive";
             let archive = settle(METHOD, self.0.js_to_archive()).await?;
-            Ok(ArchiveBytes(bytes(&archive, METHOD)?))
+            bytes(&archive, METHOD)
         }
         .boxed_local()
     }
 
-    fn ingest_archive(
-        &self,
-        archive: ArchiveBytes,
-    ) -> <Local as FutureForm>::Future<'_, AccessResult<()>> {
+    fn ingest_archive<'a>(
+        &'a self,
+        archive: &'a [u8],
+    ) -> <Local as FutureForm>::Future<'a, AccessResult<Result<(), Undecodable>>> {
+        // `ingestArchive` throws on an archive that does not decode.
         async move {
-            let archive = Uint8Array::from(archive.0.as_slice());
+            let archive = Uint8Array::from(archive);
             settle("ingestArchive", self.0.js_ingest_archive(archive))
                 .await
-                .map(|_| ())
+                .map(|_| Ok(()))
         }
         .boxed_local()
     }

@@ -60,7 +60,7 @@ mod syncpoints;
 )]
 pub mod test_utils;
 
-pub use access::{AgentEventIndex, AgentId, KeyhiveAccess, KeyhiveCodec};
+pub use access::{AgentEventIndex, AgentId, ArchiveBytes, KeyhiveAccess, NotIngested, Undecodable};
 pub use connection::KeyhiveConnection;
 pub use error::StorageError;
 #[cfg(feature = "std")]
@@ -79,6 +79,6 @@ pub use all_agent_events::AllAgentEvents;
 pub use protocol::{KeyhiveProtocol, MessageOutcome};
 #[cfg(feature = "serde")]
 pub use storage_ops::{
-    compact, hash_event_bytes, ingest_from_storage, load_archives, load_event_bytes, load_events,
-    save_event, save_event_bytes, save_keyhive_archive,
+    compact, hash_event_bytes, ingest_from_storage, load_archives, load_event_bytes,
+    save_event_bytes, save_keyhive_archive,
 };

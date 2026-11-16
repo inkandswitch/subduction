@@ -9,7 +9,7 @@ use crate::peer_id::KeyhivePeerId;
 /// Events are identified by their 32-byte BLAKE3 hash.
 pub type EventHash = [u8; 32];
 
-/// An event as [`KeyhiveCodec::encode_event`](crate::KeyhiveCodec::encode_event) encodes it.
+/// A keyhive event in keyhive's canonical encoding.
 pub type EventBytes = Vec<u8>;
 
 /// Hash-keyed map of serialized events for a peer or peer pair.

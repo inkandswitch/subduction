@@ -42,7 +42,7 @@ use dupe::Dupe;
 use keyhive_crypto::identifier::Identifier;
 
 use crate::{
-    access::{KeyhiveAccess, KeyhiveCodec},
+    access::KeyhiveAccess,
     awaiting_confirmation::AwaitingConfirmation,
     cache::PeriodicEventCache,
     collections::{Map, Set},
@@ -261,7 +261,14 @@ where
             keyhive.events_for_agent(id).await.map_err(keyhive_error)?
         };
 
-        Ok(Some(collect_serialized_events::<K>(events)))
+        // Shared, so the periodic cache and every served response reference one
+        // copy of each event's bytes.
+        Ok(Some(
+            events
+                .into_iter()
+                .map(|(h, bytes)| (h, Arc::from(bytes)))
+                .collect(),
+        ))
     }
 
     /// Bulk snapshot of every agent's reachable events, deduplicated.
@@ -289,8 +296,8 @@ where
 
         let event_data: BTreeMap<EventHash, Arc<[u8]>> = all
             .events
-            .iter()
-            .map(|(h, event)| (*h, serialize_event::<K>(event)))
+            .into_iter()
+            .map(|(h, bytes)| (h, Arc::from(bytes)))
             .collect();
 
         let agent_hashes: BTreeMap<KeyhivePeerId, BTreeSet<EventHash>> = all
@@ -944,7 +951,7 @@ where
             our_events
                 .into_iter()
                 .filter(|(h, _)| their_events.contains_key(h))
-                .map(|(h, event)| (h, serialize_event::<K>(&event)))
+                .map(|(h, bytes)| (h, Arc::from(bytes)))
                 .collect(),
         ))
     }
@@ -991,41 +998,46 @@ where
     /// Ingest received event bytes into keyhive and persist them to storage.
     ///
     /// If some events remain pending (missing dependencies), attempts recovery
-    /// by loading from storage and retrying.
+    /// by loading from storage and retrying. Events that do not decode are
+    /// neither ingested nor persisted and fail the call once the others are.
     async fn ingest_events<B: AsRef<[u8]>>(
         &self,
         event_bytes_list: &[B],
     ) -> Result<(), ProtocolError<Conn::SendError>> {
-        let mut events: Vec<K::Event> = Vec::with_capacity(event_bytes_list.len());
-        for (idx, item) in event_bytes_list.iter().enumerate() {
-            let bytes = item.as_ref();
-            match storage_ops::decode_event::<K>(bytes) {
-                Ok(ev) => events.push(ev),
-                Err(e) => {
-                    let head_len = core::cmp::min(bytes.len(), 96);
-                    let mut head_hex = alloc::string::String::with_capacity(head_len * 2);
-                    for b in bytes.get(..head_len).unwrap_or(bytes) {
-                        use core::fmt::Write;
-                        let _ = write!(head_hex, "{b:02x}");
-                    }
-                    tracing::warn!(
-                        index = idx,
-                        total = event_bytes_list.len(),
-                        len = bytes.len(),
-                        head = %head_hex,
-                        error = ?e,
-                        "failed to deserialize incoming event"
-                    );
-                    return Err(ProtocolError::Deserialization(e.to_string()));
-                }
-            }
-        }
-
-        let pending = {
+        let not_ingested = {
             let keyhive = self.keyhive.lock().await;
-            keyhive.ingest_events(events).await.map_err(keyhive_error)?
+            keyhive
+                .ingest_events(
+                    event_bytes_list
+                        .iter()
+                        .map(|b| b.as_ref().to_vec())
+                        .collect(),
+                )
+                .await
+                .map_err(keyhive_error)?
         };
+        for bytes in &not_ingested.undecodable {
+            let head_len = core::cmp::min(bytes.len(), 96);
+            let mut head_hex = alloc::string::String::with_capacity(head_len * 2);
+            for b in bytes.get(..head_len).unwrap_or(bytes) {
+                use core::fmt::Write;
+                let _ = write!(head_hex, "{b:02x}");
+            }
+            tracing::warn!(
+                total = event_bytes_list.len(),
+                len = bytes.len(),
+                head = %head_hex,
+                "failed to deserialize incoming event"
+            );
+        }
+        let undecodable: Set<&[u8]> = not_ingested.undecodable.iter().map(Vec::as_slice).collect();
+        let decoded: Vec<&[u8]> = event_bytes_list
+            .iter()
+            .map(AsRef::as_ref)
+            .filter(|bytes| !undecodable.contains(bytes))
+            .collect();
 
+        let pending = not_ingested.pending;
         if !pending.is_empty() {
             if self.attempt_storage_recovery {
                 tracing::warn!(
@@ -1033,7 +1045,7 @@ where
                     "events pending after ingestion, attempting storage recovery"
                 );
 
-                if let Err(e) = self.try_storage_recovery(event_bytes_list).await {
+                if let Err(e) = self.try_storage_recovery(&decoded).await {
                     tracing::warn!(
                         error = %e,
                         "storage recovery failed"
@@ -1049,58 +1061,46 @@ where
 
         let use_archive = self
             .archive_config
-            .filter(|(threshold, _)| event_bytes_list.len() > *threshold);
+            .filter(|(threshold, _)| decoded.len() > *threshold);
 
         if let Some((_, storage_id)) = use_archive {
             let archive = {
                 let keyhive = self.keyhive.lock().await;
                 keyhive.to_archive().await.map_err(keyhive_error)?
             };
-            storage_ops::save_keyhive_archive::<K, _, Async>(&self.storage, storage_id, &archive)
-                .await?;
+            storage_ops::save_keyhive_archive(&self.storage, storage_id, archive).await?;
         } else {
-            for event_bytes in event_bytes_list {
+            for event_bytes in &decoded {
                 if let Err(e) =
-                    storage_ops::save_event_bytes(&self.storage, event_bytes.as_ref().to_vec())
-                        .await
+                    storage_ops::save_event_bytes(&self.storage, event_bytes.to_vec()).await
                 {
                     tracing::warn!(error = %e, "failed to persist event to storage");
                 }
             }
         }
 
-        Ok(())
+        if undecodable.is_empty() {
+            Ok(())
+        } else {
+            Err(ProtocolError::Deserialization(alloc::format!(
+                "{} of {} events do not decode",
+                undecodable.len(),
+                event_bytes_list.len()
+            )))
+        }
     }
 
     /// Attempt to recover by ingesting from storage and retrying.
-    async fn try_storage_recovery<B: AsRef<[u8]>>(
-        &self,
-        event_bytes_list: &[B],
-    ) -> Result<(), StorageError> {
-        {
-            let keyhive = self.keyhive.lock().await;
-            storage_ops::ingest_from_storage(&*keyhive, &self.storage).await?;
-        }
+    async fn try_storage_recovery(&self, event_bytes_list: &[&[u8]]) -> Result<(), StorageError> {
+        let keyhive = self.keyhive.lock().await;
+        storage_ops::ingest_from_storage(&*keyhive, &self.storage).await?;
 
-        let events: Vec<K::Event> = event_bytes_list
-            .iter()
-            .filter_map(
-                |bytes| match storage_ops::decode_event::<K>(bytes.as_ref()) {
-                    Ok(ev) => Some(ev),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "storage recovery: failed to deserialize event");
-                        None
-                    }
-                },
-            )
-            .collect();
-
-        if !events.is_empty() {
-            let keyhive = self.keyhive.lock().await;
+        if !event_bytes_list.is_empty() {
             let retry_pending = keyhive
-                .ingest_events(events)
+                .ingest_events(event_bytes_list.iter().map(|b| b.to_vec()).collect())
                 .await
-                .map_err(storage_ops::event_ingestion_error)?;
+                .map_err(storage_ops::event_ingestion_error)?
+                .pending;
             if retry_pending.is_empty() {
                 tracing::debug!("all events ingested after storage recovery");
             } else {
@@ -1129,7 +1129,7 @@ where
                 .map_err(|e| ProtocolError::ReceiveContactCard(Box::new(e)))?
         };
 
-        if let Err(e) = storage_ops::save_event::<K, _, Async>(&self.storage, &event).await {
+        if let Err(e) = storage_ops::save_event_bytes(&self.storage, event).await {
             tracing::error!(error = %e, "failed to save contact card op to storage. Card will be lost on restart");
         }
 
@@ -1242,24 +1242,6 @@ where
     K: KeyhiveAccess<F>,
 {
     keyhive.is_known_agent(id).await
-}
-
-/// Serialize a map of hashed events into a hash-keyed byte map.
-fn collect_serialized_events<K: KeyhiveCodec>(
-    events: BTreeMap<EventHash, K::Event>,
-) -> AgentHashMap {
-    events
-        .into_iter()
-        .map(|(h, event)| (h, serialize_event::<K>(&event)))
-        .collect()
-}
-
-/// Serialize an event, `Arc`-shared.
-///
-/// The bytes are `Arc`-shared so the periodic cache and every served response
-/// reference one copy instead of each deep-copying the bytes.
-fn serialize_event<K: KeyhiveCodec>(event: &K::Event) -> Arc<[u8]> {
-    Arc::from(K::encode_event(event))
 }
 
 /// Serialize a value to CBOR bytes.
@@ -1867,10 +1849,10 @@ mod tests {
 
         protocol.ingest_events(&event_bytes).await.unwrap();
 
-        let archives = crate::storage_ops::load_archives::<SimpleKeyhive, _, Local>(&storage)
+        let archives = crate::storage_ops::load_archives::<_, Local>(&storage)
             .await
             .unwrap();
-        let events = crate::storage_ops::load_events::<SimpleKeyhive, _, Local>(&storage)
+        let events = crate::storage_ops::load_event_bytes::<_, Local>(&storage)
             .await
             .unwrap();
         assert_eq!(archives.len(), 1, "expected one archive write");
@@ -1918,10 +1900,10 @@ mod tests {
 
         protocol.ingest_events(&event_bytes).await.unwrap();
 
-        let archives = crate::storage_ops::load_archives::<SimpleKeyhive, _, Local>(&storage)
+        let archives = crate::storage_ops::load_archives::<_, Local>(&storage)
             .await
             .unwrap();
-        let events = crate::storage_ops::load_events::<SimpleKeyhive, _, Local>(&storage)
+        let events = crate::storage_ops::load_event_bytes::<_, Local>(&storage)
             .await
             .unwrap();
         assert!(archives.is_empty(), "no archive expected below threshold");
@@ -1930,6 +1912,44 @@ mod tests {
             event_bytes.len(),
             "expected one event file per ingested event"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn ingest_events_fails_on_an_undecodable_event_and_stores_only_the_others() {
+        let alice_kh = make_keyhive().await;
+        let bob_kh = make_keyhive().await;
+        let alice_id = keyhive_peer_id(&alice_kh);
+        let bob_id = keyhive_peer_id(&bob_kh);
+        let alice_cc = alice_kh.generate_contact_card().await.unwrap();
+        alice_kh
+            .receive_contact_card(&bob_kh.generate_contact_card().await.unwrap())
+            .await
+            .unwrap();
+
+        let storage = MemoryKeyhiveStorage::new();
+        let protocol = TestProtocol::new(
+            Arc::new(Mutex::new(alice_kh)),
+            storage.clone(),
+            alice_id,
+            alice_cc.to_bytes(),
+        );
+        let mut event_bytes: Vec<Arc<[u8]>> = protocol
+            .get_events_for_agent(&bob_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .into_values()
+            .collect();
+        let readable = event_bytes.len();
+        assert!(readable > 0);
+        event_bytes.push(Arc::from(&b"not an event"[..]));
+
+        assert!(protocol.ingest_events(&event_bytes).await.is_err());
+
+        let stored = crate::storage_ops::load_event_bytes::<_, Local>(&storage)
+            .await
+            .unwrap();
+        assert_eq!(stored.len(), readable);
     }
 
     // FIXME: rebuild around a pending CGKA op. Keyline certificates never
@@ -2001,12 +2021,10 @@ mod tests {
         // Store `other`'s full archive so recovery has deps to reload.
         let storage = MemoryKeyhiveStorage::new();
         let storage_id = crate::storage::StorageHash::new([9u8; 32]);
-        let archive = other.into_archive().await.unwrap();
-        crate::storage_ops::save_keyhive_archive::<SimpleKeyhive, _, Local>(
-            &storage, storage_id, &archive,
-        )
-        .await
-        .unwrap();
+        let archive = KeyhiveAccess::<Local>::to_archive(&other).await.unwrap();
+        crate::storage_ops::save_keyhive_archive::<_, Local>(&storage, storage_id, archive)
+            .await
+            .unwrap();
 
         // Recovery disabled: the delegation stays pending and no reload
         // happens, so there are still no delegations.
@@ -2156,11 +2174,11 @@ mod tests {
         let storage_id = crate::storage::StorageHash::new([1u8; 32]);
 
         // Save an archive to storage via storage_ops
-        let archive = keyhive.into_archive().await.unwrap();
-        crate::storage_ops::save_keyhive_archive::<SimpleKeyhive, _, Local>(
+        let archive = KeyhiveAccess::<Local>::to_archive(&keyhive).await.unwrap();
+        crate::storage_ops::save_keyhive_archive::<_, Local>(
             &MemoryKeyhiveStorage::new(),
             storage_id,
-            &archive,
+            archive,
         )
         .await
         .unwrap();
@@ -2179,13 +2197,11 @@ mod tests {
         let storage = MemoryKeyhiveStorage::new();
 
         // Save an archive
-        let archive = keyhive.into_archive().await.unwrap();
+        let archive = KeyhiveAccess::<Local>::to_archive(&keyhive).await.unwrap();
         let storage_id = crate::storage::StorageHash::new([1u8; 32]);
-        crate::storage_ops::save_keyhive_archive::<SimpleKeyhive, _, Local>(
-            &storage, storage_id, &archive,
-        )
-        .await
-        .unwrap();
+        crate::storage_ops::save_keyhive_archive::<_, Local>(&storage, storage_id, archive)
+            .await
+            .unwrap();
 
         let shared = Arc::new(Mutex::new(keyhive));
         let protocol = TestProtocol::new(shared, storage, peer_id, cc.to_bytes());
@@ -2833,11 +2849,14 @@ mod tests {
             "alice's agent should have membership/cgka ops after the group was created"
         );
 
-        // Event bytes are statement frames, decodable as events (matching
-        // keyhive_wasm).
-        for event_bytes in alice_hashes.values() {
-            SimpleKeyhive::decode_event(event_bytes).expect("event_bytes round-trips");
-        }
+        // Event bytes decode as events.
+        let not_ingested = KeyhiveAccess::<Local>::ingest_events(
+            &make_keyhive().await,
+            alice_hashes.values().map(|bytes| bytes.to_vec()).collect(),
+        )
+        .await
+        .expect("ingest_events");
+        assert!(not_ingested.undecodable.is_empty());
 
         // Symmetric: querying for a peer keyhive doesn't know about returns None.
         let unknown = KeyhivePeerId::from_bytes([0xAA; 32]);
