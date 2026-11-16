@@ -43,6 +43,7 @@ use keyhive_crypto::identifier::Identifier;
 
 use crate::{
     access::{KeyhiveAccess, KeyhiveCodec},
+    awaiting_confirmation::AwaitingConfirmation,
     cache::PeriodicEventCache,
     collections::{Map, Set},
     connection::KeyhiveConnection,
@@ -86,8 +87,9 @@ pub struct MessageOutcome {
     pub ingested: bool,
 
     /// The sender confirmed the end of a sync round, having received the
-    /// events this side sent in it. A sync check that finds the two sides
-    /// in sync ends without a confirmation.
+    /// events this side sent in it. A round in which this side sent no events
+    /// is not reported and neither is a sync check that finds the two sides
+    /// in sync.
     pub confirmed: bool,
 }
 
@@ -117,6 +119,7 @@ where
     /// False by default. Enable it with [`Self::with_storage_recovery`].
     attempt_storage_recovery: bool,
     syncpoints: Mutex<SyncpointMap>,
+    awaiting_confirmation: Mutex<AwaitingConfirmation>,
     cache: Mutex<PeriodicEventCache>,
     _marker: core::marker::PhantomData<Async>,
 }
@@ -162,6 +165,7 @@ where
             archive_config: None,
             attempt_storage_recovery: false,
             syncpoints: Mutex::new(SyncpointMap::new()),
+            awaiting_confirmation: Mutex::new(AwaitingConfirmation::new()),
             cache: Mutex::new(PeriodicEventCache::new()),
             _marker: core::marker::PhantomData,
         }
@@ -194,6 +198,7 @@ where
     /// Unregister a peer connection and drop its syncpoint.
     pub async fn remove_peer(&self, peer_id: &KeyhivePeerId) {
         self.syncpoints.lock().await.remove(peer_id);
+        self.awaiting_confirmation.lock().await.remove(peer_id);
         self.peers.lock().await.remove(peer_id);
     }
 
@@ -530,9 +535,12 @@ where
                     .lock()
                     .await
                     .set(sender_id.clone(), *confirmer_total);
+                let mut awaiting = self.awaiting_confirmation.lock().await;
+                let confirmed = awaiting.is_awaiting(sender_id);
+                awaiting.confirm_round(sender_id);
                 Ok(MessageOutcome {
                     ingested: false,
-                    confirmed: true,
+                    confirmed,
                 })
             }
         }
@@ -614,6 +622,14 @@ where
             "sending sync response"
         );
 
+        // Record the round before sending so that a confirmation handled
+        // before the send returns is not missed.
+        if !found_ops.is_empty() {
+            self.awaiting_confirmation
+                .lock()
+                .await
+                .record_round(sender_id.clone());
+        }
         let response = Message::SyncResponse {
             sender_id: self.peer_id.clone(),
             target_id: sender_id.clone(),
@@ -623,8 +639,7 @@ where
             sync_requester_total,
         };
 
-        self.sign_and_send(&sender_id, response, false).await?;
-        Ok(())
+        self.sign_and_send(&sender_id, response, false).await
     }
 
     /// Handle a `SyncResponse`: ingest events we received and send any
@@ -695,6 +710,12 @@ where
                     sync_requester_total,
                 };
 
+                // Record the round before sending so that a confirmation handled
+                // before the send returns is not missed.
+                self.awaiting_confirmation
+                    .lock()
+                    .await
+                    .record_round(sender_id.clone());
                 self.sign_and_send(&sender_id, msg, false).await?;
                 // The other side will send a confirmation after ingesting.
                 if advanced {
@@ -2733,6 +2754,43 @@ mod tests {
             Some(0),
             "bob's syncpoint for alice should be her total before the round"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn confirmation_is_reported_only_for_a_round_in_which_this_side_sent_events() {
+        let TwoPeerHarness {
+            alice_proto,
+            bob_proto,
+            bob_kh,
+            alice_id,
+            bob_id,
+            alice_conn,
+            bob_conn,
+            ..
+        } = exchange_contact_cards_and_setup().await;
+        let round = || {
+            run_sync_round(
+                &alice_proto,
+                &bob_proto,
+                &alice_id,
+                &bob_id,
+                &alice_conn,
+                &bob_conn,
+            )
+        };
+        round().await;
+        {
+            let kh = bob_kh.lock().await;
+            create_group_with_read_members(&kh, &[&alice_id]).await;
+        }
+
+        let (_, at_bob) = round().await;
+        assert!(at_bob.confirmed, "bob sent his new ops in this round");
+
+        // Alice sends back the ops that ingesting Bob's group produced.
+        round().await;
+        let (_, at_bob) = round().await;
+        assert!(!at_bob.confirmed, "bob sent nothing in this round");
     }
 
     #[tokio::test(flavor = "current_thread")]

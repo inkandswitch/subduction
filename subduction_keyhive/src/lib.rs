@@ -35,6 +35,8 @@ pub mod wire;
 #[cfg(feature = "serde")]
 pub mod all_agent_events;
 #[cfg(feature = "serde")]
+mod awaiting_confirmation;
+#[cfg(feature = "serde")]
 mod cache;
 pub mod change_id;
 #[cfg(feature = "serde")]
