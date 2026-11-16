@@ -24,6 +24,7 @@ use sedimentree_core::{
 use sedimentree_wasm::pojo as p;
 use subduction_core::{connection::stats::SyncStats, peer::id::PeerId, timeout::call::CallTimeout};
 use subduction_ephemeral::topic::Topic;
+use subduction_keyhive::SyncMode;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 
@@ -805,7 +806,7 @@ impl SubductionApi {
     pub fn sync_keyhive_with_peer(&self, peer: &JsValue) -> js_sys::Promise {
         self.admit(
             || read_peer(peer),
-            |node, peer| async move { node.sync_keyhive_with_peer(&peer, false).await },
+            |node, peer| async move { node.sync_keyhive_with_peer(&peer, SyncMode::Check).await },
         )
     }
     /// Start a keyhive sync round with a connected peer from a full comparison.
@@ -813,7 +814,7 @@ impl SubductionApi {
     pub fn full_sync_keyhive_with_peer(&self, peer: &JsValue) -> js_sys::Promise {
         self.admit(
             || read_peer(peer),
-            |node, peer| async move { node.sync_keyhive_with_peer(&peer, true).await },
+            |node, peer| async move { node.sync_keyhive_with_peer(&peer, SyncMode::Full).await },
         )
     }
     /// Rebuild the keyhive event cache if keyhive's op count has changed.

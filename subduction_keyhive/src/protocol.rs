@@ -36,6 +36,8 @@ use alloc::{
     vec::Vec,
 };
 
+use std::sync::{Mutex as BlockingMutex, MutexGuard, PoisonError};
+
 use async_lock::Mutex;
 use dupe::Dupe;
 use keyhive_crypto::identifier::Identifier;
@@ -76,6 +78,17 @@ fn pair_set_digest<'a>(hashes: impl IntoIterator<Item = &'a EventHash>) -> Event
     out
 }
 
+/// How [`KeyhiveProtocol::sync_with_peer`] starts a round.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncMode {
+    /// A digest check if an earlier round with the peer left a syncpoint,
+    /// and a full sync otherwise.
+    Check,
+
+    /// A full sync, comparing every event the two share.
+    Full,
+}
+
 /// The outcome of handling a message, for callers that act on sync progress.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MessageOutcome {
@@ -83,10 +96,10 @@ pub struct MessageOutcome {
     /// the message is not counted.
     pub ingested: bool,
 
-    /// The sender confirmed the end of a sync round, having received the
-    /// events this side sent in it. A round in which this side sent no events
-    /// is not reported and neither is a sync check that finds the two sides
-    /// in sync.
+    /// The sender showed it ingested events this side sent it, by confirming
+    /// a round or, as requester, by answering this side's `SyncResponse` with
+    /// `SyncOps`. Rounds in which this side sent no events are not reported,
+    /// and neither is a sync check that finds the two sides in sync.
     pub confirmed: bool,
 }
 
@@ -95,7 +108,7 @@ pub struct MessageOutcome {
 /// Manages peer connections and implements the keyhive sync protocol for
 /// reconciling operations between peers. Keyhive is shared as an
 /// `Arc<Mutex<K>>`, but some calls clone `K` and run after the lock is
-/// released.
+/// released, so clones of `K` must share one keyhive's state.
 pub struct KeyhiveProtocol<K, Conn, Store, Async>
 where
     K: KeyhiveAccess<Async>,
@@ -116,7 +129,10 @@ where
     /// False by default. Enable it with [`Self::with_storage_recovery`].
     attempt_storage_recovery: bool,
     syncpoints: Mutex<SyncpointMap>,
-    awaiting_confirmation: Mutex<AwaitingConfirmation>,
+    /// A blocking mutex, because `send_events` ends a round while it has the
+    /// send's error, which need not be `Send`. Never hold the guard across
+    /// an `.await`.
+    awaiting_confirmation: BlockingMutex<AwaitingConfirmation>,
     cache: Mutex<PeriodicEventCache>,
     _marker: core::marker::PhantomData<Async>,
 }
@@ -162,7 +178,7 @@ where
             archive_config: None,
             attempt_storage_recovery: false,
             syncpoints: Mutex::new(SyncpointMap::new()),
-            awaiting_confirmation: Mutex::new(AwaitingConfirmation::new()),
+            awaiting_confirmation: BlockingMutex::new(AwaitingConfirmation::new()),
             cache: Mutex::new(PeriodicEventCache::new()),
             _marker: core::marker::PhantomData,
         }
@@ -192,10 +208,11 @@ where
         self.peers.lock().await.insert(peer_id, conn);
     }
 
-    /// Unregister a peer connection and drop its syncpoint.
+    /// Unregister a peer connection and drop its syncpoint and its rounds
+    /// awaiting confirmation.
     pub async fn remove_peer(&self, peer_id: &KeyhivePeerId) {
         self.syncpoints.lock().await.remove(peer_id);
-        self.awaiting_confirmation.lock().await.remove(peer_id);
+        self.awaiting().remove(peer_id);
         self.peers.lock().await.remove(peer_id);
     }
 
@@ -260,7 +277,7 @@ where
                 return Ok(None);
             }
             keyhive
-                .events_for_agent(id)
+                .events_for_agent(id, None)
                 .await
                 .map_err(ProtocolError::Keyhive)?
         };
@@ -459,7 +476,7 @@ where
     ///
     /// Verifies the message signature, optionally ingests a contact card,
     /// and dispatches to the appropriate handler based on message type.
-    /// Updates syncpoints internally and returns the message outcome.
+    /// Updates syncpoints internally.
     ///
     /// The optional `conn` is used to auto-register unknown peers when a
     /// `SyncCheck` arrives before any explicit `add_peer` call.
@@ -546,9 +563,7 @@ where
                     .lock()
                     .await
                     .set(sender_id.clone(), *confirmer_total);
-                let mut awaiting = self.awaiting_confirmation.lock().await;
-                let confirmed = awaiting.is_awaiting(sender_id);
-                awaiting.confirm_round(sender_id);
+                let confirmed = self.awaiting().end_round(sender_id);
                 Ok(MessageOutcome {
                     ingested: false,
                     confirmed,
@@ -633,14 +648,7 @@ where
             "sending sync response"
         );
 
-        // Record the round before sending so that a confirmation handled
-        // before the send returns is not missed.
-        if !found_ops.is_empty() {
-            self.awaiting_confirmation
-                .lock()
-                .await
-                .record_round(sender_id.clone());
-        }
+        let sends_events = !found_ops.is_empty();
         let response = Message::SyncResponse {
             sender_id: self.peer_id.clone(),
             target_id: sender_id.clone(),
@@ -650,7 +658,34 @@ where
             sync_requester_total,
         };
 
-        self.sign_and_send(&sender_id, response, false).await
+        if sends_events {
+            self.send_events(&sender_id, response).await
+        } else {
+            self.sign_and_send(&sender_id, response, false).await
+        }
+    }
+
+    /// Send `peer` a message containing events, recording a round that awaits
+    /// its confirmation. The round is recorded before sending, so that a
+    /// confirmation handled before the send returns is not missed, and is
+    /// ended if the send fails.
+    async fn send_events(
+        &self,
+        peer: &KeyhivePeerId,
+        message: Message,
+    ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
+        self.awaiting().record_round(peer.clone());
+        let sent = self.sign_and_send(peer, message, false).await;
+        if sent.is_err() {
+            self.awaiting().end_round(peer);
+        }
+        sent
+    }
+
+    fn awaiting(&self) -> MutexGuard<'_, AwaitingConfirmation> {
+        self.awaiting_confirmation
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Handle a `SyncResponse`: ingest events we received and send any
@@ -658,7 +693,6 @@ where
     ///
     /// If ops are sent back, the other side will confirm in `handle_sync_ops`.
     /// If no ops are sent, we send a confirmation and establish a syncpoint.
-    /// Returns the message outcome.
     async fn handle_sync_response(
         &self,
         message: Message,
@@ -686,15 +720,7 @@ where
             "handling sync response"
         );
 
-        let total_before = self.total_ops().await?;
-
-        let ingested = !found_events.is_empty();
-        if ingested {
-            self.ingest_events(&found_events).await?;
-        }
-
-        let total_after = self.total_ops().await?;
-        let advanced = total_after != total_before;
+        let advanced = self.ingest_and_compare(&found_events).await?;
         let outcome = MessageOutcome {
             ingested: advanced,
             confirmed: false,
@@ -721,13 +747,7 @@ where
                     sync_requester_total,
                 };
 
-                // Record the round before sending so that a confirmation handled
-                // before the send returns is not missed.
-                self.awaiting_confirmation
-                    .lock()
-                    .await
-                    .record_round(sender_id.clone());
-                self.sign_and_send(&sender_id, msg, false).await?;
+                self.send_events(&sender_id, msg).await?;
                 // The other side will send a confirmation after ingesting.
                 if advanced {
                     self.syncpoints.lock().await.invalidate_all();
@@ -757,7 +777,9 @@ where
     }
 
     /// Handle `SyncOps`: ingest received operations and send confirmation.
-    /// Returns the message outcome.
+    ///
+    /// The requester sends `SyncOps` only after ingesting this side's
+    /// `SyncResponse`, so it also confirms that response's round.
     async fn handle_sync_ops(
         &self,
         message: Message,
@@ -782,17 +804,11 @@ where
             "handling sync ops"
         );
 
-        let total_before = self.total_ops().await?;
-
-        if !ops.is_empty() {
-            self.ingest_events(&ops).await?;
-        }
-
-        let total_after = self.total_ops().await?;
-        let advanced = total_after != total_before;
+        let confirmed = self.awaiting().end_round(&sender_id);
+        let advanced = self.ingest_and_compare(&ops).await?;
         let outcome = MessageOutcome {
             ingested: advanced,
-            confirmed: false,
+            confirmed,
         };
 
         // Send confirmation after ingesting ops.
@@ -925,7 +941,7 @@ where
             .to_identifier()
             .map_err(ProtocolError::InvalidIdentifier)?;
 
-        let (our_events, their_events) = {
+        let shared = {
             let keyhive = { self.keyhive.lock().await.dupe() };
 
             if !keyhive
@@ -940,21 +956,21 @@ where
                 return Ok(None);
             }
 
-            let our_events = keyhive
-                .events_for_agent(our_id)
+            // Only the events both are sent are returned, so an implementation
+            // need not encode or copy the rest.
+            let their_hashes = keyhive
+                .event_hashes_for_agent(their_id)
                 .await
                 .map_err(ProtocolError::Keyhive)?;
-            let their_events = keyhive
-                .events_for_agent(their_id)
+            keyhive
+                .events_for_agent(our_id, Some(&their_hashes))
                 .await
-                .map_err(ProtocolError::Keyhive)?;
-            (our_events, their_events)
+                .map_err(ProtocolError::Keyhive)?
         };
 
         Ok(Some(
-            our_events
+            shared
                 .into_iter()
-                .filter(|(h, _)| their_events.contains_key(h))
                 .map(|(h, bytes)| (h, Arc::from(bytes)))
                 .collect(),
         ))
@@ -1002,11 +1018,26 @@ where
         Ok(result)
     }
 
+    /// Ingest `events` as [`Self::ingest_events`] does, returning whether
+    /// keyhive's op count changed.
+    async fn ingest_and_compare<B: AsRef<[u8]>>(
+        &self,
+        events: &[B],
+    ) -> Result<bool, KeyhiveProtocolError<K, Conn, Async>> {
+        if events.is_empty() {
+            return Ok(false);
+        }
+        let total_before = self.total_ops().await?;
+        self.ingest_events(events).await?;
+        Ok(self.total_ops().await? != total_before)
+    }
+
     /// Ingest received event bytes into keyhive and persist them to storage.
     ///
     /// If some events remain pending (missing dependencies), attempts recovery
-    /// by loading from storage and retrying. Events that do not decode are
-    /// neither ingested nor persisted and fail the call once the others are.
+    /// by loading from storage and retrying. If an event does not decode, the
+    /// call fails. When keyhive reports such an event instead of failing on
+    /// it, the other events are ingested and persisted before the call fails.
     async fn ingest_events<B: AsRef<[u8]>>(
         &self,
         event_bytes_list: &[B],
@@ -1091,7 +1122,7 @@ where
         } else {
             Err(ProtocolError::Deserialization(alloc::format!(
                 "{} of {} events do not decode",
-                undecodable.len(),
+                not_ingested.undecodable.len(),
                 event_bytes_list.len()
             )))
         }
@@ -1151,8 +1182,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`StorageError`] if any storage operation, serialization, or
-    /// deserialization fails.
+    /// Returns [`StorageError`] if a storage operation, ingestion, or the
+    /// archive export fails.
     pub async fn compact(&self, storage_id: StorageHash) -> Result<(), StorageError> {
         let keyhive = self.keyhive.lock().await;
         storage_ops::compact(&*keyhive, &self.storage, storage_id).await
@@ -1205,21 +1236,21 @@ where
         Ok(((hash_count + pending_count) as u64, digest))
     }
 
-    /// Sync with a peer using the best available strategy.
-    ///
-    /// Sends a lightweight sync check when a syncpoint exists for the
-    /// peer; otherwise falls back to a full sync.
+    /// Start a round with `peer`, as `mode` says.
     ///
     /// # Errors
     ///
     /// Returns [`ProtocolError`] if the protocol call fails.
-    #[tracing::instrument(name = "keyhive_initiate_sync", level = "debug", skip_all, fields(peer = %peer))]
-    pub async fn initiate_sync_with_peer(
+    #[tracing::instrument(name = "keyhive_sync_with_peer", level = "debug", skip_all, fields(peer = %peer))]
+    pub async fn sync_with_peer(
         &self,
         peer: &KeyhivePeerId,
+        mode: SyncMode,
     ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
-        let syncpoint = self.syncpoints.lock().await.get(peer);
-
+        let syncpoint = match mode {
+            SyncMode::Check => self.syncpoints.lock().await.get(peer),
+            SyncMode::Full => None,
+        };
         match syncpoint {
             Some(sp) => self.sync_check_keyhive(peer, sp).await,
             None => self.sync_keyhive(Some(peer)).await,
@@ -1237,8 +1268,7 @@ where
     }
 }
 
-/// Whether `id` is an agent `keyhive` knows: itself, a known individual, a
-/// document, or a group.
+/// Whether `keyhive` knows `id`, as [`KeyhiveAccess::is_known_agent`] says.
 ///
 /// # Errors
 ///
@@ -1947,16 +1977,22 @@ mod tests {
             .unwrap()
             .into_values()
             .collect();
-        let readable = event_bytes.len();
-        assert!(readable > 0);
+        let readable: Set<Vec<u8>> = event_bytes.iter().map(|b| b.to_vec()).collect();
+        assert!(!readable.is_empty());
         event_bytes.push(Arc::from(&b"not an event"[..]));
 
-        assert!(protocol.ingest_events(&event_bytes).await.is_err());
+        assert!(matches!(
+            protocol.ingest_events(&event_bytes).await,
+            Err(ProtocolError::Deserialization(_))
+        ));
 
-        let stored = crate::storage_ops::load_event_bytes::<_, Local>(&storage)
+        let stored: Set<Vec<u8>> = crate::storage_ops::load_event_bytes::<_, Local>(&storage)
             .await
-            .unwrap();
-        assert_eq!(stored.len(), readable);
+            .unwrap()
+            .into_iter()
+            .map(|(_, bytes)| bytes)
+            .collect();
+        assert_eq!(stored, readable);
     }
 
     // FIXME: rebuild around a pending CGKA op. Keyline certificates never
@@ -2173,26 +2209,6 @@ mod tests {
 
         let result = protocol.handle_message(&fake_sender, junk, None).await;
         assert!(result.is_err(), "junk data should fail verification");
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn compact_via_protocol() {
-        let (protocol, keyhive) = make_protocol().await;
-        let storage_id = crate::storage::StorageHash::new([1u8; 32]);
-
-        // Save an archive to storage via storage_ops
-        let archive = KeyhiveAccess::<Local>::to_archive(&keyhive).await.unwrap();
-        crate::storage_ops::save_keyhive_archive::<_, Local>(
-            &MemoryKeyhiveStorage::new(),
-            storage_id,
-            archive,
-        )
-        .await
-        .unwrap();
-
-        // Compact via protocol should work
-        let result = protocol.compact(storage_id).await;
-        assert!(result.is_ok());
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -2817,7 +2833,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn get_hashes_for_agent_returns_serialised_events_for_known_peer() {
+    async fn get_events_for_agent_returns_decodable_events_for_known_peer() {
         let TwoPeerHarness {
             alice_proto,
             bob_proto,
@@ -2849,14 +2865,13 @@ mod tests {
         let alice_hashes = alice_proto
             .get_events_for_agent(&alice_id)
             .await
-            .expect("alice get_hashes_for_agent")
+            .expect("alice get_events_for_agent")
             .expect("alice agent exists");
         assert!(
             !alice_hashes.is_empty(),
             "alice's agent should have membership/cgka ops after the group was created"
         );
 
-        // Event bytes decode as events.
         let not_ingested = KeyhiveAccess::<Local>::ingest_events(
             &make_keyhive().await,
             alice_hashes.values().map(|bytes| bytes.to_vec()).collect(),
@@ -2871,7 +2886,7 @@ mod tests {
             alice_proto
                 .get_events_for_agent(&unknown)
                 .await
-                .expect("get_hashes_for_agent for unknown peer")
+                .expect("get_events_for_agent for unknown peer")
                 .is_none()
         );
     }
@@ -3174,17 +3189,9 @@ mod tests {
             ingested: true,
             confirmed: true,
         };
-        let ingested = MessageOutcome {
-            ingested: true,
-            confirmed: false,
-        };
-        let confirmed = MessageOutcome {
-            ingested: false,
-            confirmed: true,
-        };
         for (expected_at_bob, expected_at_alice) in [
-            (ingested_and_confirmed, ingested),
-            (MessageOutcome::default(), confirmed),
+            (ingested_and_confirmed, ingested_and_confirmed),
+            (MessageOutcome::default(), MessageOutcome::default()),
         ] {
             let (at_bob, at_alice) = run_sync_round(
                 &bob_proto,
@@ -3198,6 +3205,45 @@ mod tests {
             assert_eq!(at_bob, expected_at_bob);
             assert_eq!(at_alice, expected_at_alice);
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn removing_a_peer_drops_its_rounds_awaiting_confirmation() {
+        let (protocol, _) = make_protocol().await;
+        let peer = KeyhivePeerId::from_bytes([7; 32]);
+        protocol.awaiting().record_round(peer.clone());
+        protocol.awaiting().record_round(peer.clone());
+
+        protocol.remove_peer(&peer).await;
+
+        assert!(!protocol.awaiting().end_round(&peer));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_failed_send_leaves_no_round_awaiting_confirmation() {
+        let TwoPeerHarness {
+            alice_proto,
+            bob_proto,
+            alice_kh,
+            alice_id,
+            bob_id,
+            alice_conn,
+            bob_conn,
+            ..
+        } = exchange_contact_cards_and_setup().await;
+        create_group_with_read_members(&*alice_kh.lock().await, &[&bob_id]).await;
+        bob_proto.sync_keyhive(Some(&alice_id)).await.unwrap();
+        let request = alice_conn.inbound_rx.recv().await.unwrap();
+        bob_conn.inbound_rx.close();
+
+        assert!(
+            alice_proto
+                .handle_message(&bob_id, request, None)
+                .await
+                .is_err()
+        );
+
+        assert!(!alice_proto.awaiting().end_round(&bob_id));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -3419,7 +3465,7 @@ mod protocol_behavioural {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn initiate_sync_with_peer_with_no_syncpoint_does_full_sync() {
+    async fn sync_check_with_no_syncpoint_does_full_sync() {
         let TwoPeerHarness {
             alice_proto,
             alice_id,
@@ -3428,12 +3474,10 @@ mod protocol_behavioural {
             ..
         } = exchange_contact_cards_and_setup().await;
 
-        let alice_proto = Arc::new(alice_proto);
-
         alice_proto
-            .initiate_sync_with_peer(&bob_id)
+            .sync_with_peer(&bob_id, SyncMode::Check)
             .await
-            .expect("initiate_sync_with_peer");
+            .expect("sync_with_peer");
 
         let messages = drain_channel(&bob_conn, &alice_id);
         assert!(
@@ -3443,7 +3487,7 @@ mod protocol_behavioural {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn initiate_sync_with_peer_with_syncpoint_does_sync_check() {
+    async fn sync_check_with_syncpoint_does_sync_check() {
         let TwoPeerHarness {
             alice_proto,
             alice_id,
@@ -3452,19 +3496,40 @@ mod protocol_behavioural {
             ..
         } = exchange_contact_cards_and_setup().await;
 
-        let alice_proto = Arc::new(alice_proto);
-
         alice_proto.syncpoints.lock().await.set(bob_id.clone(), 0);
 
         alice_proto
-            .initiate_sync_with_peer(&bob_id)
+            .sync_with_peer(&bob_id, SyncMode::Check)
             .await
-            .expect("initiate_sync_with_peer");
+            .expect("sync_with_peer");
 
         let messages = drain_channel(&bob_conn, &alice_id);
         assert!(
             matches!(messages.first(), Some(Message::SyncCheck { .. })),
             "expected SyncCheck, got {messages:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn full_sync_ignores_a_syncpoint() {
+        let TwoPeerHarness {
+            alice_proto,
+            alice_id,
+            bob_id,
+            bob_conn,
+            ..
+        } = exchange_contact_cards_and_setup().await;
+        alice_proto.syncpoints.lock().await.set(bob_id.clone(), 0);
+
+        alice_proto
+            .sync_with_peer(&bob_id, SyncMode::Full)
+            .await
+            .expect("sync_with_peer");
+
+        let messages = drain_channel(&bob_conn, &alice_id);
+        assert!(
+            matches!(messages.first(), Some(Message::SyncRequest { .. })),
+            "expected SyncRequest, got {messages:?}"
         );
     }
 

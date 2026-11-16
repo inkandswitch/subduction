@@ -16,16 +16,18 @@ export interface SubductionOptions {
      * dependencies are not reported to that listener, so they are lost on
      * reload and arrive again in the next full sync.
      *
-     * Subduction calls these methods whenever a keyhive frame arrives.
+     * Subduction calls the `KeyhiveAccess` methods when a peer connects, when
+     * a keyhive frame arrives, and during `syncKeyhiveWithPeer`,
+     * `fullSyncKeyhiveWithPeer` and `refreshKeyhiveCache`.
      * Nothing serializes those calls against the caller's own calls on the
      * keyhive, so the caller must keep the two from overlapping.
      */
     keyhive?: KeyhiveAccess;
     /**
      * Called after each keyhive frame. `ingested` is whether its sync ops
-     * increased keyhive's op count and `confirmed` is whether the peer
-     * confirmed the end of a sync round. A frame that fails is not reported,
-     * though it can still have ingested events.
+     * increased keyhive's op count and `confirmed` is whether the peer showed
+     * it ingested events this side sent it. A frame that fails is not
+     * reported, though it can still have ingested events.
      */
     onKeyhiveOutcome?: (peer: PeerId, ingested: boolean, confirmed: boolean) => void;
     defaultTimeoutMilliseconds?: number;

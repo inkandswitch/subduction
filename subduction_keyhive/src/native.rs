@@ -34,8 +34,8 @@ use crate::{
 
 /// An error from a [`Keyhive`] operation. `E` is the Keyline store's error.
 ///
-/// Each variant displays, debug-formats, and reports its source as the
-/// underlying error does.
+/// Each variant displays and reports its source as the underlying error
+/// does.
 #[derive(Debug, thiserror::Error)]
 pub enum NativeKeyhiveError<E: Error + 'static> {
     /// Reading or writing the Keyline store failed.
@@ -134,16 +134,36 @@ where
         })
     }
 
-    fn events_for_agent(
-        &self,
+    fn events_for_agent<'a>(
+        &'a self,
         id: Identifier,
-    ) -> F::Future<'_, Result<BTreeMap<EventHash, EventBytes>, NativeKeyhiveError<K::Error>>> {
+        within: Option<&'a BTreeSet<EventHash>>,
+    ) -> F::Future<'a, Result<BTreeMap<EventHash, EventBytes>, NativeKeyhiveError<K::Error>>> {
         F::from_future(async move {
             Ok(Keyhive::static_events_for_agent(self, id)
                 .await
                 .map_err(NativeKeyhiveError::from)?
                 .into_iter()
-                .map(|(digest, event)| (digest_to_bytes(&digest), encode_value(&event)))
+                .filter_map(|(digest, event)| {
+                    let hash = digest_to_bytes(&digest);
+                    within
+                        .is_none_or(|within| within.contains(&hash))
+                        .then(|| (hash, encode_value(&event)))
+                })
+                .collect())
+        })
+    }
+
+    fn event_hashes_for_agent(
+        &self,
+        id: Identifier,
+    ) -> F::Future<'_, Result<BTreeSet<EventHash>, NativeKeyhiveError<K::Error>>> {
+        F::from_future(async move {
+            Ok(Keyhive::static_events_for_agent(self, id)
+                .await
+                .map_err(NativeKeyhiveError::from)?
+                .keys()
+                .map(digest_to_bytes)
                 .collect())
         })
     }

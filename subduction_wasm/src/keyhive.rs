@@ -18,7 +18,7 @@ use sedimentree_core::collections::Map;
 use subduction_core::{authenticated::Authenticated, connection::Connection, peer::id::PeerId};
 use subduction_keyhive::{
     KeyhiveConnection, KeyhiveMessage, KeyhivePeerId, KeyhiveProtocol, KeyhiveStorage,
-    MessageOutcome, SignedMessage, StorageHash,
+    MessageOutcome, SignedMessage, StorageHash, SyncMode,
 };
 use wasm_bindgen::JsValue;
 
@@ -70,17 +70,24 @@ impl KeyhiveConnection<Local> for PeerConnection {
         message: SignedMessage,
     ) -> <Local as FutureForm>::Future<'_, Result<(), KeyhiveError>> {
         async move {
-            let frame = message.to_cbor().map_err(KeyhiveError::from_display)?;
-            let conn = self
+            let frame = WireMessage::Keyhive(KeyhiveMessage::new(
+                message.to_cbor().map_err(KeyhiveError::from_display)?,
+            ));
+            let conns: Vec<_> = self
                 .connections
                 .lock()
                 .await
                 .get(&self.peer)
-                .map(|conns| conns.head.clone())
-                .ok_or_else(|| KeyhiveError("the peer is not connected".into()))?;
-            conn.send(&WireMessage::Keyhive(KeyhiveMessage::new(frame)))
-                .await
-                .map_err(KeyhiveError::from_display)
+                .map(|conns| conns.iter().cloned().collect())
+                .unwrap_or_default();
+            let mut error = KeyhiveError("the peer is not connected".into());
+            for conn in conns {
+                match conn.send(&frame).await {
+                    Ok(()) => return Ok(()),
+                    Err(e) => error = KeyhiveError::from_display(e),
+                }
+            }
+            Err(error)
         }
         .boxed_local()
     }
@@ -156,10 +163,10 @@ type Protocol = KeyhiveProtocol<WasmKeyhive, PeerConnection, ListenerPersists, L
 
 /// The keyhive sync protocol for a keyhive that JavaScript owns.
 ///
-/// The protocol is created on first use, because creating it reads the
+/// The protocol is created on first use since creating it reads the
 /// keyhive's contact card, which is asynchronous. Each peer is registered
-/// when it connects and keyhive frames are sent on any of its open
-/// connections.
+/// when it connects and keyhive frames are sent on whichever of its
+/// connections accepts them.
 ///
 /// Nothing serializes calls JavaScript makes on the keyhive against calls
 /// the protocol makes, so the two must not overlap.
@@ -207,7 +214,8 @@ impl KeyhiveSync {
                     peer,
                     contact_card,
                 );
-                // Peers that connected while creating the protocol failed.
+                // Peers that connected earlier, when `add_peer` could not
+                // create the protocol.
                 let connected: Vec<PeerId> =
                     self.connections.lock().await.keys().copied().collect();
                 for peer in connected {
@@ -270,22 +278,17 @@ impl KeyhiveSync {
         }
     }
 
-    /// Start a round with `peer`. This sends a digest check if the two have a
-    /// syncpoint from an earlier round and `full` is false. Otherwise, it
-    /// requests a full sync.
+    /// Start a round with `peer`, as `mode` says.
     pub(crate) async fn sync_with_peer(
         &self,
         peer: PeerId,
-        full: bool,
+        mode: SyncMode,
     ) -> Result<(), KeyhiveError> {
-        let protocol = self.protocol().await?;
-        let peer = KeyhivePeerId::from_bytes(*peer.as_bytes());
-        if full {
-            protocol.sync_keyhive(Some(&peer)).await
-        } else {
-            protocol.initiate_sync_with_peer(&peer).await
-        }
-        .map_err(KeyhiveError::from_display)
+        self.protocol()
+            .await?
+            .sync_with_peer(&KeyhivePeerId::from_bytes(*peer.as_bytes()), mode)
+            .await
+            .map_err(KeyhiveError::from_display)
     }
 
     /// Rebuild the event cache if keyhive's op count has changed.
@@ -297,8 +300,14 @@ impl KeyhiveSync {
             .map_err(KeyhiveError::from_display)
     }
 
-    /// Forget a disconnected peer.
+    /// Forget a disconnected peer, unless it has connected again since.
     pub(crate) async fn remove_peer(&self, peer: PeerId) {
+        // Subduction reports a disconnect after removing the peer's last
+        // connection, so the peer may have connected again, and been
+        // registered, before this runs.
+        if self.connections.lock().await.contains_key(&peer) {
+            return;
+        }
         if let Some(protocol) = self.protocol.get() {
             protocol
                 .remove_peer(&KeyhivePeerId::from_bytes(*peer.as_bytes()))

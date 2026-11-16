@@ -20,7 +20,7 @@ pub(crate) fn event_ingestion_error(error: impl Display) -> StorageError {
     StorageError::Load(format!("event ingestion failed: {error}"))
 }
 
-/// Log a stored entry that does not decode, which is skipped.
+/// Warn that a stored entry does not decode and is skipped.
 ///
 /// Entries written in an older format (before the canonical codec) or
 /// corrupted on disk would otherwise stop every later entry from loading.
@@ -187,7 +187,8 @@ where
 /// # Errors
 ///
 /// Returns [`StorageError`] if loading or ingestion fails. Entries that do
-/// not decode are logged and skipped.
+/// not decode are logged and skipped, unless `keyhive` fails the call on
+/// them instead.
 pub async fn ingest_from_storage<K, S, Async>(
     keyhive: &K,
     storage: &S,
@@ -227,7 +228,8 @@ where
 /// 5. Deletes events that have been processed (keeping only pending events)
 ///
 /// Entries that do not decode (an older format, or corruption) are skipped
-/// and left in storage, never deleted.
+/// and left in storage, never deleted, unless `keyhive` fails the call on
+/// them instead.
 ///
 /// # Errors
 ///
@@ -244,14 +246,8 @@ where
     Async: FutureForm,
 {
     // Load raw data (we need hashes for cleanup)
-    let raw_archives = storage
-        .load_archives()
-        .await
-        .map_err(|e| StorageError::Load(e.to_string()))?;
-    let raw_events = storage
-        .load_events()
-        .await
-        .map_err(|e| StorageError::Load(e.to_string()))?;
+    let raw_archives = load_archives(storage).await?;
+    let raw_events = load_event_bytes(storage).await?;
 
     if raw_events.is_empty() && raw_archives.len() <= 1 {
         tracing::debug!("nothing to compact");
@@ -279,7 +275,7 @@ where
 
     let not_ingested = ingest_events(
         keyhive,
-        raw_events.iter().map(|(_, bytes)| bytes.clone()).collect(),
+        raw_events.into_iter().map(|(_, bytes)| bytes).collect(),
     )
     .await?;
     unreadable.extend(
@@ -378,7 +374,7 @@ mod tests {
         // Save alice's real events to storage
         let alice_peer_id = keyhive_peer_id(&alice);
         let alice_id = alice_peer_id.to_identifier().unwrap();
-        let events = KeyhiveAccess::<Local>::events_for_agent(&alice, alice_id)
+        let events = KeyhiveAccess::<Local>::events_for_agent(&alice, alice_id, None)
             .await
             .unwrap();
         assert!(
@@ -390,7 +386,6 @@ mod tests {
             save_event_bytes::<_, Local>(&storage, event).await.unwrap();
         }
 
-        // Before compaction: 2 archives, N events
         let archives_before = KeyhiveStorage::<Local>::load_archives(&storage)
             .await
             .unwrap();
@@ -400,13 +395,11 @@ mod tests {
         assert_eq!(archives_before.len(), 2);
         assert!(!events_before.is_empty());
 
-        // Compact
         let consolidated_id = StorageHash::new([10u8; 32]);
         compact::<_, _, Local>(&alice, &storage, consolidated_id)
             .await
             .unwrap();
 
-        // After compaction: exactly 1 archive at the consolidated key
         let archives_after = KeyhiveStorage::<Local>::load_archives(&storage)
             .await
             .unwrap();
@@ -426,40 +419,47 @@ mod tests {
             "all events should be processed (alice already has them) and deleted"
         );
 
-        // The consolidated archive should be loadable
+        let reloaded = make_keyhive().await;
+        KeyhiveAccess::<Local>::ingest_archive(&reloaded, &archives_after[0].1)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(
-            ingest_from_storage::<_, _, Local>(&alice, &storage)
+            KeyhiveAccess::<Local>::is_known_agent(&reloaded, alice_id)
                 .await
                 .unwrap()
-                .is_empty()
         );
     }
 
-    /// Entries in an older format (or corrupt) are skipped on load, and
-    /// compaction leaves them in storage rather than deleting them.
     #[tokio::test(flavor = "current_thread")]
     async fn unreadable_entries_are_skipped_and_kept() -> testresult::TestResult {
         let alice = make_keyhive().await;
         let storage = MemoryKeyhiveStorage::new();
 
+        let stale_archive = StorageHash::new([0u8; 32]);
         let readable_archive = StorageHash::new([1u8; 32]);
-        save_keyhive_archive::<_, Local>(
-            &storage,
-            readable_archive,
-            KeyhiveAccess::<Local>::to_archive(&alice).await?,
+        let archive = KeyhiveAccess::<Local>::to_archive(&alice).await?;
+        let stale_bytes = b"pre-codec bytes".to_vec();
+
+        // In this order, a load that stopped at the stale archive would miss
+        // the readable one.
+        let reloaded = make_keyhive().await;
+        let unreadable = ingest_archives::<_, Local>(
+            &reloaded,
+            &[
+                (stale_archive, stale_bytes.clone()),
+                (readable_archive, archive.clone()),
+            ],
         )
         .await?;
-        let stale_archive = StorageHash::new([2u8; 32]);
-        KeyhiveStorage::<Local>::save_archive(&storage, stale_archive, b"pre-codec bytes".to_vec())
-            .await?;
+        assert_eq!(unreadable, Set::from([stale_archive]));
+        let alice_id = keyhive_peer_id(&alice).to_identifier()?;
+        assert!(KeyhiveAccess::<Local>::is_known_agent(&reloaded, alice_id).await?);
+
+        save_keyhive_archive::<_, Local>(&storage, readable_archive, archive).await?;
+        KeyhiveStorage::<Local>::save_archive(&storage, stale_archive, stale_bytes).await?;
         let stale_event =
             save_event_bytes::<_, Local>(&storage, b"pre-codec event".to_vec()).await?;
-
-        assert!(
-            ingest_from_storage::<_, _, Local>(&alice, &storage)
-                .await?
-                .is_empty()
-        );
 
         let consolidated = StorageHash::new([10u8; 32]);
         compact::<_, _, Local>(&alice, &storage, consolidated).await?;

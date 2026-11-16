@@ -75,7 +75,7 @@ use subduction_ephemeral::{
     message::{EphemeralMessage, EphemeralPayload},
     topic::Topic,
 };
-use subduction_keyhive::KeyhiveMessage;
+use subduction_keyhive::{KeyhiveMessage, SyncMode};
 use wasm_bindgen::prelude::*;
 
 #[path = "api.rs"]
@@ -768,12 +768,16 @@ impl Node {
             })
             .await
     }
-    /// Start a keyhive sync round with a connected peer.
-    pub async fn sync_keyhive_with_peer(&self, peer: &PeerId, full: bool) -> Result<(), JsValue> {
+    /// Start a keyhive sync round with a connected peer, as `mode` says.
+    pub async fn sync_keyhive_with_peer(
+        &self,
+        peer: &PeerId,
+        mode: SyncMode,
+    ) -> Result<(), JsValue> {
         self.runtime
             .run::<_, JsValue>(async {
                 self.builtin_keyhive()?
-                    .sync_with_peer(*peer, full)
+                    .sync_with_peer(*peer, mode)
                     .await
                     .map_err(|e| JsValue::from_str(&e.to_string()))
             })

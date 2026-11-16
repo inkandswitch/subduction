@@ -246,7 +246,7 @@ pub async fn run_sync_round(
     (at_initiator, at_responder)
 }
 
-/// The outcome of either of two handled messages.
+/// Combine two outcomes, setting each flag that either one sets.
 const fn either(a: MessageOutcome, b: MessageOutcome) -> MessageOutcome {
     MessageOutcome {
         ingested: a.ingested || b.ingested,

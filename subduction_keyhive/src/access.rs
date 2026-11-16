@@ -63,12 +63,21 @@ pub trait KeyhiveAccess<F: FutureForm> {
     /// group it knows.
     fn is_known_agent(&self, id: Identifier) -> F::Future<'_, Result<bool, Self::Error>>;
 
-    /// The membership, prekey, and CGKA events `id` is sent.
+    /// The membership, prekey, and CGKA events `id` is sent, or only those
+    /// whose hashes are in `within` if it is given.
     #[allow(clippy::type_complexity)]
-    fn events_for_agent(
+    fn events_for_agent<'a>(
+        &'a self,
+        id: Identifier,
+        within: Option<&'a BTreeSet<EventHash>>,
+    ) -> F::Future<'a, Result<BTreeMap<EventHash, EventBytes>, Self::Error>>;
+
+    /// The hashes of the events [`Self::events_for_agent`] returns for `id`,
+    /// without their bytes.
+    fn event_hashes_for_agent(
         &self,
         id: Identifier,
-    ) -> F::Future<'_, Result<BTreeMap<EventHash, EventBytes>, Self::Error>>;
+    ) -> F::Future<'_, Result<BTreeSet<EventHash>, Self::Error>>;
 
     /// Every event each agent is sent, with each event once.
     ///

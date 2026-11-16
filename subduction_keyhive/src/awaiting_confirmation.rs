@@ -2,11 +2,15 @@
 //!
 //! A round is recorded when this side sends a peer events in it, as
 //! responder in [`Message::SyncResponse`] or as requester in
-//! [`Message::SyncOps`]. The peer ends such a round with a
-//! [`Message::SyncConfirmation`] once it has ingested the events. A peer
-//! also confirms rounds in which this side sent nothing, so a confirmation
-//! only means the peer received this side's events if a round was awaiting
-//! one.
+//! [`Message::SyncOps`]. The peer shows it has ingested the events by
+//! answering a `SyncOps` with a [`Message::SyncConfirmation`], and a
+//! `SyncResponse` with a `SyncConfirmation` or, if it has events to send
+//! back, with `SyncOps`. A peer also confirms rounds in which this side sent
+//! nothing, so a confirmation only means the peer received this side's
+//! events if a round was awaiting one.
+//!
+//! Rounds are counted per peer, not told apart, so with overlapping rounds a
+//! confirmation can end a different round from the one it answers.
 //!
 //! [`Message::SyncResponse`]: crate::Message
 //! [`Message::SyncOps`]: crate::Message
@@ -39,20 +43,17 @@ impl AwaitingConfirmation {
         *self.inner.entry(peer).or_default() += 1;
     }
 
-    /// Whether `peer` has a round awaiting confirmation.
-    pub(crate) fn is_awaiting(&self, peer: &KeyhivePeerId) -> bool {
-        self.inner.contains_key(peer)
-    }
-
-    /// Mark one of `peer`'s rounds as confirmed. Does nothing if no round is
-    /// awaiting confirmation.
-    pub(crate) fn confirm_round(&mut self, peer: &KeyhivePeerId) {
-        if let Some(count) = self.inner.get_mut(peer) {
-            *count -= 1;
-            if *count == 0 {
-                self.inner.remove(peer);
-            }
+    /// End one of `peer`'s rounds, returning whether one was awaiting
+    /// confirmation.
+    pub(crate) fn end_round(&mut self, peer: &KeyhivePeerId) -> bool {
+        let Some(count) = self.inner.get_mut(peer) else {
+            return false;
+        };
+        *count -= 1;
+        if *count == 0 {
+            self.inner.remove(peer);
         }
+        true
     }
 
     /// Drop every round awaiting confirmation from `peer`.
@@ -70,49 +71,15 @@ mod tests {
     }
 
     #[test]
-    fn no_round_is_awaiting_by_default() {
-        let awaiting = AwaitingConfirmation::new();
-        assert!(!awaiting.is_awaiting(&peer(1)));
-    }
-
-    #[test]
-    fn each_recorded_round_needs_its_own_confirmation() {
+    fn each_recorded_round_ends_once() {
         let mut awaiting = AwaitingConfirmation::new();
         awaiting.record_round(peer(1));
-        awaiting.record_round(peer(1));
-
-        awaiting.confirm_round(&peer(1));
-        assert!(awaiting.is_awaiting(&peer(1)));
-
-        awaiting.confirm_round(&peer(1));
-        assert!(!awaiting.is_awaiting(&peer(1)));
-    }
-
-    #[test]
-    fn confirming_with_nothing_awaiting_does_nothing() {
-        let mut awaiting = AwaitingConfirmation::new();
-        awaiting.confirm_round(&peer(1));
-        awaiting.record_round(peer(1));
-        assert!(awaiting.is_awaiting(&peer(1)));
-    }
-
-    #[test]
-    fn peers_are_tracked_separately() {
-        let mut awaiting = AwaitingConfirmation::new();
         awaiting.record_round(peer(1));
         awaiting.record_round(peer(2));
 
-        awaiting.confirm_round(&peer(1));
-        assert!(!awaiting.is_awaiting(&peer(1)));
-        assert!(awaiting.is_awaiting(&peer(2)));
-    }
-
-    #[test]
-    fn remove_drops_every_round_for_a_peer() {
-        let mut awaiting = AwaitingConfirmation::new();
-        awaiting.record_round(peer(1));
-        awaiting.record_round(peer(1));
-        awaiting.remove(&peer(1));
-        assert!(!awaiting.is_awaiting(&peer(1)));
+        assert!(awaiting.end_round(&peer(1)));
+        assert!(awaiting.end_round(&peer(1)));
+        assert!(!awaiting.end_round(&peer(1)));
+        assert!(awaiting.end_round(&peer(2)));
     }
 }

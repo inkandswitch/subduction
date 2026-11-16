@@ -211,17 +211,24 @@ async fn settle(method: &str, result: Result<JsValue, JsValue>) -> AccessResult<
         .map_err(|e| KeyhiveAccessError::thrown(method, &e))
 }
 
-fn bytes(value: &JsValue, method: &str) -> AccessResult<Vec<u8>> {
+fn uint8_array<'a>(value: &'a JsValue, method: &str) -> AccessResult<&'a Uint8Array> {
     value
         .dyn_ref::<Uint8Array>()
-        .map(Uint8Array::to_vec)
         .ok_or_else(|| KeyhiveAccessError::shape(method, "a Uint8Array"))
 }
 
+fn bytes(value: &JsValue, method: &str) -> AccessResult<Vec<u8>> {
+    uint8_array(value, method).map(Uint8Array::to_vec)
+}
+
 fn array32(value: &JsValue, method: &str) -> AccessResult<[u8; 32]> {
-    bytes(value, method)?
-        .try_into()
-        .map_err(|_| KeyhiveAccessError::shape(method, "32 bytes"))
+    let array = uint8_array(value, method)?;
+    if array.length() != 32 {
+        return Err(KeyhiveAccessError::shape(method, "32 bytes"));
+    }
+    let mut out = [0; 32];
+    array.copy_to(&mut out);
+    Ok(out)
 }
 
 /// The values an iterable yields.
@@ -293,6 +300,15 @@ fn agent_hashes(all: &JsValue) -> AccessResult<BTreeMap<AgentId, BTreeSet<EventH
     Ok(out)
 }
 
+const EVENTS_FOR_AGENT: &str = "eventsForAgent";
+
+impl WasmKeyhive {
+    async fn js_events_for_agent(&self, id: Identifier) -> AccessResult<JsValue> {
+        let id = Uint8Array::from(id.as_bytes().as_slice());
+        settle(EVENTS_FOR_AGENT, self.0.js_events_for_agent(id)).await
+    }
+}
+
 impl KeyhiveAccess<Local> for WasmKeyhive {
     type Error = KeyhiveAccessError;
 
@@ -338,17 +354,38 @@ impl KeyhiveAccess<Local> for WasmKeyhive {
         .boxed_local()
     }
 
-    fn events_for_agent(
+    fn events_for_agent<'a>(
+        &'a self,
+        id: Identifier,
+        within: Option<&'a BTreeSet<EventHash>>,
+    ) -> <Local as FutureForm>::Future<'a, AccessResult<BTreeMap<EventHash, EventBytes>>> {
+        async move {
+            let events = self.js_events_for_agent(id).await?;
+            let mut out = BTreeMap::new();
+            for (hash, event) in entries(&events, EVENTS_FOR_AGENT)? {
+                let hash = array32(&hash, EVENTS_FOR_AGENT)?;
+                // An event left out keeps its bytes in JavaScript.
+                if within.is_none_or(|within| within.contains(&hash)) {
+                    out.insert(hash, bytes(&event, EVENTS_FOR_AGENT)?);
+                }
+            }
+            Ok(out)
+        }
+        .boxed_local()
+    }
+
+    fn event_hashes_for_agent(
         &self,
         id: Identifier,
-    ) -> <Local as FutureForm>::Future<'_, AccessResult<BTreeMap<EventHash, EventBytes>>> {
+    ) -> <Local as FutureForm>::Future<'_, AccessResult<BTreeSet<EventHash>>> {
         async move {
-            const METHOD: &str = "eventsForAgent";
-            let id = Uint8Array::from(id.as_bytes().as_slice());
-            let events = settle(METHOD, self.0.js_events_for_agent(id)).await?;
-            entries(&events, METHOD)?
-                .into_iter()
-                .map(|(hash, event)| Ok((array32(&hash, METHOD)?, bytes(&event, METHOD)?)))
+            let events = self.js_events_for_agent(id).await?;
+            let map = events
+                .dyn_ref::<Map>()
+                .ok_or_else(|| KeyhiveAccessError::shape(EVENTS_FOR_AGENT, "a Map"))?;
+            iterate(&map.keys(), EVENTS_FOR_AGENT)?
+                .iter()
+                .map(|hash| array32(hash, EVENTS_FOR_AGENT))
                 .collect()
         }
         .boxed_local()
