@@ -146,7 +146,6 @@ impl PeriodicEventCache {
         K: KeyhiveAccess<Async> + Dupe,
         Conn: KeyhiveConnection<Async>,
         Conn::SendError: 'static,
-        Conn::DisconnectError: 'static,
         Store: KeyhiveStorage<Async>,
         Async: future_form::FutureForm,
     {

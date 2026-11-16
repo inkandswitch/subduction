@@ -18,7 +18,7 @@ mod collections;
 pub mod access;
 pub mod connection;
 pub mod error;
-#[cfg(feature = "handler")]
+#[cfg(feature = "serde")]
 pub mod handler;
 pub mod message;
 #[cfg(feature = "native")]

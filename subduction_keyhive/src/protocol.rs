@@ -81,8 +81,8 @@ fn pair_set_digest<'a>(hashes: impl IntoIterator<Item = &'a EventHash>) -> Event
 /// How [`KeyhiveProtocol::sync_with_peer`] starts a round.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncMode {
-    /// A digest check if an earlier round with the peer left a syncpoint,
-    /// and a full sync otherwise.
+    /// A digest check if an earlier round with the peer left a syncpoint.
+    /// Otherwise, a full sync.
     Check,
 
     /// A full sync, comparing every event the two share.
@@ -98,8 +98,8 @@ pub struct MessageOutcome {
 
     /// The sender showed it ingested events this side sent it, by confirming
     /// a round or, as requester, by answering this side's `SyncResponse` with
-    /// `SyncOps`. Rounds in which this side sent no events are not reported,
-    /// and neither is a sync check that finds the two sides in sync.
+    /// `SyncOps`. Rounds in which this side sent no events are not reported
+    /// and neither is a sync check that determines the two sides are in sync.
     pub confirmed: bool,
 }
 
@@ -156,7 +156,6 @@ where
     K: KeyhiveAccess<Async> + Dupe,
     Conn: KeyhiveConnection<Async>,
     Conn::SendError: 'static,
-    Conn::DisconnectError: 'static,
     Store: KeyhiveStorage<Async>,
     Async: future_form::FutureForm,
 {
@@ -254,7 +253,7 @@ where
 
     /// Serialized events reachable by `peer_id`.
     ///
-    /// Values are `Arc`-shared.
+    /// Values are [`Arc`]-shared.
     ///
     /// # Errors
     ///
@@ -665,10 +664,6 @@ where
         }
     }
 
-    /// Send `peer` a message containing events, recording a round that awaits
-    /// its confirmation. The round is recorded before sending, so that a
-    /// confirmation handled before the send returns is not missed, and is
-    /// ended if the send fails.
     async fn send_events(
         &self,
         peer: &KeyhivePeerId,
@@ -688,7 +683,7 @@ where
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Handle a `SyncResponse`: ingest events we received and send any
+    /// Handle a `SyncResponse`, ingest events we received, and send any
     /// requested ops back.
     ///
     /// If ops are sent back, the other side will confirm in `handle_sync_ops`.
@@ -757,7 +752,7 @@ where
         }
 
         // No ops to send back. Send confirmation and establish syncpoint.
-        // Our total is sync_requester_total (we are the requester).
+        // Our total is `sync_requester_total` (we are the requester).
         let confirmation = Message::SyncConfirmation {
             sender_id: self.peer_id.clone(),
             target_id: sender_id.clone(),
@@ -776,7 +771,7 @@ where
         Ok(outcome)
     }
 
-    /// Handle `SyncOps`: ingest received operations and send confirmation.
+    /// Handle `SyncOps`, ingest received operations, and send confirmation.
     ///
     /// The requester sends `SyncOps` only after ingesting this side's
     /// `SyncResponse`, so it also confirms that response's round.
@@ -812,7 +807,7 @@ where
         };
 
         // Send confirmation after ingesting ops.
-        // Our total is sync_responder_total (we are the responder).
+        // Our total is `sync_responder_total` (we are the responder).
         let confirmation = Message::SyncConfirmation {
             sender_id: self.peer_id.clone(),
             target_id: sender_id.clone(),
@@ -831,7 +826,7 @@ where
         Ok(outcome)
     }
 
-    /// Handle `RequestContactCard`: send our contact card to the requesting
+    /// Handle `RequestContactCard` and send our contact card to the requesting
     /// peer.
     async fn handle_request_contact_card(
         &self,
@@ -858,7 +853,7 @@ where
         Ok(())
     }
 
-    /// Handle `MissingContactCard`: the contact card was already ingested in
+    /// Handle `MissingContactCard`. The contact card was already ingested in
     /// `handle_message`, so now we trigger a sync with the peer.
     async fn handle_missing_contact_card(
         &self,
@@ -1018,8 +1013,7 @@ where
         Ok(result)
     }
 
-    /// Ingest `events` as [`Self::ingest_events`] does, returning whether
-    /// keyhive's op count changed.
+    /// Ingest `events`, returning whether keyhive's op count changed.
     async fn ingest_and_compare<B: AsRef<[u8]>>(
         &self,
         events: &[B],

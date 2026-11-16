@@ -9,9 +9,6 @@
 //! nothing, so a confirmation only means the peer received this side's
 //! events if a round was awaiting one.
 //!
-//! Rounds are counted per peer, not told apart, so with overlapping rounds a
-//! confirmation can end a different round from the one it answers.
-//!
 //! [`Message::SyncResponse`]: crate::Message
 //! [`Message::SyncOps`]: crate::Message
 //! [`Message::SyncConfirmation`]: crate::Message

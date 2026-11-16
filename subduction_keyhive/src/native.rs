@@ -20,7 +20,7 @@ use keyhive_core::{
     event::{Event, static_event::StaticEvent},
     keyhive::{Keyhive, ReceiveStaticEventError},
     listener::membership::MembershipListener,
-    principal::individual::{ReceivePrekeyOpError, id::IndividualId},
+    principal::individual::ReceivePrekeyOpError,
 };
 use keyhive_crypto::{
     digest::Digest, identifier::Identifier, signer::async_signer::AsyncSigner, verified::SignError,
@@ -100,14 +100,7 @@ where
     type Error = NativeKeyhiveError<K::Error>;
 
     fn total_ops(&self) -> F::Future<'_, Result<u64, NativeKeyhiveError<K::Error>>> {
-        F::from_future(async move {
-            let stats = Keyhive::stats(self).await;
-            Ok(stats.delegations
-                + stats.revocations
-                + stats.prekeys_expanded
-                + stats.prekey_rotations
-                + stats.cgka_operations)
-        })
+        F::from_future(async move { Ok(Keyhive::stats(self).await.total_ops()) })
     }
 
     fn pending_event_hashes(
@@ -123,15 +116,7 @@ where
         &self,
         id: Identifier,
     ) -> F::Future<'_, Result<bool, NativeKeyhiveError<K::Error>>> {
-        F::from_future(async move {
-            Ok(Keyhive::id(self) == IndividualId::from(id)
-                || self.has_individual(id.into()).await
-                || self.has_document(id.into()).await
-                || self
-                    .has_group(id.into())
-                    .await
-                    .map_err(NativeKeyhiveError::from)?)
-        })
+        F::from_future(async move { Ok(self.has_agent(id).await?) })
     }
 
     fn events_for_agent<'a>(

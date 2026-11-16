@@ -1,7 +1,6 @@
 //! Test utilities for the keyhive protocol crate.
 
 use alloc::{sync::Arc, vec, vec::Vec};
-use core::convert::Infallible;
 
 use async_channel::{Receiver, Sender};
 use async_lock::Mutex;
@@ -71,11 +70,6 @@ impl ChannelConnection {
 #[error("channel closed: cannot send")]
 pub struct ChannelSendError;
 
-/// Channel is closed, cannot receive.
-#[derive(Debug, Clone, Copy, thiserror::Error)]
-#[error("channel closed: cannot receive")]
-pub struct ChannelRecvError;
-
 /// Create a pair of connected channel connections.
 ///
 /// Returns `(conn_a_to_b, conn_b_to_a)` where:
@@ -96,8 +90,6 @@ pub fn create_channel_pair(
 
 impl KeyhiveConnection<Local> for ChannelConnection {
     type SendError = ChannelSendError;
-    type RecvError = ChannelRecvError;
-    type DisconnectError = Infallible;
 
     fn peer_id(&self) -> KeyhivePeerId {
         self.remote_peer_id.clone()
@@ -106,17 +98,6 @@ impl KeyhiveConnection<Local> for ChannelConnection {
     fn send(&self, message: SignedMessage) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
         let tx = self.outbound_tx.clone();
         async move { tx.send(message).await.map_err(|_| ChannelSendError) }.boxed_local()
-    }
-
-    fn recv(&self) -> LocalBoxFuture<'_, Result<SignedMessage, Self::RecvError>> {
-        let rx = self.inbound_rx.clone();
-        async move { rx.recv().await.map_err(|_| ChannelRecvError) }.boxed_local()
-    }
-
-    fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectError>> {
-        self.outbound_tx.close();
-        self.inbound_rx.close();
-        async { Ok(()) }.boxed_local()
     }
 }
 
