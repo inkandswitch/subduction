@@ -212,9 +212,13 @@ impl Node {
         let ephemeral_for_node = ephemeral_handler.clone();
         let send_counter = sync_handler.send_counter().clone();
         let keyhive_handler = Arc::new(Mutex::new(None));
-        let keyhive = opts
-            .keyhive()
-            .map(|access| Rc::new(KeyhiveSync::new(access, opts.on_keyhive_outcome())));
+        let keyhive = opts.keyhive().map(|access| {
+            Rc::new(KeyhiveSync::new(
+                access,
+                opts.on_keyhive_outcome(),
+                connections.clone(),
+            ))
+        });
         let handler = Arc::new(WasmComposedHandler::new(
             sync_handler,
             ephemeral_handler,
@@ -283,6 +287,11 @@ impl Node {
         let fresh = self.core.add_connection(managed).await?;
         if fresh {
             self.ephemeral_handler.subscribe_peer(peer).await;
+            if let Some(keyhive) = &self.keyhive
+                && let Err(e) = keyhive.add_peer(peer).await
+            {
+                tracing::warn!(%peer, "keyhive could not register the peer: {e}");
+            }
         }
         Ok(fresh)
     }
@@ -763,14 +772,8 @@ impl Node {
     pub async fn sync_keyhive_with_peer(&self, peer: &PeerId, full: bool) -> Result<(), JsValue> {
         self.runtime
             .run::<_, JsValue>(async {
-                let keyhive = self.builtin_keyhive()?;
-                let conn = self
-                    .core
-                    .get_connection(peer)
-                    .await
-                    .ok_or_else(|| JsValue::from_str("no connection for peer"))?;
-                keyhive
-                    .sync_with_peer(&conn, full)
+                self.builtin_keyhive()?
+                    .sync_with_peer(*peer, full)
                     .await
                     .map_err(|e| JsValue::from_str(&e.to_string()))
             })

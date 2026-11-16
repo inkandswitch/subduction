@@ -131,7 +131,7 @@ impl Handler<Local, WasmConn> for WasmKeyhiveHandler {
         Box::pin(async move {
             if let Some(builtin) = &self.builtin {
                 return builtin
-                    .handle_frame(conn, message.payload())
+                    .handle_frame(conn.peer_id(), message.payload())
                     .await
                     .map_err(|e| WasmKeyhiveHandlerError(e.to_string()));
             }

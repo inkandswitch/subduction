@@ -13,6 +13,8 @@ use core::fmt::Display;
 use async_lock::{Mutex, OnceCell};
 use future_form::{FutureForm, Local};
 use futures::FutureExt;
+use nonempty::NonEmpty;
+use sedimentree_core::collections::Map;
 use subduction_core::{authenticated::Authenticated, connection::Connection, peer::id::PeerId};
 use subduction_keyhive::{
     KeyhiveConnection, KeyhiveMessage, KeyhivePeerId, KeyhiveProtocol, KeyhiveStorage,
@@ -35,11 +37,23 @@ impl KeyhiveError {
     }
 }
 
-/// Sends keyhive frames on a peer's Subduction connection.
-#[derive(Debug, Clone)]
+/// Every connection to each peer.
+pub(crate) type Connections =
+    Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<NodeConnection, Local>>>>>;
+
+/// Sends keyhive frames on one of a peer's open connections.
+#[derive(Clone)]
 struct PeerConnection {
-    peer: KeyhivePeerId,
-    conn: Authenticated<NodeConnection, Local>,
+    peer: PeerId,
+    connections: Connections,
+}
+
+impl core::fmt::Debug for PeerConnection {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PeerConnection")
+            .field("peer", &self.peer)
+            .finish_non_exhaustive()
+    }
 }
 
 impl KeyhiveConnection<Local> for PeerConnection {
@@ -48,7 +62,7 @@ impl KeyhiveConnection<Local> for PeerConnection {
     type DisconnectError = KeyhiveError;
 
     fn peer_id(&self) -> KeyhivePeerId {
-        self.peer.clone()
+        KeyhivePeerId::from_bytes(*self.peer.as_bytes())
     }
 
     fn send(
@@ -57,8 +71,14 @@ impl KeyhiveConnection<Local> for PeerConnection {
     ) -> <Local as FutureForm>::Future<'_, Result<(), KeyhiveError>> {
         async move {
             let frame = message.to_cbor().map_err(KeyhiveError::from_display)?;
-            self.conn
-                .send(&WireMessage::Keyhive(KeyhiveMessage::new(frame)))
+            let conn = self
+                .connections
+                .lock()
+                .await
+                .get(&self.peer)
+                .map(|conns| conns.head.clone())
+                .ok_or_else(|| KeyhiveError("the peer is not connected".into()))?;
+            conn.send(&WireMessage::Keyhive(KeyhiveMessage::new(frame)))
                 .await
                 .map_err(KeyhiveError::from_display)
         }
@@ -137,11 +157,9 @@ type Protocol = KeyhiveProtocol<WasmKeyhive, PeerConnection, ListenerPersists, L
 /// The keyhive sync protocol for a keyhive that JavaScript owns.
 ///
 /// The protocol is created on first use, because creating it reads the
-/// keyhive's contact card, which is asynchronous. It stores nothing. The
-/// caller persists keyhive state from the keyhive's event listener, which
-/// reports every event the protocol applies. Received events still waiting
-/// for their dependencies are not reported, so they are lost on reload and
-/// arrive again in the next full sync.
+/// keyhive's contact card, which is asynchronous. Each peer is registered
+/// when it connects and keyhive frames are sent on any of its open
+/// connections.
 ///
 /// Nothing serializes calls JavaScript makes on the keyhive against calls
 /// the protocol makes, so the two must not overlap.
@@ -149,6 +167,7 @@ pub(crate) struct KeyhiveSync {
     keyhive: WasmKeyhive,
     protocol: OnceCell<Protocol>,
     on_outcome: Option<js_sys::Function>,
+    connections: Connections,
 }
 
 impl core::fmt::Debug for KeyhiveSync {
@@ -158,11 +177,16 @@ impl core::fmt::Debug for KeyhiveSync {
 }
 
 impl KeyhiveSync {
-    pub(crate) fn new(access: JsKeyhiveAccess, on_outcome: Option<js_sys::Function>) -> Self {
+    pub(crate) fn new(
+        access: JsKeyhiveAccess,
+        on_outcome: Option<js_sys::Function>,
+        connections: Connections,
+    ) -> Self {
         Self {
             keyhive: WasmKeyhive::from(access),
             protocol: OnceCell::new(),
             on_outcome,
+            connections,
         }
     }
 
@@ -177,52 +201,57 @@ impl KeyhiveSync {
                     .contact_card()
                     .await
                     .map_err(KeyhiveError::from_display)?;
-                Ok(KeyhiveProtocol::new(
+                let protocol = KeyhiveProtocol::new(
                     Arc::new(Mutex::new(self.keyhive.clone())),
                     ListenerPersists,
                     peer,
                     contact_card,
-                ))
+                );
+                // Peers that connected while creating the protocol failed.
+                let connected: Vec<PeerId> =
+                    self.connections.lock().await.keys().copied().collect();
+                for peer in connected {
+                    self.register(&protocol, peer).await;
+                }
+                Ok(protocol)
             })
             .await
     }
 
-    /// Register `conn` as the connection for its peer, replacing any earlier
-    /// one.
-    async fn register(
-        &self,
-        protocol: &Protocol,
-        conn: &Authenticated<NodeConnection, Local>,
-    ) -> KeyhivePeerId {
-        let peer = KeyhivePeerId::from_bytes(*conn.peer_id().as_bytes());
+    /// Register a newly connected peer with the protocol, creating the
+    /// protocol if this is the first.
+    pub(crate) async fn add_peer(&self, peer: PeerId) -> Result<(), KeyhiveError> {
+        self.register(self.protocol().await?, peer).await;
+        Ok(())
+    }
+
+    async fn register(&self, protocol: &Protocol, peer: PeerId) {
         protocol
             .add_peer(
-                peer.clone(),
+                KeyhivePeerId::from_bytes(*peer.as_bytes()),
                 PeerConnection {
-                    peer: peer.clone(),
-                    conn: conn.clone(),
+                    peer,
+                    connections: self.connections.clone(),
                 },
             )
             .await;
-        peer
     }
 
-    /// Handle a keyhive frame from `conn`'s peer, and report the outcome to
-    /// the `onKeyhiveOutcome` callback. Events can already be ingested when
-    /// an error is returned, and the outcome is then not reported.
+    /// Handle a keyhive frame from `peer` and report the outcome to the
+    /// `onKeyhiveOutcome` callback. Events can already be ingested when an
+    /// error is returned, in which case the outcome is not reported.
     pub(crate) async fn handle_frame(
         &self,
-        conn: &Authenticated<NodeConnection, Local>,
+        peer: PeerId,
         frame: &[u8],
     ) -> Result<(), KeyhiveError> {
         let protocol = self.protocol().await?;
-        let peer = self.register(protocol, conn).await;
         let message = SignedMessage::from_cbor(frame).map_err(KeyhiveError::from_display)?;
         let outcome = protocol
-            .handle_message(&peer, message, None)
+            .handle_message(&KeyhivePeerId::from_bytes(*peer.as_bytes()), message, None)
             .await
             .map_err(KeyhiveError::from_display)?;
-        self.report(conn.peer_id(), outcome);
+        self.report(peer, outcome);
         Ok(())
     }
 
@@ -241,16 +270,16 @@ impl KeyhiveSync {
         }
     }
 
-    /// Start a round with `conn`'s peer. This sends a digest check if the two
-    /// have a syncpoint from an earlier round and `full` is false. Otherwise,
-    /// it requests a full sync.
+    /// Start a round with `peer`. This sends a digest check if the two have a
+    /// syncpoint from an earlier round and `full` is false. Otherwise, it
+    /// requests a full sync.
     pub(crate) async fn sync_with_peer(
         &self,
-        conn: &Authenticated<NodeConnection, Local>,
+        peer: PeerId,
         full: bool,
     ) -> Result<(), KeyhiveError> {
         let protocol = self.protocol().await?;
-        let peer = self.register(protocol, conn).await;
+        let peer = KeyhivePeerId::from_bytes(*peer.as_bytes());
         if full {
             protocol.sync_keyhive(Some(&peer)).await
         } else {
