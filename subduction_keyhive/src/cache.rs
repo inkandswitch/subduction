@@ -16,7 +16,7 @@ use alloc::{
 use dupe::Dupe;
 
 use crate::{
-    KeyhivePeerId, KeyhiveProtocol, ProtocolError,
+    KeyhivePeerId, KeyhiveProtocol, KeyhiveProtocolError,
     access::KeyhiveAccess,
     connection::KeyhiveConnection,
     message::{AgentHashMap, EventHash},
@@ -137,11 +137,11 @@ impl PeriodicEventCache {
     ///
     /// # Errors
     ///
-    /// Returns [`ProtocolError`] if keyhive cannot count or list its events.
+    /// Returns [`KeyhiveProtocolError`] if keyhive cannot count or list its events.
     pub(crate) async fn refresh<K, Conn, Store, Async>(
         &mut self,
         protocol: &KeyhiveProtocol<K, Conn, Store, Async>,
-    ) -> Result<bool, ProtocolError<Conn::SendError>>
+    ) -> Result<bool, KeyhiveProtocolError<K, Conn, Async>>
     where
         K: KeyhiveAccess<Async> + Dupe,
         Conn: KeyhiveConnection<Async>,

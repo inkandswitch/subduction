@@ -59,7 +59,7 @@ use subduction_core::{
 use subduction_crypto::signer::memory::MemorySigner;
 
 use crate::{
-    KEYHIVE_SCHEMA, KeyhiveMessage, KeyhivePeerId, MemoryKeyhiveStorage, ProtocolError,
+    KEYHIVE_SCHEMA, KeyhiveMessage, KeyhivePeerId, KeyhiveProtocolError, MemoryKeyhiveStorage,
     SignedMessage,
     connection::KeyhiveConnection,
     handler::{SendableKeyhiveHandler, SendableRuntimeProtocol},
@@ -263,7 +263,8 @@ impl<T: NodeTransport> Node<T> {
     /// Returns an error if a sync request can't be built or sent.
     pub async fn sync_keyhive(
         &self,
-    ) -> Result<(), ProtocolError<NodeKeyhiveSendError<T::SendError>>> {
+    ) -> Result<(), KeyhiveProtocolError<SendableRuntimeKeyhive, NodeKeyhiveConn<T>, Sendable>>
+    {
         self.protocol.sync_keyhive(None).await
     }
 }

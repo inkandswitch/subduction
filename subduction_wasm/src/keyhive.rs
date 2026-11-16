@@ -277,3 +277,15 @@ impl KeyhiveSync {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn protocol_errors_are_unwind_safe() {
+        fn unwind_safe<T: core::panic::UnwindSafe + core::panic::RefUnwindSafe>() {}
+        unwind_safe::<subduction_keyhive::KeyhiveProtocolError<WasmKeyhive, PeerConnection, Local>>(
+        );
+    }
+}

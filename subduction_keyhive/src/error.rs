@@ -1,7 +1,5 @@
 //! Error types for the keyhive protocol.
 
-#[cfg(feature = "std")]
-use alloc::boxed::Box;
 use alloc::string::String;
 
 use thiserror::Error;
@@ -9,17 +7,17 @@ use thiserror::Error;
 #[cfg(feature = "std")]
 use crate::peer_id::KeyhivePeerId;
 
-/// Errors that can occur during message signing.
+/// Errors that can occur during message signing. `E` is the keyhive's error.
 #[cfg(feature = "std")]
 #[derive(Debug, Error)]
-pub enum SigningError {
+pub enum SigningError<E: core::error::Error + 'static> {
     /// Failed to serialize the message payload.
     #[error("failed to serialize payload: {0}")]
     Serialization(String),
 
     /// The signing operation failed.
     #[error("signing failed")]
-    SigningFailed(#[source] Box<dyn core::error::Error + Send + Sync + 'static>),
+    SigningFailed(#[source] E),
 }
 
 /// Errors that can occur during message verification.
@@ -44,17 +42,21 @@ pub enum VerificationError {
     },
 }
 
-/// Errors that can occur during protocol operations.
+/// Errors that can occur during protocol operations. `SendErr` is the
+/// connection's send error and `KeyhiveErr` the keyhive's error.
 #[cfg(feature = "std")]
 #[derive(Debug, Error)]
-pub enum ProtocolError<SendErr: core::error::Error + 'static> {
+pub enum ProtocolError<
+    SendErr: core::error::Error + 'static,
+    KeyhiveErr: core::error::Error + 'static,
+> {
     /// Failed to send a message.
     #[error("send error")]
     Send(#[source] SendErr),
 
     /// Message signing failed.
     #[error("signing error")]
-    Signing(#[from] SigningError),
+    Signing(#[from] SigningError<KeyhiveErr>),
 
     /// Message verification failed.
     #[error("verification error")]
@@ -78,15 +80,12 @@ pub enum ProtocolError<SendErr: core::error::Error + 'static> {
     InvalidIdentifier(#[source] keyhive_crypto::identifier::InvalidIdentifier),
 
     /// A keyhive operation failed.
-    ///
-    /// Boxed so `ProtocolError` needs no type parameter for the keyhive's
-    /// error. The source chain is kept.
     #[error("keyhive operation failed")]
-    Keyhive(#[source] alloc::boxed::Box<dyn core::error::Error + Send + Sync + 'static>),
+    Keyhive(#[source] KeyhiveErr),
 
     /// Failed to receive contact card.
     #[error("failed to receive contact card")]
-    ReceiveContactCard(#[source] Box<dyn core::error::Error + Send + Sync + 'static>),
+    ReceiveContactCard(#[source] KeyhiveErr),
 
     /// Serialization failed.
     #[error("serialization error: {0}")]

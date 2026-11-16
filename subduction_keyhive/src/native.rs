@@ -1,11 +1,10 @@
 //! [`KeyhiveAccess`] for `keyhive_core`'s [`Keyhive`].
 
 use alloc::{
-    boxed::Box,
     collections::{BTreeMap, BTreeSet},
     vec::Vec,
 };
-use core::{error::Error, fmt};
+use core::error::Error;
 
 use future_form::{FutureForm, Local, Sendable, future_form};
 use keyhive_codec::traits::{Decode, Encode};
@@ -15,14 +14,17 @@ use keyhive_content::{
 };
 use keyhive_core::{
     archive::Archive,
-    contact_card::ContactCard,
+    certificate::KeylineStorageError,
+    contact_card::{ContactCard, ContactCardError},
     content::heads::ContentHeads,
     event::{Event, static_event::StaticEvent},
-    keyhive::Keyhive,
+    keyhive::{Keyhive, ReceiveStaticEventError},
     listener::membership::MembershipListener,
-    principal::individual::id::IndividualId,
+    principal::individual::{ReceivePrekeyOpError, id::IndividualId},
 };
-use keyhive_crypto::{digest::Digest, identifier::Identifier, signer::async_signer::AsyncSigner};
+use keyhive_crypto::{
+    digest::Digest, identifier::Identifier, signer::async_signer::AsyncSigner, verified::SignError,
+};
 use keyline::contract::Keyline;
 
 use crate::{
@@ -30,34 +32,31 @@ use crate::{
     message::{EventBytes, EventHash},
 };
 
-/// An error from a [`Keyhive`] operation.
+/// An error from a [`Keyhive`] operation. `E` is the Keyline store's error.
 ///
-/// Displays, debug-formats, and reports its source as the underlying error
-/// does.
-pub struct NativeKeyhiveError(Box<dyn Error + Send + Sync + 'static>);
+/// Each variant displays, debug-formats, and reports its source as the
+/// underlying error does.
+#[derive(Debug, thiserror::Error)]
+pub enum NativeKeyhiveError<E: Error + 'static> {
+    /// Reading or writing the Keyline store failed.
+    #[error(transparent)]
+    Storage(#[from] KeylineStorageError<E>),
 
-impl NativeKeyhiveError {
-    fn new(error: impl Error + Send + Sync + 'static) -> Self {
-        Self(Box::new(error))
-    }
-}
+    /// Signing failed.
+    #[error(transparent)]
+    Sign(#[from] SignError),
 
-impl fmt::Debug for NativeKeyhiveError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&self.0, f)
-    }
-}
+    /// A received contact card does not decode or verify.
+    #[error(transparent)]
+    ContactCard(#[from] ContactCardError),
 
-impl fmt::Display for NativeKeyhiveError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
+    /// Keyhive rejected a received contact card.
+    #[error(transparent)]
+    ReceiveContactCard(#[from] ReceivePrekeyOpError),
 
-impl Error for NativeKeyhiveError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        self.0.source()
-    }
+    /// Keyhive rejected an archive.
+    #[error(transparent)]
+    IngestArchive(#[from] ReceiveStaticEventError<E>),
 }
 
 /// Encode a value with Keyhive's canonical codec.
@@ -98,9 +97,9 @@ where
     K: Keyline<F, RetentionWatermark = ContentHeads<T>>,
     K::Error: Send + Sync + 'static,
 {
-    type Error = NativeKeyhiveError;
+    type Error = NativeKeyhiveError<K::Error>;
 
-    fn total_ops(&self) -> F::Future<'_, Result<u64, NativeKeyhiveError>> {
+    fn total_ops(&self) -> F::Future<'_, Result<u64, NativeKeyhiveError<K::Error>>> {
         F::from_future(async move {
             let stats = Keyhive::stats(self).await;
             Ok(stats.delegations
@@ -111,14 +110,19 @@ where
         })
     }
 
-    fn pending_event_hashes(&self) -> F::Future<'_, Result<Vec<EventHash>, NativeKeyhiveError>> {
+    fn pending_event_hashes(
+        &self,
+    ) -> F::Future<'_, Result<Vec<EventHash>, NativeKeyhiveError<K::Error>>> {
         F::from_future(async move {
             let digests = Keyhive::pending_event_hashes(self).await;
             Ok(digests.into_iter().map(|d| digest_to_bytes(&d)).collect())
         })
     }
 
-    fn is_known_agent(&self, id: Identifier) -> F::Future<'_, Result<bool, NativeKeyhiveError>> {
+    fn is_known_agent(
+        &self,
+        id: Identifier,
+    ) -> F::Future<'_, Result<bool, NativeKeyhiveError<K::Error>>> {
         F::from_future(async move {
             Ok(Keyhive::id(self) == IndividualId::from(id)
                 || self.has_individual(id.into()).await
@@ -126,18 +130,18 @@ where
                 || self
                     .has_group(id.into())
                     .await
-                    .map_err(NativeKeyhiveError::new)?)
+                    .map_err(NativeKeyhiveError::from)?)
         })
     }
 
     fn events_for_agent(
         &self,
         id: Identifier,
-    ) -> F::Future<'_, Result<BTreeMap<EventHash, EventBytes>, NativeKeyhiveError>> {
+    ) -> F::Future<'_, Result<BTreeMap<EventHash, EventBytes>, NativeKeyhiveError<K::Error>>> {
         F::from_future(async move {
             Ok(Keyhive::static_events_for_agent(self, id)
                 .await
-                .map_err(NativeKeyhiveError::new)?
+                .map_err(NativeKeyhiveError::from)?
                 .into_iter()
                 .map(|(digest, event)| (digest_to_bytes(&digest), encode_value(&event)))
                 .collect())
@@ -147,11 +151,11 @@ where
     fn all_agent_events<'a>(
         &'a self,
         skip: &'a BTreeSet<EventHash>,
-    ) -> F::Future<'a, Result<AgentEventIndex, NativeKeyhiveError>> {
+    ) -> F::Future<'a, Result<AgentEventIndex, NativeKeyhiveError<K::Error>>> {
         F::from_future(async move {
             let all = Keyhive::all_agent_events(self)
                 .await
-                .map_err(NativeKeyhiveError::new)?;
+                .map_err(NativeKeyhiveError::from)?;
 
             let events = all
                 .events
@@ -179,11 +183,14 @@ where
         })
     }
 
-    fn sign_bytes(&self, payload: Vec<u8>) -> F::Future<'_, Result<Vec<u8>, NativeKeyhiveError>> {
+    fn sign_bytes(
+        &self,
+        payload: Vec<u8>,
+    ) -> F::Future<'_, Result<Vec<u8>, NativeKeyhiveError<K::Error>>> {
         F::from_future(async move {
             let signed = Keyhive::sign_bytes(self, payload)
                 .await
-                .map_err(NativeKeyhiveError::new)?;
+                .map_err(NativeKeyhiveError::from)?;
             Ok(encode_value(signed.signed().as_ref()))
         })
     }
@@ -191,7 +198,7 @@ where
     fn ingest_events(
         &self,
         events: Vec<EventBytes>,
-    ) -> F::Future<'_, Result<NotIngested, NativeKeyhiveError>> {
+    ) -> F::Future<'_, Result<NotIngested, NativeKeyhiveError<K::Error>>> {
         F::from_future(async move {
             let mut decoded = Vec::with_capacity(events.len());
             let mut undecodable = Vec::new();
@@ -217,31 +224,31 @@ where
     fn receive_contact_card<'a>(
         &'a self,
         card: &'a [u8],
-    ) -> F::Future<'a, Result<EventBytes, NativeKeyhiveError>> {
+    ) -> F::Future<'a, Result<EventBytes, NativeKeyhiveError<K::Error>>> {
         F::from_future(async move {
-            let card = ContactCard::from_bytes(card).map_err(NativeKeyhiveError::new)?;
+            let card = ContactCard::from_bytes(card).map_err(NativeKeyhiveError::from)?;
             Keyhive::receive_contact_card(self, &card)
                 .await
-                .map_err(NativeKeyhiveError::new)?;
+                .map_err(NativeKeyhiveError::from)?;
             Ok(encode_value(&StaticEvent::from(Event::<T>::from(
                 card.op().clone(),
             ))))
         })
     }
 
-    fn to_archive(&self) -> F::Future<'_, Result<ArchiveBytes, NativeKeyhiveError>> {
+    fn to_archive(&self) -> F::Future<'_, Result<ArchiveBytes, NativeKeyhiveError<K::Error>>> {
         F::from_future(async move {
             Keyhive::into_archive(self)
                 .await
                 .map(|archive| encode_value(&archive))
-                .map_err(NativeKeyhiveError::new)
+                .map_err(NativeKeyhiveError::from)
         })
     }
 
     fn ingest_archive<'a>(
         &'a self,
         archive: &'a [u8],
-    ) -> F::Future<'a, Result<Result<(), Undecodable>, NativeKeyhiveError>> {
+    ) -> F::Future<'a, Result<Result<(), Undecodable>, NativeKeyhiveError<K::Error>>> {
         F::from_future(async move {
             let Ok(archive) = decode_value::<Archive<T>>(archive) else {
                 return Ok(Err(Undecodable));
@@ -249,7 +256,7 @@ where
             Keyhive::ingest_archive(self, archive)
                 .await
                 .map(|_pending| Ok(()))
-                .map_err(NativeKeyhiveError::new)
+                .map_err(NativeKeyhiveError::from)
         })
     }
 }

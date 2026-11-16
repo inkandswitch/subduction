@@ -29,7 +29,6 @@
 //! requesting and sending contact cards before initiating sync.
 
 use alloc::{
-    boxed::Box,
     collections::{BTreeMap, BTreeSet},
     string::ToString,
     sync::Arc,
@@ -56,14 +55,12 @@ use crate::{
     syncpoints::SyncpointMap,
 };
 
-/// Box a Keyhive failure into a [`ProtocolError`].
-fn keyhive_error<SendErr, E>(error: E) -> ProtocolError<SendErr>
-where
-    SendErr: core::error::Error + 'static,
-    E: core::error::Error + Send + Sync + 'static,
-{
-    ProtocolError::Keyhive(alloc::boxed::Box::new(error))
-}
+/// The [`ProtocolError`] of a [`KeyhiveProtocol`] over the keyhive `K` and the
+/// connection `Conn`.
+pub type KeyhiveProtocolError<K, Conn, Async> = ProtocolError<
+    <Conn as KeyhiveConnection<Async>>::SendError,
+    <K as KeyhiveAccess<Async>>::Error,
+>;
 
 /// XOR a set of 32-byte op hashes into a single 32-byte digest.
 ///
@@ -229,13 +226,13 @@ where
     /// # Errors
     ///
     /// Returns [`ProtocolError::Keyhive`] if keyhive cannot count its ops.
-    pub async fn total_ops(&self) -> Result<u64, ProtocolError<Conn::SendError>> {
+    pub async fn total_ops(&self) -> Result<u64, KeyhiveProtocolError<K, Conn, Async>> {
         self.keyhive
             .lock()
             .await
             .total_ops()
             .await
-            .map_err(keyhive_error)
+            .map_err(ProtocolError::Keyhive)
     }
 
     /// Serialized events reachable by `peer_id`.
@@ -249,16 +246,23 @@ where
     pub async fn get_events_for_agent(
         &self,
         peer_id: &KeyhivePeerId,
-    ) -> Result<Option<AgentHashMap>, ProtocolError<Conn::SendError>> {
+    ) -> Result<Option<AgentHashMap>, KeyhiveProtocolError<K, Conn, Async>> {
         let id = peer_id
             .to_identifier()
             .map_err(ProtocolError::InvalidIdentifier)?;
         let events = {
             let keyhive = self.keyhive.lock().await;
-            if !keyhive.is_known_agent(id).await.map_err(keyhive_error)? {
+            if !keyhive
+                .is_known_agent(id)
+                .await
+                .map_err(ProtocolError::Keyhive)?
+            {
                 return Ok(None);
             }
-            keyhive.events_for_agent(id).await.map_err(keyhive_error)?
+            keyhive
+                .events_for_agent(id)
+                .await
+                .map_err(ProtocolError::Keyhive)?
         };
 
         // Shared, so the periodic cache and every served response reference one
@@ -283,7 +287,7 @@ where
     pub async fn all_agent_events(
         &self,
         skip_serialization: &BTreeSet<EventHash>,
-    ) -> Result<crate::all_agent_events::AllAgentEvents, ProtocolError<Conn::SendError>> {
+    ) -> Result<crate::all_agent_events::AllAgentEvents, KeyhiveProtocolError<K, Conn, Async>> {
         let keyhive = { self.keyhive.lock().await.dupe() };
 
         // Keyhive computes the per-agent event sets itself, including the
@@ -292,7 +296,7 @@ where
         let all = keyhive
             .all_agent_events(skip_serialization)
             .await
-            .map_err(keyhive_error)?;
+            .map_err(ProtocolError::Keyhive)?;
 
         let event_data: BTreeMap<EventHash, Arc<[u8]>> = all
             .events
@@ -325,7 +329,7 @@ where
     pub async fn sync_keyhive(
         &self,
         target: Option<&KeyhivePeerId>,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
         let peer_ids = match target {
             Some(t) => vec![t.clone()],
             None => self.peer_ids().await,
@@ -404,7 +408,7 @@ where
         &self,
         target: &KeyhivePeerId,
         our_syncpoint_for_target: u64,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
         let (our_total, our_digest) = self.compute_total_and_digest_for_peer(target).await?;
         let msg = Message::SyncCheck {
             sender_id: self.peer_id.clone(),
@@ -423,7 +427,7 @@ where
         sender_syncpoint: u64,
         sender_digest: EventHash,
         local_syncpoint_for_sender: u64,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
         let (our_total, our_digest) = self.compute_total_and_digest_for_peer(peer).await?;
 
         let digests_match = sender_digest == our_digest;
@@ -471,7 +475,7 @@ where
         from: &KeyhivePeerId,
         signed_msg: SignedMessage,
         conn: Option<Conn>,
-    ) -> Result<MessageOutcome, ProtocolError<Conn::SendError>> {
+    ) -> Result<MessageOutcome, KeyhiveProtocolError<K, Conn, Async>> {
         let cached_sender_pair = self.cached_events_for_pair_with_peer(from).await;
         let verified = signed_msg.verify(from)?;
 
@@ -558,7 +562,7 @@ where
         &self,
         message: Message,
         cached_sender_pair: Option<&AgentHashMap>,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
         let Message::SyncRequest {
             sender_id,
             found: peer_found,
@@ -659,7 +663,7 @@ where
         &self,
         message: Message,
         cached_sender_pair: Option<&AgentHashMap>,
-    ) -> Result<MessageOutcome, ProtocolError<Conn::SendError>> {
+    ) -> Result<MessageOutcome, KeyhiveProtocolError<K, Conn, Async>> {
         let Message::SyncResponse {
             sender_id,
             requested: requested_hashes,
@@ -757,7 +761,7 @@ where
     async fn handle_sync_ops(
         &self,
         message: Message,
-    ) -> Result<MessageOutcome, ProtocolError<Conn::SendError>> {
+    ) -> Result<MessageOutcome, KeyhiveProtocolError<K, Conn, Async>> {
         let Message::SyncOps {
             sender_id,
             ops,
@@ -816,7 +820,7 @@ where
     async fn handle_request_contact_card(
         &self,
         message: Message,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
         let Message::RequestContactCard { sender_id, .. } = message else {
             return Err(ProtocolError::UnexpectedMessageType {
                 expected: "RequestContactCard",
@@ -843,7 +847,7 @@ where
     async fn handle_missing_contact_card(
         &self,
         message: Message,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
         let Message::MissingContactCard { sender_id, .. } = message else {
             return Err(ProtocolError::UnexpectedMessageType {
                 expected: "MissingContactCard",
@@ -865,7 +869,7 @@ where
         &self,
         message: Message,
         include_contact_card: bool,
-    ) -> Result<SignedMessage, ProtocolError<Conn::SendError>> {
+    ) -> Result<SignedMessage, KeyhiveProtocolError<K, Conn, Async>> {
         let msg_bytes =
             cbor_serialize(&message).map_err(|e| SigningError::Serialization(e.to_string()))?;
 
@@ -874,7 +878,7 @@ where
             keyhive
                 .sign_bytes(msg_bytes)
                 .await
-                .map_err(|e| SigningError::SigningFailed(Box::new(e)))?
+                .map_err(SigningError::SigningFailed)?
         };
 
         Ok(if include_contact_card {
@@ -890,7 +894,7 @@ where
         target_peer_id: &KeyhivePeerId,
         message: Message,
         include_contact_card: bool,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
         let signed_message = self
             .build_signed_message(message, include_contact_card)
             .await?;
@@ -912,7 +916,7 @@ where
     async fn get_events_for_peer_pair(
         &self,
         peer_id: &KeyhivePeerId,
-    ) -> Result<Option<AgentHashMap>, ProtocolError<Conn::SendError>> {
+    ) -> Result<Option<AgentHashMap>, KeyhiveProtocolError<K, Conn, Async>> {
         let our_id = self
             .peer_id
             .to_identifier()
@@ -927,11 +931,11 @@ where
             if !keyhive
                 .is_known_agent(our_id)
                 .await
-                .map_err(keyhive_error)?
+                .map_err(ProtocolError::Keyhive)?
                 || !keyhive
                     .is_known_agent(their_id)
                     .await
-                    .map_err(keyhive_error)?
+                    .map_err(ProtocolError::Keyhive)?
             {
                 return Ok(None);
             }
@@ -939,11 +943,11 @@ where
             let our_events = keyhive
                 .events_for_agent(our_id)
                 .await
-                .map_err(keyhive_error)?;
+                .map_err(ProtocolError::Keyhive)?;
             let their_events = keyhive
                 .events_for_agent(their_id)
                 .await
-                .map_err(keyhive_error)?;
+                .map_err(ProtocolError::Keyhive)?;
             (our_events, their_events)
         };
 
@@ -963,9 +967,12 @@ where
     /// Returns [`ProtocolError`] if the keyhive lock or hash computation fails.
     pub async fn get_pending_hashes(
         &self,
-    ) -> Result<Vec<EventHash>, ProtocolError<Conn::SendError>> {
+    ) -> Result<Vec<EventHash>, KeyhiveProtocolError<K, Conn, Async>> {
         let keyhive = self.keyhive.lock().await;
-        keyhive.pending_event_hashes().await.map_err(keyhive_error)
+        keyhive
+            .pending_event_hashes()
+            .await
+            .map_err(ProtocolError::Keyhive)
     }
 
     /// Fetch serialized event bytes for the given hashes.
@@ -974,7 +981,7 @@ where
         sender_id: &KeyhivePeerId,
         requested: &[EventHash],
         cached_pair: Option<&AgentHashMap>,
-    ) -> Result<Vec<Arc<[u8]>>, ProtocolError<Conn::SendError>> {
+    ) -> Result<Vec<Arc<[u8]>>, KeyhiveProtocolError<K, Conn, Async>> {
         let computed;
         let pair = if let Some(c) = cached_pair {
             c
@@ -1003,7 +1010,7 @@ where
     async fn ingest_events<B: AsRef<[u8]>>(
         &self,
         event_bytes_list: &[B],
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
         let not_ingested = {
             let keyhive = self.keyhive.lock().await;
             keyhive
@@ -1014,7 +1021,7 @@ where
                         .collect(),
                 )
                 .await
-                .map_err(keyhive_error)?
+                .map_err(ProtocolError::Keyhive)?
         };
         for bytes in &not_ingested.undecodable {
             let head_len = core::cmp::min(bytes.len(), 96);
@@ -1066,7 +1073,7 @@ where
         if let Some((_, storage_id)) = use_archive {
             let archive = {
                 let keyhive = self.keyhive.lock().await;
-                keyhive.to_archive().await.map_err(keyhive_error)?
+                keyhive.to_archive().await.map_err(ProtocolError::Keyhive)?
             };
             storage_ops::save_keyhive_archive(&self.storage, storage_id, archive).await?;
         } else {
@@ -1119,14 +1126,14 @@ where
     async fn ingest_contact_card(
         &self,
         contact_card: &[u8],
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
         // Validate first: only persist after keyhive accepts the card.
         let event = {
             let keyhive = self.keyhive.lock().await;
             keyhive
                 .receive_contact_card(contact_card)
                 .await
-                .map_err(|e| ProtocolError::ReceiveContactCard(Box::new(e)))?
+                .map_err(ProtocolError::ReceiveContactCard)?
         };
 
         if let Err(e) = storage_ops::save_event_bytes(&self.storage, event).await {
@@ -1185,7 +1192,7 @@ where
     async fn compute_total_and_digest_for_peer(
         &self,
         peer: &KeyhivePeerId,
-    ) -> Result<(u64, EventHash), ProtocolError<Conn::SendError>> {
+    ) -> Result<(u64, EventHash), KeyhiveProtocolError<K, Conn, Async>> {
         let (hash_count, digest) =
             if let Some(cached) = self.cached_events_for_pair_with_peer(peer).await {
                 (cached.len(), pair_set_digest(cached.keys()))
@@ -1210,7 +1217,7 @@ where
     pub async fn initiate_sync_with_peer(
         &self,
         peer: &KeyhivePeerId,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
         let syncpoint = self.syncpoints.lock().await.get(peer);
 
         match syncpoint {
@@ -1224,7 +1231,7 @@ where
     /// # Errors
     ///
     /// Returns [`ProtocolError`] if any per-agent walk fails.
-    pub async fn refresh_cache(&self) -> Result<(), ProtocolError<Conn::SendError>> {
+    pub async fn refresh_cache(&self) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
         let mut cache = self.cache.lock().await;
         cache.refresh(self).await.map(|_| ())
     }
