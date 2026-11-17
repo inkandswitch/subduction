@@ -28,7 +28,10 @@ use subduction_core::{
     connection::test_utils::TokioSpawn,
     effects::config::Config,
     handler::sync::SyncHandler,
-    handshake::audience::{Audience, DiscoveryId},
+    handshake::{
+        self,
+        audience::{Audience, DiscoveryId},
+    },
     nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -40,8 +43,9 @@ use subduction_core::{
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_http_longpoll::{
-    client::HttpLongPollClient, http_client::reqwest_client::ReqwestHttpClient,
-    server::LongPollHandler, session::SessionId, transport::HttpLongPollTransport,
+    DEFAULT_MAX_BODY_SIZE, SESSION_ID_HEADER, client::HttpLongPollClient,
+    http_client::reqwest_client::ReqwestHttpClient, server::LongPollHandler, session::SessionId,
+    transport::HttpLongPollTransport,
 };
 use subduction_websocket::timeout::FuturesTimerTimeout;
 use testresult::TestResult;
@@ -99,6 +103,10 @@ struct TestServer {
 
 impl TestServer {
     async fn start(seed: u8) -> Self {
+        Self::start_with_body_limit(seed, DEFAULT_MAX_BODY_SIZE).await
+    }
+
+    async fn start_with_body_limit(seed: u8, max_body_size: usize) -> Self {
         let sig = signer(seed);
         let peer_id = PeerId::from(sig.verifying_key());
         let discovery_id = DiscoveryId::new(SERVICE_NAME.as_bytes());
@@ -124,7 +132,8 @@ impl TestServer {
             HANDSHAKE_MAX_DRIFT,
             FuturesTimerTimeout,
         )
-        .with_poll_timeout(POLL_TIMEOUT);
+        .with_poll_timeout(POLL_TIMEOUT)
+        .with_max_body_size(max_body_size);
 
         let tcp = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let address = tcp.local_addr().expect("local_addr");
@@ -857,5 +866,113 @@ async fn connect_wrong_discovery_service_rejected() -> TestResult {
         "connection with wrong service name should fail"
     );
 
+    Ok(())
+}
+
+/// A handshake body arrives before the client is authenticated, so it is
+/// capped at `handshake::MAX_MESSAGE_SIZE`, far below the configured body
+/// limit, and an oversized one is refused with 413 rather than 500.
+#[tokio::test]
+async fn oversized_handshake_body_is_refused_with_413() -> TestResult {
+    init_tracing();
+
+    let server = TestServer::start(100).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("http://{}/lp/handshake", server.address))
+        .body(vec![0u8; handshake::MAX_MESSAGE_SIZE + 1])
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::PAYLOAD_TOO_LARGE);
+    Ok(())
+}
+
+/// `with_max_body_size` caps what an authenticated client may send: a body at
+/// the limit is accepted, and one byte more is refused with 413.
+#[tokio::test]
+async fn send_body_over_the_configured_limit_is_refused_with_413() -> TestResult {
+    const LIMIT: usize = 128 * 1024;
+
+    init_tracing();
+
+    let server = TestServer::start_with_body_limit(101, LIMIT).await;
+    let base_url = format!("http://{}", server.address);
+
+    let connected = HttpLongPollClient::new(&base_url, ReqwestHttpClient::new())
+        .connect_discover::<Sendable, _>(&signer(102), SERVICE_NAME, TimestampSeconds::now())
+        .await?;
+    let session = connected.session_id.to_hex();
+
+    let http = reqwest::Client::new();
+    let send = |len: usize| {
+        http.post(format!("{base_url}/lp/send"))
+            .header(SESSION_ID_HEADER, &session)
+            .body(vec![0u8; len])
+            .send()
+    };
+
+    assert!(send(LIMIT).await?.status().is_success());
+    assert_eq!(
+        send(LIMIT + 1).await?.status(),
+        reqwest::StatusCode::PAYLOAD_TOO_LARGE
+    );
+    Ok(())
+}
+
+/// POST `body` to `path` with chunked encoding, so the server learns the size
+/// only by reading, and return the response status.
+async fn post_chunked(address: SocketAddr, path: &str, body: &[u8]) -> TestResult<u16> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut tcp = tokio::net::TcpStream::connect(address).await?;
+    let head = format!(
+        "POST {path} HTTP/1.1\r\nHost: {address}\r\nTransfer-Encoding: chunked\r\n\
+         Connection: close\r\n\r\n"
+    );
+    tcp.write_all(head.as_bytes()).await?;
+    tcp.write_all(body).await?;
+
+    let mut response = Vec::new();
+    tcp.read_to_end(&mut response).await?;
+    let status = response
+        .get(9..12)
+        .and_then(|code| core::str::from_utf8(code).ok())
+        .ok_or("no status line")?;
+    Ok(status.parse()?)
+}
+
+/// Chunked encoding of `data` in 4 KiB chunks, with the terminating chunk.
+fn chunked(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for chunk in data.chunks(4096) {
+        out.extend_from_slice(format!("{:x}\r\n", chunk.len()).as_bytes());
+        out.extend_from_slice(chunk);
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(b"0\r\n\r\n");
+    out
+}
+
+/// Without a declared length, the limit is found while streaming. Going over
+/// it is the client's fault (413); a body that cannot be read at all is a bad
+/// request (400), not "too large".
+#[tokio::test]
+async fn streamed_bodies_are_refused_by_the_right_status() -> TestResult {
+    init_tracing();
+
+    let server = TestServer::start(103).await;
+
+    let oversized = chunked(&vec![0u8; handshake::MAX_MESSAGE_SIZE + 1]);
+    assert_eq!(
+        post_chunked(server.address, "/lp/handshake", &oversized).await?,
+        413
+    );
+
+    let malformed = b"zz\r\nnot a chunk\r\n0\r\n\r\n";
+    assert_eq!(
+        post_chunked(server.address, "/lp/handshake", malformed).await?,
+        400
+    );
     Ok(())
 }
