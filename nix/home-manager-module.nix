@@ -136,6 +136,32 @@ in {
         '';
       };
 
+      wsKeepalive = {
+        pingInterval = lib.mkOption {
+          type = lib.types.ints.positive;
+          default = 30;
+          description = ''
+            Seconds between WebSocket keepalive pings. A connection is
+            closed after
+            {option}`services.subduction.server.wsKeepalive.missedPongs`
+            cycles of `pingInterval + pongTimeout` in which nothing moved: no
+            pong, no bytes from the peer, and no data written to it.
+          '';
+        };
+
+        pongTimeout = lib.mkOption {
+          type = lib.types.ints.positive;
+          default = 10;
+          description = "Seconds to wait for a WebSocket pong before counting a miss.";
+        };
+
+        missedPongs = lib.mkOption {
+          type = lib.types.ints.positive;
+          default = 2;
+          description = "Consecutive missed WebSocket pongs before the connection is closed.";
+        };
+      };
+
       metricsPort = lib.mkOption {
         type = lib.types.port;
         default = 9090;
@@ -251,6 +277,12 @@ in {
         (toString cfg.server.handshakeMaxDrift)
         "--max-message-size"
         (toString cfg.server.maxMessageSize)
+        "--ws-ping-interval"
+        (toString cfg.server.wsKeepalive.pingInterval)
+        "--ws-pong-timeout"
+        (toString cfg.server.wsKeepalive.pongTimeout)
+        "--ws-missed-pongs"
+        (toString cfg.server.wsKeepalive.missedPongs)
       ]
       ++ lib.optionals (cfg.server.maxFrameSize != null) [
         "--max-frame-size"

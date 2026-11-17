@@ -23,11 +23,13 @@
 //!
 //! The result is an `async_tungstenite::WebSocketStream<HyperIo>`, which
 //! `subduction_websocket::websocket::WebSocket::new_with_keepalive` accepts
-//! directly. It is *not* a `TokioWebSocketServer` connection: that server's
-//! accepted type is fixed to plain TCP. Embedders therefore spawn the listen,
-//! sender, and keepalive tasks, wrap the socket in a `MessageTransport`, and
-//! call `Subduction::add_connection` themselves — the [`axum`] module docs
-//! carry that callback in full, and `tests/axum.rs` runs it end to end.
+//! directly, together with the stream's inbound progress
+//! (`ws.get_ref().progress()`). It is *not* a `TokioWebSocketServer`
+//! connection: that server's accepted type is fixed to plain TCP. Embedders
+//! therefore spawn the listen, sender, and keepalive tasks, wrap the socket in
+//! a `MessageTransport`, and call `Subduction::add_connection` themselves —
+//! the [`axum`] module docs carry that callback in full, and `tests/axum.rs`
+//! runs it end to end.
 //!
 //! Task spawning is generic: [`spawn_upgrade`](upgrade::spawn_upgrade) takes
 //! any [`Spawn<Sendable>`](subduction_core::spawn::Spawn), so upgrade tasks can

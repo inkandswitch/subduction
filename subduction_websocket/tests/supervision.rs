@@ -18,6 +18,7 @@ use subduction_core::{
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
+    counted::Counted,
     sleep::TokioSleeper,
     tokio::{TimeoutTokio, server::TokioWebSocketServer},
     websocket::{KeepAlive, KeepAliveOutcome, WebSocket},
@@ -30,6 +31,8 @@ use testresult::TestResult;
 async fn dropping_sender_wakes_pending_receive_with_transport_clones() -> TestResult {
     // Keep the remote end open and silent so the read cannot complete via EOF.
     let (local, _remote) = tokio::io::duplex(1024);
+    let local = Counted::new(local);
+    let inbound = local.progress();
     let socket = WebSocketStream::from_raw_socket(
         TokioAdapter::new(local),
         tungstenite::protocol::Role::Client,
@@ -39,6 +42,7 @@ async fn dropping_sender_wakes_pending_receive_with_transport_clones() -> TestRe
     let (transport, sender, keepalive): (WebSocket<_, Sendable>, _, _) =
         WebSocket::new_with_keepalive(
             socket,
+            inbound,
             PeerId::new([7; 32]),
             KeepAlive::balanced(),
             TokioSleeper,

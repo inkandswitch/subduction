@@ -69,6 +69,10 @@ name = "supervision"
 required-features = ["tokio_server", "tokio_client"]
 
 [[test]]
+name = "slow_upload_keepalive"
+required-features = ["tokio_server"]
+
+[[test]]
 name = "tokio_tests"
 required-features = ["tokio_server", "tokio_client"]
 

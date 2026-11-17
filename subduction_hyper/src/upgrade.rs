@@ -40,8 +40,10 @@
 //!
 //!     upgrade::spawn_upgrade(&spawner, on_upgrade, WebSocketConfig::default(), |ws| async move {
 //!         // `ws` is an `async_tungstenite::WebSocketStream`; run the Subduction
-//!         // handshake and hand it to `WebSocket::new_with_keepalive`.
-//!         let _ = ws;
+//!         // handshake and hand it to `WebSocket::new_with_keepalive`, along
+//!         // with its inbound progress.
+//!         let inbound = ws.get_ref().progress();
+//!         let _ = (ws, inbound);
 //!     });
 //!
 //!     Ok(upgrade::accept_response(&key).map(|()| Full::new(Bytes::new())))
@@ -79,13 +81,18 @@ use http::{
 use hyper::upgrade::{OnUpgrade, Upgraded};
 use hyper_util::rt::TokioIo;
 use subduction_core::spawn::Spawn;
+use subduction_websocket::counted::Counted;
 use tungstenite::{
     handshake::derive_accept_key,
     protocol::{Role, WebSocketConfig},
 };
 
 /// The I/O type a hyper-upgraded connection ends up on.
-pub type HyperIo = TokioAdapter<TokioIo<Upgraded>>;
+///
+/// The [`Counted`] layer lets a keepalive see a large inbound frame while it
+/// is still arriving. Take its handle with `ws.get_ref().progress()` before
+/// the handshake, and pass it to `WebSocket::new_with_keepalive`.
+pub type HyperIo = Counted<TokioAdapter<TokioIo<Upgraded>>>;
 
 /// Proof that a request head passed [`validate`], carrying the
 /// `Sec-WebSocket-Accept` value derived from the client's key.
@@ -175,7 +182,7 @@ pub async fn from_upgraded(
     upgraded: Upgraded,
     config: WebSocketConfig,
 ) -> WebSocketStream<HyperIo> {
-    let io = TokioAdapter::new(TokioIo::new(upgraded));
+    let io = Counted::new(TokioAdapter::new(TokioIo::new(upgraded)));
     WebSocketStream::from_raw_socket(io, Role::Server, Some(config)).await
 }
 

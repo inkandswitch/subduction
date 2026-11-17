@@ -9,6 +9,7 @@ extern crate std;
 
 extern crate alloc;
 
+pub mod counted;
 pub mod error;
 pub mod handshake;
 pub mod sleep;

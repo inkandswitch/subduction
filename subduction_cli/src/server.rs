@@ -2,6 +2,7 @@
 
 use std::{
     net::SocketAddr,
+    num::NonZeroU32,
     path::PathBuf,
     sync::{
         Arc,
@@ -36,10 +37,11 @@ use subduction_http_longpoll::server::LongPollHandler;
 use subduction_redb_storage::RedbStorage;
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
+    counted::Counted,
     handshake::WebSocketHandshake,
     sleep::TokioSleeper,
     timeout::FuturesTimerTimeout,
-    tokio::{TokioSpawn, unified::UnifiedWebSocket},
+    tokio::{TokioSpawn, stream::dial, unified::UnifiedWebSocket},
     websocket::{KeepAlive, WebSocket},
 };
 use tokio::{net::TcpListener, task::JoinSet, time};
@@ -136,6 +138,36 @@ pub(crate) struct ServerArgs {
         value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..)
     )]
     pub(crate) max_frame_size_override: Option<usize>,
+
+    /// Seconds between WebSocket keepalive pings (default: 30).
+    ///
+    /// A connection is closed after `--ws-missed-pongs` cycles of
+    /// `ping interval + pong timeout` in which nothing moved: no pong, no
+    /// bytes from the peer, and no data written to it. The defaults close a
+    /// dead connection after about 80 s. A peer that keeps taking our data
+    /// but never pongs or sends anything is closed after 8 cycles.
+    #[arg(
+        long,
+        value_name = "SECS",
+        default_value_t = KeepAlive::balanced().ping_interval.as_secs(),
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    pub(crate) ws_ping_interval: u64,
+
+    /// Seconds to wait for a WebSocket pong before counting a miss
+    /// (default: 10).
+    #[arg(
+        long,
+        value_name = "SECS",
+        default_value_t = KeepAlive::balanced().pong_timeout.as_secs(),
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    pub(crate) ws_pong_timeout: u64,
+
+    /// Consecutive missed WebSocket pongs before the connection is closed
+    /// (default: 2).
+    #[arg(long, value_name = "N", default_value_t = KeepAlive::balanced().missed_pong_threshold)]
+    pub(crate) ws_missed_pongs: NonZeroU32,
 
     /// Metrics server port (Prometheus endpoint)
     #[arg(long, default_value = "9090")]
@@ -273,6 +305,15 @@ impl ServerArgs {
     pub(crate) fn max_frame_size(&self) -> usize {
         self.max_frame_size_override
             .unwrap_or(self.max_message_size)
+    }
+
+    /// The WebSocket keepalive from the `--ws-*` flags.
+    pub(crate) const fn keepalive(&self) -> KeepAlive {
+        KeepAlive {
+            ping_interval: Duration::from_secs(self.ws_ping_interval),
+            pong_timeout: Duration::from_secs(self.ws_pong_timeout),
+            missed_pong_threshold: self.ws_missed_pongs,
+        }
     }
 }
 
@@ -782,7 +823,7 @@ where
     let accept_handler = lp_handler;
     let max_message_size = args.max_message_size;
     let max_frame_size = args.max_frame_size();
-    let ws_keepalive = KeepAlive::balanced();
+    let ws_keepalive = args.keepalive();
 
     let accept_keyhive = keyhive_protocol.clone();
     let accept_task = tokio::spawn(async move {
@@ -965,7 +1006,7 @@ where
         let peer_max_message_size = args.max_message_size;
         let peer_max_frame_size = args.max_frame_size();
         let peer_keyhive = keyhive_protocol.clone();
-        let peer_keepalive = KeepAlive::balanced();
+        let peer_keepalive = args.keepalive();
 
         tokio::spawn(async move {
             match try_connect_ws(
@@ -1189,6 +1230,10 @@ async fn handle_websocket<H: CliWireHandler>(
     // Behind a reverse proxy `addr` is the proxy's loopback socket;
     // `X-Forwarded-For` is the only in-band client address.
     let mut forwarded_for: Option<String> = None;
+    // Count inbound reads under tungstenite, so the keepalive sees a large
+    // upload while it is still arriving.
+    let tcp = Counted::new(tcp);
+    let inbound = tcp.progress();
     let ws_stream = match async_tungstenite::tokio::accept_hdr_async_with_config(
         tcp,
         |req: &tungstenite::handshake::server::Request,
@@ -1220,6 +1265,7 @@ async fn handle_websocket<H: CliWireHandler>(
         |ws_handshake, peer_id| {
             let (ws, sender_fut, keepalive_task) = WebSocket::new_with_keepalive(
                 ws_handshake.into_inner(),
+                inbound,
                 peer_id,
                 keepalive,
                 TokioSleeper,
@@ -1455,8 +1501,7 @@ async fn try_connect_ws<H: CliWireHandler>(
     let mut ws_config = WebSocketConfig::default();
     ws_config.max_message_size = Some(max_message_size);
     ws_config.max_frame_size = Some(max_frame_size);
-    let (ws_stream, _resp) =
-        async_tungstenite::tokio::connect_async_with_config(uri.clone(), Some(ws_config)).await?;
+    let (ws_stream, inbound) = dial(uri.clone(), Some(ws_config)).await?;
 
     let audience = Audience::discover(service_name.as_bytes());
     let now = TimestampSeconds::now();
@@ -1473,6 +1518,7 @@ async fn try_connect_ws<H: CliWireHandler>(
         move |ws_handshake, peer_id| {
             let (ws, sender_fut, keepalive_task) = WebSocket::new_with_keepalive(
                 ws_handshake.into_inner(),
+                inbound,
                 peer_id,
                 keepalive,
                 TokioSleeper,
