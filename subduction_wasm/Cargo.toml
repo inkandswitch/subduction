@@ -20,19 +20,21 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 async-channel = { workspace = true }
 async-lock = { workspace = true }
+dupe = "0.9"
 ed25519-dalek = { workspace = true }
 futures = { workspace = true }
 future_form = { workspace = true }
 futures-util = { workspace = true }
 getrandom = { workspace = true, features = ["js"] }
 js-sys = { workspace = true }
+keyhive_crypto = { workspace = true }
 nonempty = { workspace = true }
 sedimentree_core = { workspace = true }
 sedimentree_wasm = { workspace = true }
 subduction_core = { workspace = true }
 subduction_crypto = { workspace = true }
 subduction_ephemeral = { workspace = true }
-subduction_keyhive = { workspace = true }
+subduction_keyhive = { workspace = true, features = ["serde"] }
 subduction_wasm_bootstrap = { workspace = true }
 subduction_http_longpoll = { workspace = true, default-features = false }
 thiserror = { workspace = true }

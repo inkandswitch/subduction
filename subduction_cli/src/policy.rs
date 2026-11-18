@@ -16,12 +16,11 @@ use subduction_core::{
 };
 use subduction_crypto::verified_author::VerifiedAuthor;
 use subduction_keyhive::{
-    handler::RuntimeKeyline,
     policy::{
         AccessError, FetchDisallowedError, PutDisallowedError, authorize_connect_with,
         authorize_fetch_with, authorize_put_with, filter_authorized_fetch_with,
     },
-    runtime::SendableRuntimeKeyhive,
+    runtime::{RuntimeKeyline, SendableRuntimeKeyhive},
 };
 
 /// What a Keyhive membership query fails with in the CLI runtime.
