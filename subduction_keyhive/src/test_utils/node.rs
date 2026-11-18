@@ -37,7 +37,6 @@ use sedimentree_core::{
 use subduction_core::{
     authenticated::{Authenticated, Direction},
     connection::{
-        Connection,
         message::{
             BatchSyncResponse, MESSAGE_SCHEMA, SyncMessage, TryAsBatchSyncResponse,
             TryAsSubscribeRequest,
@@ -59,13 +58,10 @@ use subduction_core::{
 use subduction_crypto::signer::memory::MemorySigner;
 
 use crate::{
-    KEYHIVE_SCHEMA, KeyhiveMessage, KeyhivePeerId, MemoryKeyhiveStorage, ProtocolError,
-    SignedMessage,
-    connection::KeyhiveConnection,
-    handler::{SendableKeyhiveHandler, SendableRuntimeProtocol},
+    KEYHIVE_SCHEMA, KeyhiveMessage, KeyhiveProtocolError, MemoryKeyhiveStorage,
+    handler::{HandlerProtocol, KeyhiveHandler, PeerConnections},
     policy::SubductionKeyhive,
-    runtime::{SendableRuntimeKeyhive, init_sendable_keyhive},
-    signed_message::CborError,
+    runtime::{RuntimeKeyline, SendableRuntimeKeyhive, init_sendable_keyhive},
 };
 
 /// How long [`eventually`] waits by default.
@@ -114,11 +110,12 @@ pub type NodePolicy = SubductionKeyhive<
     keyhive_content::store::memory::MemoryCiphertextStore<crate::change_id::ChangeId, Vec<u8>>,
     keyhive_core::listener::no_listener::NoListener,
     rand::rngs::OsRng,
-    crate::handler::RuntimeKeyline,
+    RuntimeKeyline,
 >;
 
 /// The keyhive protocol a node runs.
-pub type NodeProtocol<T> = SendableRuntimeProtocol<NodeKeyhiveConn<T>, MemoryKeyhiveStorage>;
+pub type NodeProtocol<T> =
+    HandlerProtocol<SendableRuntimeKeyhive, MemoryKeyhiveStorage, NodeConn<T>, Sendable>;
 
 /// A node's sync handler.
 pub type NodeSyncHandler<T> = SyncHandler<
@@ -131,12 +128,8 @@ pub type NodeSyncHandler<T> = SyncHandler<
 >;
 
 /// A node's keyhive handler.
-pub type NodeKeyhiveHandler<T> = SendableKeyhiveHandler<
-    NodeKeyhiveConn<T>,
-    MemoryKeyhiveStorage,
-    NodeConn<T>,
-    fn(Authenticated<NodeConn<T>, Sendable>) -> NodeKeyhiveConn<T>,
->;
+pub type NodeKeyhiveHandler<T> =
+    KeyhiveHandler<Sendable, SendableRuntimeKeyhive, MemoryKeyhiveStorage, NodeConn<T>>;
 
 /// A node's Subduction instance.
 pub type NodeSubduction<T> = Subduction<
@@ -160,8 +153,8 @@ pub struct Node<T: NodeTransport> {
     /// The Subduction instance.
     pub subduction: Arc<NodeSubduction<T>>,
 
-    /// The keyhive protocol, sharing the policy's Keyhive.
-    pub protocol: Arc<NodeProtocol<T>>,
+    /// The keyhive handler. Its protocol shares the policy's Keyhive.
+    pub keyhive_handler: NodeKeyhiveHandler<T>,
 
     /// The node's Keyhive. Changes are visible to the protocol and the policy.
     pub keyhive: SendableRuntimeKeyhive,
@@ -188,26 +181,25 @@ impl<T: NodeTransport> Node<T> {
             Arc::new(Mutex::new(keyhive.dupe())),
             MemoryKeyhiveStorage::new(),
             keyhive_peer_id,
-            contact_card,
+            contact_card.to_bytes(),
         ));
 
         let policy = Arc::new(SubductionKeyhive::new(keyhive.dupe()));
-        let keyhive_protocol = Arc::clone(&protocol);
         let signer = MemorySigner::from_bytes(&key);
-        let (subduction, listener, manager, ()) = SubductionBuilder::new()
+        let (subduction, listener, manager, keyhive_handler) = SubductionBuilder::new()
             .signer(signer.clone())
             .storage(MemoryStorage::new(), policy)
             .spawner(TokioSpawn)
             .timer(TokioTimeout)
-            .build_composed::<Sendable, NodeConn<T>, NodeHandler<T>, ()>(|sync| {
-                let keyhive_handler: NodeKeyhiveHandler<T> =
-                    SendableKeyhiveHandler::new(keyhive_protocol, NodeKeyhiveConn::new);
+            .build_composed::<Sendable, NodeConn<T>, NodeHandler<T>, _>(|sync| {
+                let keyhive: NodeKeyhiveHandler<T> =
+                    KeyhiveHandler::new(protocol, sync.connections(), ());
                 (
                     Arc::new(NodeHandler {
                         sync,
-                        keyhive: keyhive_handler,
+                        keyhive: keyhive.clone(),
                     }),
-                    (),
+                    keyhive,
                 )
             });
         tokio::spawn(listener);
@@ -215,7 +207,7 @@ impl<T: NodeTransport> Node<T> {
 
         Ok(Self {
             subduction,
-            protocol,
+            keyhive_handler,
             keyhive,
             signer,
         })
@@ -249,9 +241,9 @@ impl<T: NodeTransport> Node<T> {
         &self,
         auth: Authenticated<NodeConn<T>, Sendable>,
     ) -> Result<(), AddConnectionError<keyhive_crypto::identifier::InvalidIdentifier>> {
-        self.subduction.add_connection(auth.clone()).await?;
-        let conn = NodeKeyhiveConn::new(auth);
-        self.protocol.add_peer(conn.peer_id(), conn).await;
+        let peer = auth.peer_id();
+        self.subduction.add_connection(auth).await?;
+        self.keyhive_handler.add_peer(peer).await;
         Ok(())
     }
 
@@ -263,8 +255,15 @@ impl<T: NodeTransport> Node<T> {
     /// Returns an error if a sync request can't be built or sent.
     pub async fn sync_keyhive(
         &self,
-    ) -> Result<(), ProtocolError<NodeKeyhiveSendError<T::SendError>>> {
-        self.protocol.sync_keyhive(None).await
+    ) -> Result<
+        (),
+        KeyhiveProtocolError<
+            SendableRuntimeKeyhive,
+            PeerConnections<NodeConn<T>, Sendable>,
+            Sendable,
+        >,
+    > {
+        self.keyhive_handler.protocol().sync_keyhive(None).await
     }
 }
 
@@ -497,62 +496,6 @@ fn rewrap_listen_error<T: NodeTransport>(
         }),
         ListenError::TrySendError => ListenError::TrySendError,
     }
-}
-
-/// A Subduction connection seen as a [`KeyhiveConnection`]: outbound keyhive
-/// messages go out as [`NodeMessage::Keyhive`] frames. Inbound frames arrive
-/// through the [`NodeHandler`], so `recv` never resolves.
-#[derive(Debug, Clone)]
-pub struct NodeKeyhiveConn<T: NodeTransport> {
-    auth: Authenticated<NodeConn<T>, Sendable>,
-}
-
-impl<T: NodeTransport> NodeKeyhiveConn<T> {
-    /// Wrap an authenticated connection.
-    #[must_use]
-    pub const fn new(auth: Authenticated<NodeConn<T>, Sendable>) -> Self {
-        Self { auth }
-    }
-}
-
-impl<T: NodeTransport> KeyhiveConnection<Sendable> for NodeKeyhiveConn<T> {
-    type SendError = NodeKeyhiveSendError<T::SendError>;
-    type RecvError = core::convert::Infallible;
-    type DisconnectError = core::convert::Infallible;
-
-    fn peer_id(&self) -> KeyhivePeerId {
-        KeyhivePeerId::from_bytes(*self.auth.peer_id().as_bytes())
-    }
-
-    fn send(&self, message: SignedMessage) -> BoxFuture<'_, Result<(), Self::SendError>> {
-        async move {
-            let frame = NodeMessage::Keyhive(KeyhiveMessage::from_signed(&message)?);
-            <NodeConn<T> as Connection<Sendable, NodeMessage>>::send(self.auth.inner(), &frame)
-                .await
-                .map_err(NodeKeyhiveSendError::Transport)
-        }
-        .boxed()
-    }
-
-    fn recv(&self) -> BoxFuture<'_, Result<SignedMessage, Self::RecvError>> {
-        futures::future::pending().boxed()
-    }
-
-    fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectError>> {
-        futures::future::ready(Ok(())).boxed()
-    }
-}
-
-/// Errors from [`NodeKeyhiveConn::send`].
-#[derive(Debug, thiserror::Error)]
-pub enum NodeKeyhiveSendError<E: core::error::Error> {
-    /// The signed message couldn't be encoded.
-    #[error("encode signed message: {0}")]
-    Encode(#[from] CborError),
-
-    /// The transport failed to send the frame.
-    #[error("send keyhive frame: {0}")]
-    Transport(E),
 }
 
 /// Errors building a [`Node`].
