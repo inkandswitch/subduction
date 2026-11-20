@@ -52,13 +52,12 @@ async fn make_test_commit_with_data(
 
 #[tokio::test]
 async fn test_sendable_single_commit() -> TestResult {
-    let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-            .signer(test_signer())
-            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-            .spawner(TokioSpawn)
-            .timer(InstantTimeout)
-            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
+    let (subduction, _handler, listener_fut, actor_fut) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
     subduction.add_connection(conn.authenticated()).await?;
@@ -102,13 +101,12 @@ async fn test_sendable_single_commit() -> TestResult {
 
 #[tokio::test]
 async fn test_sendable_multiple_sequential() -> TestResult {
-    let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-            .signer(test_signer())
-            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-            .spawner(TokioSpawn)
-            .timer(InstantTimeout)
-            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
+    let (subduction, _handler, listener_fut, actor_fut) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
     subduction.add_connection(conn.authenticated()).await?;
@@ -152,13 +150,12 @@ async fn test_sendable_multiple_sequential() -> TestResult {
 
 #[tokio::test]
 async fn test_sendable_same_sedimentree() -> TestResult {
-    let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-            .signer(test_signer())
-            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-            .spawner(TokioSpawn)
-            .timer(InstantTimeout)
-            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
+    let (subduction, _handler, listener_fut, actor_fut) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
     subduction.add_connection(conn.authenticated()).await?;
@@ -207,13 +204,12 @@ async fn test_sendable_same_sedimentree() -> TestResult {
 async fn test_local_single_commit() -> TestResult {
     tokio::task::LocalSet::new()
         .run_until(async {
-            let (subduction, _handler, listener_fut, actor_fut) =
-                SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-                    .signer(test_signer())
-                    .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-                    .spawner(TokioSpawn)
-                    .timer(InstantTimeout)
-                    .build::<Local, ChannelMockConnection<SyncMessage>>();
+            let (subduction, _handler, listener_fut, actor_fut) = SubductionBuilder::new()
+                .signer(test_signer())
+                .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+                .spawner(TokioSpawn)
+                .timer(InstantTimeout)
+                .build::<Local, ChannelMockConnection<SyncMessage>>();
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
             subduction.add_connection(conn.authenticated()).await?;
@@ -262,13 +258,12 @@ async fn test_local_single_commit() -> TestResult {
 async fn test_local_multiple_sequential() -> TestResult {
     tokio::task::LocalSet::new()
         .run_until(async {
-            let (subduction, _handler, listener_fut, actor_fut) =
-                SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-                    .signer(test_signer())
-                    .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-                    .spawner(TokioSpawn)
-                    .timer(InstantTimeout)
-                    .build::<Local, ChannelMockConnection<SyncMessage>>();
+            let (subduction, _handler, listener_fut, actor_fut) = SubductionBuilder::new()
+                .signer(test_signer())
+                .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+                .spawner(TokioSpawn)
+                .timer(InstantTimeout)
+                .build::<Local, ChannelMockConnection<SyncMessage>>();
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
             subduction.add_connection(conn.authenticated()).await?;
@@ -318,13 +313,12 @@ async fn test_local_multiple_sequential() -> TestResult {
 async fn test_local_same_sedimentree() -> TestResult {
     tokio::task::LocalSet::new()
         .run_until(async {
-            let (subduction, _handler, listener_fut, actor_fut) =
-                SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-                    .signer(test_signer())
-                    .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-                    .spawner(TokioSpawn)
-                    .timer(InstantTimeout)
-                    .build::<Local, ChannelMockConnection<SyncMessage>>();
+            let (subduction, _handler, listener_fut, actor_fut) = SubductionBuilder::new()
+                .signer(test_signer())
+                .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+                .spawner(TokioSpawn)
+                .timer(InstantTimeout)
+                .build::<Local, ChannelMockConnection<SyncMessage>>();
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
             subduction.add_connection(conn.authenticated()).await?;

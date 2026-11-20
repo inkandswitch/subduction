@@ -227,8 +227,8 @@ async fn fingerprint_summary_excludes_dominated_fragments() -> TestResult {
 
     // Get the in-memory tree and compute fingerprint summary
     let tree = subduction
-        .sedimentrees()
-        .get_cloned(&sed_id)
+        .minimized_tree_store()
+        .get_cloned(sed_id)
         .await
         .expect("sedimentree should exist");
 

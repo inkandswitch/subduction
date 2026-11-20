@@ -1,7 +1,8 @@
 //! Shared data-ingestion helpers used by both [`Subduction`] and [`SyncHandler`].
 //!
 //! These free functions contain the logic for storing commits, fragments,
-//! and blobs locally and updating the in-memory [`Sedimentree`] cache.
+//! and blobs locally, and for reading each tree's minimized [`Sedimentree`]
+//! through the node's [minimized tree store](crate::minimized_tree_store).
 //! Both `Subduction` and `SyncHandler` delegate to these functions through
 //! thin `&self` wrappers, keeping the implementation in one place.
 //!
@@ -24,11 +25,11 @@ use sedimentree_core::{
 use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
 
 use crate::{
-    collections::bounded_sharded_map::BoundedShardedMap,
     connection::{Connection, message::SyncDiff},
+    minimized_tree_store::{Lookup, MinimizedTreeStore},
     peer::id::PeerId,
     policy::storage::StoragePolicy,
-    storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
+    storage::{powerbox::StoragePowerbox, putter::Putter, state::cache::Resident, traits::Storage},
 };
 use sedimentree_core::codec::{decode::Decode, encode::Encode};
 
@@ -81,9 +82,11 @@ pub(crate) async fn recv_batch_sync_response<
     Conn: Connection<Async, WireMsg>,
     WireMsg: Encode + Decode,
     Auth: StoragePolicy<Async>,
-    const SHARDS: usize,
+    Trees: MinimizedTreeStore<Async>,
+    Metric: DepthMetric,
 >(
-    sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
+    sedimentrees: &Trees,
+    depth_metric: &Metric,
     storage: &StoragePowerbox<Store, Auth, Async>,
     from: &PeerId,
     id: SedimentreeId,
@@ -230,7 +233,7 @@ pub(crate) async fn recv_batch_sync_response<
         // is added as we go, so `Set::insert` returns `false` for a head that
         // is in the tree *or* appeared earlier in this response.
         let (mut seen_commits, mut seen_fragments): (Set<CommitId>, Set<CommitId>) =
-            read_cached(sedimentrees, &putter.as_fetcher(), |tree| {
+            read_minimized(sedimentrees, depth_metric, &putter.as_fetcher(), |tree| {
                 (
                     commits
                         .iter()
@@ -278,9 +281,11 @@ pub(crate) async fn recv_batch_sync_response<
 pub(crate) async fn insert_commit_locally<
     Async: FutureForm,
     Store: Storage<Async>,
-    const SHARDS: usize,
+    Trees: MinimizedTreeStore<Async>,
+    Metric: DepthMetric,
 >(
-    sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
+    sedimentrees: &Trees,
+    depth_metric: &Metric,
     putter: &Putter<Async, Store>,
     verified_meta: VerifiedMeta<LooseCommit>,
 ) -> Result<bool, crate::storage::mutation::MutationError<Store::Error>> {
@@ -295,7 +300,7 @@ pub(crate) async fn insert_commit_locally<
     // O(1) on the resident hot path (no storage scan) and leaves the tree
     // resident so the add is a cheap hit. A `None` (tree not in storage)
     // means a brand-new tree, so the commit is necessarily new.
-    let was_added = read_cached(sedimentrees, &putter.as_fetcher(), |tree| {
+    let was_added = read_minimized(sedimentrees, depth_metric, &putter.as_fetcher(), |tree| {
         !tree.has_loose_commit(head)
     })
     .await?
@@ -312,9 +317,11 @@ pub(crate) async fn insert_commit_locally<
 pub(crate) async fn insert_fragment_locally<
     Async: FutureForm,
     Store: Storage<Async>,
-    const SHARDS: usize,
+    Trees: MinimizedTreeStore<Async>,
+    Metric: DepthMetric,
 >(
-    sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
+    sedimentrees: &Trees,
+    depth_metric: &Metric,
     putter: &Putter<Async, Store>,
     verified_meta: VerifiedMeta<Fragment>,
 ) -> Result<bool, crate::storage::mutation::MutationError<Store::Error>> {
@@ -323,7 +330,7 @@ pub(crate) async fn insert_fragment_locally<
 
     // Newness from pre-save tree state (resident or hydrated); see
     // `insert_commit_locally`.
-    let was_added = read_cached(sedimentrees, &putter.as_fetcher(), |tree| {
+    let was_added = read_minimized(sedimentrees, depth_metric, &putter.as_fetcher(), |tree| {
         !tree.has_fragment(head)
     })
     .await?
@@ -338,39 +345,44 @@ pub(crate) async fn insert_fragment_locally<
 ///
 /// Prunes dominated fragments and loose commits covered by fragments,
 /// keeping only the minimal covering set. Storage retains the full history.
-pub(crate) async fn minimize_tree<Metric: DepthMetric, const SHARDS: usize>(
-    sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
+pub(crate) async fn minimize_tree<
+    Async: FutureForm,
+    Trees: MinimizedTreeStore<Async>,
+    Metric: DepthMetric,
+>(
+    sedimentrees: &Trees,
     depth_metric: &Metric,
     id: SedimentreeId,
 ) {
-    sedimentrees
-        .with_entry(&id, |tree| {
-            tree.ensure_minimized(depth_metric);
-        })
-        .await;
+    // Best effort: a miss or store error leaves nothing to minimize.
+    if let Ok(Lookup::Hit(mut tree)) = sedimentrees.get(id).await {
+        tree.ensure_minimized(depth_metric);
+    }
 }
 
 /// Get a sedimentree from the in-memory cache, hydrating it from durable
 /// storage on a miss.
 ///
 /// This is the single read entry point that makes the in-memory
-/// [`BoundedShardedMap`] safe to evict: every reader that needs the *full*
+/// [`MinimizedTreeStore`] safe to evict: every reader that needs the *full*
 /// tree state must go through here so an evicted (or never-resident) tree is
 /// transparently reloaded from storage rather than silently seen as empty.
 ///
 /// # Deadlock safety
 ///
 /// Hydration loads from storage (an `.await` that, on Wasm, is an async
-/// `IndexedDB` transaction) **without holding any shard lock**. Freshly loaded
-/// trees are also minimized outside the lock. Only then does it briefly lock
-/// the shard to install the tree or adopt a concurrently installed entry.
-/// Never hold the shard mutex across the storage await.
+/// `IndexedDB` transaction) **without holding the tree's store lock** or any
+/// store entry. Freshly loaded trees are also minimized outside the lock.
+/// Only then does it briefly take the store lock to populate the store. If a
+/// mutation overlapped the load, it retries, and the next lookup hits any tree
+/// another reader populated meanwhile. Never hold a store entry across the
+/// storage await.
 ///
 /// # Concurrency
 ///
 /// Concurrent misses for the same id each load independently (a bounded,
-/// self-correcting "thundering herd"); the first to install wins and the
-/// rest are dropped — correct because all loads read the same durable
+/// self-correcting "thundering herd"); the first to populate wins and the
+/// rest are kept out — correct because all loads read the same durable
 /// source. Single-flight de-duplication is intentionally not implemented.
 ///
 /// Returns `None` only when the tree does not exist. Existence is recorded
@@ -384,44 +396,31 @@ pub(crate) async fn get_or_hydrate<
     Store: Storage<Async>,
     Auth: StoragePolicy<Async>,
     Metric: DepthMetric,
-    const SHARDS: usize,
+    Trees: MinimizedTreeStore<Async>,
 >(
-    sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
+    sedimentrees: &Trees,
     storage: &StoragePowerbox<Store, Auth, Async>,
     depth_metric: &Metric,
     id: SedimentreeId,
 ) -> Result<Option<Sedimentree>, Store::Error> {
-    // Fast path: resident hit (also records an LRU access). Minimize in place
-    // first if dirty so callers that feed the wire (fingerprint summaries /
-    // resolvers) always observe the minimal form.
-    if let Some(tree) = sedimentrees
-        .with_entry(&id, |tree| tree.minimized(depth_metric).clone())
-        .await
-    {
-        tracing::trace!(tree = ?id, "sedimentree cache hit");
-        #[cfg(feature = "metrics")]
-        crate::metrics::sedimentree_cache_hit();
-        return Ok(Some(tree));
-    }
-
-    #[cfg(feature = "metrics")]
-    crate::metrics::sedimentree_cache_miss();
+    // Minimize a resident tree in place first if dirty, so callers that feed
+    // the wire (fingerprint summaries / resolvers) always see the minimal form.
     read_cached_prepared(
         sedimentrees,
         &storage.local_fetcher(id),
+        Count::Recorded,
         |tree| tree.ensure_minimized(depth_metric),
-        // A concurrently installed resident entry may still be dirty.
         |tree| tree.minimized(depth_metric).clone(),
     )
     .await
 }
 
-/// Compute a sedimentree's heads, hydrating from storage on a cache miss.
+/// Compute a sedimentree's heads, hydrating from storage on a store miss.
 ///
-/// Like [`get_or_hydrate`] but returns only the heads, computing them inside
-/// the shard lock *without cloning the whole tree out* and without the
-/// double-minimization that `get_or_hydrate(...).heads()` incurred (one
-/// minimize in the cache, then a second inside [`Sedimentree::heads`]). On the
+/// Like [`get_or_hydrate`] but returns only the heads, computing them on the
+/// checked-out store entry *without cloning the whole tree out* and without
+/// the double-minimization that `get_or_hydrate(...).heads()` incurred (one
+/// minimize in the store, then a second inside [`Sedimentree::heads`]). On the
 /// resident-hit fast path — taken on every newly-accepted commit/fragment —
 /// this is a single dirty-gated minimize plus the head walk.
 ///
@@ -432,35 +431,23 @@ pub(crate) async fn heads_or_hydrate<
     Store: Storage<Async>,
     Auth: StoragePolicy<Async>,
     Metric: DepthMetric,
-    const SHARDS: usize,
+    Trees: MinimizedTreeStore<Async>,
 >(
-    sedimentrees: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
+    sedimentrees: &Trees,
     storage: &StoragePowerbox<Store, Auth, Async>,
     depth_metric: &Metric,
     id: SedimentreeId,
 ) -> Result<Option<Vec<CommitId>>, Store::Error> {
-    // Fast path: resident hit. Compute heads in place — minimize only if dirty,
-    // no tree clone, no re-minimize.
-    if let Some(heads) = sedimentrees
-        .with_entry(&id, |tree| tree.heads(depth_metric))
-        .await
-    {
-        #[cfg(feature = "metrics")]
-        crate::metrics::sedimentree_cache_hit();
-        return Ok(Some(heads));
-    }
-
-    // Miss: hydrate (which installs into the cache) and read the heads. The
-    // hydrated tree is already minimal, so skip re-minimizing. `get_or_hydrate`
-    // records the miss; don't double-count it here.
-    Ok(get_or_hydrate::<Async, Store, Auth, Metric, SHARDS>(
+    // Compute heads in place: minimize only if dirty, no tree clone, and no
+    // second minimize inside `Sedimentree::heads`.
+    read_cached_prepared(
         sedimentrees,
-        storage,
-        depth_metric,
-        id,
+        &storage.local_fetcher(id),
+        Count::Recorded,
+        |tree| tree.ensure_minimized(depth_metric),
+        |tree| tree.heads(depth_metric),
     )
-    .await?
-    .map(|tree| tree.heads_assuming_minimal()))
+    .await
 }
 
 /// Reconstruct a sedimentree's full history directly from storage.
@@ -470,7 +457,7 @@ pub(crate) async fn heads_or_hydrate<
 ///
 /// The tree is **not** minimized here: membership checks can use the full
 /// history without a [`DepthMetric`]. Readers needing the minimal form prepare
-/// the loaded tree before cache installation (see [`get_or_hydrate`]).
+/// the loaded tree before populating the store (see [`get_or_hydrate`]).
 pub(crate) async fn load_tree<Async: FutureForm, Store: Storage<Async>>(
     access: &crate::storage::fetcher::Fetcher<Async, Store>,
 ) -> Result<Option<MinimizedSedimentree>, Store::Error> {
@@ -493,57 +480,82 @@ pub(crate) async fn load_tree<Async: FutureForm, Store: Storage<Async>>(
     ))))
 }
 
-/// Read a tree from the cache, loading it from storage if needed.
-/// Before caching the loaded tree, check that no writes or deletes overlapped
+#[cfg(test)]
+/// Read a tree from the store, loading it from storage if needed.
+/// Before populating the store with the loaded tree, check that no writes or
+/// deletes overlapped
 /// the read; otherwise retry. This prevents an old read from putting stale data
-/// back into the cache after another operation cleared it.
-/// No cache or revision locks are held while waiting for storage.
-pub(crate) async fn read_cached<Async, Store, Inspect, R, const SHARDS: usize>(
-    cache: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
+/// back into the store after another operation cleared it.
+/// No store or revision locks are held while waiting for storage.
+pub(crate) async fn read_cached<Async, Store, Trees, Inspect, R>(
+    cache: &Trees,
     fetcher: &crate::storage::fetcher::Fetcher<Async, Store>,
     inspect: Inspect,
 ) -> Result<Option<R>, Store::Error>
 where
     Async: FutureForm,
     Store: Storage<Async>,
-    Inspect: FnOnce(&mut MinimizedSedimentree) -> R,
+    Trees: MinimizedTreeStore<Async>,
+    Inspect: FnMut(&mut MinimizedSedimentree) -> R,
 {
-    read_cached_prepared(cache, fetcher, |_| (), inspect).await
+    read_cached_prepared(cache, fetcher, Count::Silent, |_| (), inspect).await
 }
 
-/// Prepare each freshly loaded tree before taking the cache shard lock.
-/// Preparation may be expensive (e.g. minimization) and is repeated on retries.
-/// Revision validation still happens afterward, under the lock. If another
-/// reader installed an entry meanwhile, inspect that entry instead; `prepare`
-/// does not run on resident entries, so `inspect` must handle dirty ones.
-#[allow(
-    clippy::expect_used,
-    reason = "inspect is consumed only for a resident or validated value"
-)]
-async fn read_cached_prepared<Async, Store, Prepare, Inspect, R, const SHARDS: usize>(
-    cache: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
+/// Read a tree for a write path's newness check, minimizing a freshly loaded
+/// tree before it populates the store, so the store never holds a dirty tree.
+async fn read_minimized<Async, Store, Trees, Metric, Inspect, R>(
+    cache: &Trees,
+    depth_metric: &Metric,
     fetcher: &crate::storage::fetcher::Fetcher<Async, Store>,
-    prepare: Prepare,
     inspect: Inspect,
 ) -> Result<Option<R>, Store::Error>
 where
     Async: FutureForm,
     Store: Storage<Async>,
-    Prepare: Fn(&mut MinimizedSedimentree),
-    Inspect: FnOnce(&mut MinimizedSedimentree) -> R,
+    Trees: MinimizedTreeStore<Async>,
+    Metric: DepthMetric,
+    Inspect: FnMut(&mut MinimizedSedimentree) -> R,
 {
-    let id = fetcher.sedimentree_id();
-    let mut inspect = Some(inspect);
+    read_cached_prepared(
+        cache,
+        fetcher,
+        Count::Silent,
+        |tree| tree.ensure_minimized(depth_metric),
+        inspect,
+    )
+    .await
+}
+
+/// Prepare each freshly loaded tree before populating the store with it.
+/// Preparation may be expensive (e.g. minimization) and is repeated on retries.
+/// Revision validation still happens afterward, under the tree's store lock.
+/// `prepare` does not run on resident entries, so `inspect` must handle dirty
+/// ones. Both may run more than once.
+async fn read_cached_prepared<Async, Store, Trees, Prepare, Inspect, R>(
+    cache: &Trees,
+    fetcher: &crate::storage::fetcher::Fetcher<Async, Store>,
+    count: Count,
+    prepare: Prepare,
+    mut inspect: Inspect,
+) -> Result<Option<R>, Store::Error>
+where
+    Async: FutureForm,
+    Store: Storage<Async>,
+    Trees: MinimizedTreeStore<Async>,
+    Prepare: Fn(&mut MinimizedSedimentree),
+    Inspect: FnMut(&mut MinimizedSedimentree) -> R,
+{
+    let coordination = fetcher.coordination();
     loop {
-        if let Some(result) = cache
-            .with_entry(&id, |tree| {
-                inspect.take().expect("unconsumed inspect")(tree)
-            })
-            .await
-        {
-            return Ok(Some(result));
-        }
-        let read = fetcher.coordination().prepare_cache_read(cache).await;
+        let seen = match coordination.lookup(cache).await {
+            Resident::Hit(mut tree) => {
+                count.hit(fetcher.sedimentree_id());
+                return Ok(Some(inspect(&mut tree)));
+            }
+            Resident::Miss(seen) => seen,
+        };
+        count.miss(fetcher.sedimentree_id());
+        let read = coordination.prepare_cache_read(cache, seen).await;
         let mut loaded = load_tree(fetcher).await?;
         if loaded.is_none() && fetcher.contains_sedimentree_id().await? {
             loaded = Some(MinimizedSedimentree::default());
@@ -551,15 +563,36 @@ where
         if let Some(tree) = loaded.as_mut() {
             prepare(tree);
         }
-        if let Some(result) = read
-            .install(loaded, |tree| {
-                inspect.take().expect("unconsumed inspect")(tree)
-            })
-            .await
-        {
+        if let Some(result) = read.populate(loaded, &mut inspect).await {
             return Ok(result);
         }
         crate::spawn::yield_once().await;
+    }
+}
+
+/// Whether a read counts toward the store hit/miss metrics. Only the node's
+/// tree reads do; the newness checks on the write path do not.
+#[derive(Debug, Clone, Copy)]
+enum Count {
+    Recorded,
+    Silent,
+}
+
+impl Count {
+    fn hit(self, id: SedimentreeId) {
+        if matches!(self, Self::Recorded) {
+            tracing::trace!(tree = ?id, "minimized tree store hit");
+            #[cfg(feature = "metrics")]
+            crate::metrics::sedimentree_cache_hit();
+        }
+    }
+
+    fn miss(self, id: SedimentreeId) {
+        if matches!(self, Self::Recorded) {
+            tracing::trace!(tree = ?id, "minimized tree store miss");
+            #[cfg(feature = "metrics")]
+            crate::metrics::sedimentree_cache_miss();
+        }
     }
 }
 

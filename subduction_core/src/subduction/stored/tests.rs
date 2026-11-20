@@ -38,7 +38,7 @@ impl Spawn<Sendable> for ManualSpawn {
 async fn shutdown_and_driver_loss_interrupt_preparation_without_certifying_a_read() {
     for lose_driver in [false, true] {
         let (tasks, pending) = async_channel::unbounded();
-        let (node, _handler, _listener, _manager) = SubductionBuilder::<_, _, _, _, _, _, 1>::new()
+        let (node, _handler, _listener, _manager) = SubductionBuilder::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(ManualSpawn(tasks))

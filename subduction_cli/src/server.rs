@@ -20,6 +20,7 @@ use subduction_core::{
         self,
         audience::{Audience, DiscoveryId},
     },
+    minimized_tree_store::memory::MemoryMinimizedTreeStore,
     nonce_cache::NonceCache,
     peer::{
         counter::{PeerCounter, wall_clock_seed},
@@ -146,11 +147,11 @@ pub(crate) struct ServerArgs {
 
     /// Approximate maximum number of sedimentrees kept resident in memory.
     ///
-    /// The in-memory sedimentree map is an LRU cache over disk storage:
+    /// The in-memory minimized tree store is an LRU cache over disk storage:
     /// when the resident set exceeds this many trees, the least-recently-
     /// used ones are evicted and re-hydrated from disk on next access. This
     /// bounds memory by the active working set rather than the total number
-    /// of documents ever synced. When unset, the map is unbounded.
+    /// of documents ever synced. When unset, the store is unbounded.
     ///
     /// This is approximate, not a strict cap: the limit is enforced per
     /// shard, so the effective ceiling is rounded up to a multiple of the
@@ -549,15 +550,16 @@ where
         .send_counter(PeerCounter::with_seed(wall_clock_seed))
         .roundtrip_timeout(Duration::from_secs(args.timeout));
 
-    let builder = if let Some(max) = args.max_resident_trees {
+    let minimized_tree_store = if let Some(max) = args.max_resident_trees {
         tracing::info!(
             max_resident_trees = max,
-            "bounding in-memory sedimentree cache"
+            "bounding in-memory minimized tree store"
         );
-        builder.max_resident_trees(max)
+        MemoryMinimizedTreeStore::with_capacity(max)
     } else {
-        builder
+        MemoryMinimizedTreeStore::new()
     };
+    let builder = builder.minimized_tree_store(minimized_tree_store);
 
     let builder = if let Some(id) = discovery_id {
         builder.discovery_id(id)
@@ -620,7 +622,7 @@ where
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
-                        let resident = resident_subduction.resident_sedimentree_count().await;
+                        let resident = resident_subduction.minimized_tree_store().len().await;
                         subduction_core::metrics::set_sedimentree_cache_resident(resident);
 
                         // Heals the connections gauge if an event-driven

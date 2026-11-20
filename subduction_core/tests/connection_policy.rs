@@ -89,13 +89,12 @@ impl StoragePolicy<Sendable> for RejectConnectionPolicy {
 
 #[tokio::test]
 async fn rejected_connection_is_not_registered() -> TestResult {
-    let (subduction, _handler, _listener_fut, _actor_fut) =
-        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-            .signer(test_signer())
-            .storage(MemoryStorage::new(), Arc::new(RejectConnectionPolicy))
-            .spawner(TestSpawn)
-            .timer(InstantTimeout)
-            .build::<Sendable, MockConnection>();
+    let (subduction, _handler, _listener_fut, _actor_fut) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(RejectConnectionPolicy))
+        .spawner(TestSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, MockConnection>();
 
     let peer_id = PeerId::new([1u8; 32]);
     let conn = MockConnection::with_peer_id(peer_id).authenticated();
@@ -137,13 +136,12 @@ async fn rejected_connection_does_not_affect_existing_connections() -> TestResul
     assert!(connected.contains(&allowed_peer));
 
     // Now create a subduction with reject policy and try to add a connection
-    let (reject_subduction, _handler, _listener_fut2, _actor_fut2) =
-        SubductionBuilder::<_, _, _, _, _, _, 256>::new()
-            .signer(test_signer())
-            .storage(MemoryStorage::new(), Arc::new(RejectConnectionPolicy))
-            .spawner(TestSpawn)
-            .timer(InstantTimeout)
-            .build::<Sendable, MockConnection>();
+    let (reject_subduction, _handler, _listener_fut2, _actor_fut2) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(RejectConnectionPolicy))
+        .spawner(TestSpawn)
+        .timer(InstantTimeout)
+        .build::<Sendable, MockConnection>();
 
     let rejected_peer = PeerId::new([2u8; 32]);
     let rejected_conn = MockConnection::with_peer_id(rejected_peer).authenticated();
