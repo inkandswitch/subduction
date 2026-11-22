@@ -13,20 +13,14 @@
 //!   document.am
 //! ```
 
-use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
-use automerge::Automerge;
+use automerge::next::Automerge;
+use automerge_subduction_ingest::{IngestResult, ingest_automerge, parse_32_bytes, parse_doc_id};
 use clap::Parser;
 use eyre::{Result, WrapErr, eyre};
 use future_form::Sendable;
-use sedimentree_core::{
-    blob::{Blob, BlobMeta},
-    collections::Set,
-    fragment::Fragment,
-    id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
-    sedimentree::Sedimentree,
-};
+use sedimentree_core::id::SedimentreeId;
 use subduction_core::{
     handshake::audience::Audience, policy::open::OpenPolicy, storage::memory::MemoryStorage,
     subduction::builder::SubductionBuilder, timeout::call::CallTimeout,
@@ -34,73 +28,6 @@ use subduction_core::{
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::tokio::{TimeoutTokio, TokioSpawn, client::TokioWebSocketClient};
-
-/// Result of ingesting an Automerge document.
-struct IngestResult {
-    sedimentree: Sedimentree,
-    blobs: Vec<Blob>,
-    change_count: usize,
-    covered_count: usize,
-    loose_count: usize,
-    fragment_count: usize,
-}
-
-/// Ingest an Automerge document into a [`Sedimentree`].
-///
-/// Thin adapter over [`Automerge::fragments`] and
-/// [`Automerge::bundle_fragments`]: maps each level-1+ `automerge::Fragment`
-/// into a sedimentree [`Fragment`] and each level-0 fragment into a
-/// [`LooseCommit`].
-fn ingest_automerge(doc: &Automerge, sedimentree_id: SedimentreeId) -> Result<IngestResult> {
-    let cached = doc.fragments(1..);
-    let loose = doc.fragments(0..=0);
-    let cached_bytes = doc.bundle_fragments(cached.iter().cloned());
-    let loose_bytes = doc.bundle_fragments(loose.iter().cloned());
-
-    let mut fragments = Vec::with_capacity(cached.len());
-    let mut blobs = Vec::with_capacity(cached.len() + loose.len());
-    let mut covered: Set<CommitId> = Set::new();
-    for (f, raw) in cached.iter().zip(cached_bytes) {
-        for m in &f.members {
-            covered.insert(CommitId::new(m.0));
-        }
-        let blob = Blob::new(raw);
-        let boundary: BTreeSet<CommitId> = f.boundary.iter().map(|h| CommitId::new(h.0)).collect();
-        let checkpoints: Vec<CommitId> = f.checkpoints.iter().map(|h| CommitId::new(h.0)).collect();
-        let meta = BlobMeta::new(&blob);
-        fragments.push(Fragment::new(
-            sedimentree_id,
-            CommitId::new(f.head.0),
-            boundary,
-            &checkpoints,
-            meta,
-        )?);
-        blobs.push(blob);
-    }
-
-    let mut loose_commits = Vec::with_capacity(loose.len());
-    for (f, raw) in loose.iter().zip(loose_bytes) {
-        let head = CommitId::new(f.head.0);
-        let parents: BTreeSet<CommitId> = f.boundary.iter().map(|p| CommitId::new(p.0)).collect();
-        let blob = Blob::new(raw);
-        let meta = BlobMeta::new(&blob);
-        loose_commits.push(LooseCommit::new(sedimentree_id, head, parents, meta)?);
-        blobs.push(blob);
-    }
-
-    let fragment_count = fragments.len();
-    let loose_count = loose_commits.len();
-    let covered_count = covered.len();
-
-    Ok(IngestResult {
-        sedimentree: Sedimentree::new(fragments, loose_commits),
-        blobs,
-        change_count: doc.get_changes_meta(&[]).len(),
-        covered_count,
-        loose_count,
-        fragment_count,
-    })
-}
 
 /// Ingest an Automerge document into a Subduction sync server.
 #[derive(Debug, Parser)]
@@ -152,16 +79,6 @@ struct Args {
     dry_run: bool,
 }
 
-fn parse_32_bytes(hex: &str, name: &str) -> Result<[u8; 32]> {
-    let bytes = hex::decode(hex)?;
-    if bytes.len() != 32 {
-        eyre::bail!("{name} must be 32 bytes (64 hex characters)");
-    }
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&bytes);
-    Ok(arr)
-}
-
 fn load_signer(args: &Args) -> Result<MemorySigner> {
     if let Some(hex_seed) = &args.key_seed {
         let seed = parse_32_bytes(hex_seed, "key seed")?;
@@ -202,42 +119,6 @@ fn load_signer(args: &Args) -> Result<MemorySigner> {
     ))
 }
 
-/// Decode a bs58check-encoded document ID into a zero-padded 32-byte
-/// `SedimentreeId`.
-fn sed_id_from_bs58check(encoded: &str) -> Result<SedimentreeId> {
-    let decoded = bs58::decode(encoded)
-        .with_check(None)
-        .into_vec()
-        .wrap_err_with(|| format!("invalid base58check document ID: {encoded}"))?;
-    if decoded.len() > 32 {
-        eyre::bail!("document ID too long: {} bytes (max 32)", decoded.len());
-    }
-    let mut padded = [0u8; 32];
-    #[allow(clippy::indexing_slicing)] // len checked above
-    padded[..decoded.len()].copy_from_slice(&decoded);
-    Ok(SedimentreeId::new(padded))
-}
-
-/// Parse a document ID from various formats:
-/// - `automerge:<base58check>` → decode the base58check portion
-/// - Raw base58check string → decode directly
-/// - 64 hex characters → decode as 32 raw bytes
-fn parse_doc_id(input: &str) -> Result<SedimentreeId> {
-    let stripped = input.strip_prefix("automerge:").unwrap_or(input);
-
-    // Strip optional #heads suffix (automerge URLs can have `#head1|head2`)
-    let stripped = stripped.split('#').next().unwrap_or(stripped);
-
-    // Try hex first (64 hex chars = 32 bytes)
-    if stripped.len() == 64 && stripped.chars().all(|c| c.is_ascii_hexdigit()) {
-        let bytes = parse_32_bytes(stripped, "doc-id")?;
-        return Ok(SedimentreeId::new(bytes));
-    }
-
-    // Otherwise treat as base58check
-    sed_id_from_bs58check(stripped)
-}
-
 /// Derive a document ID from the filename (minus extension), treating
 /// the stem as a base58check-encoded automerge document ID.
 fn sed_id_from_filename(path: &std::path::Path) -> Result<SedimentreeId> {
@@ -248,9 +129,9 @@ fn sed_id_from_filename(path: &std::path::Path) -> Result<SedimentreeId> {
     parse_doc_id(&stem)
 }
 
-fn print_ingest_stats(result: &IngestResult, sed_id: SedimentreeId) {
+fn print_ingest_stats(result: &IngestResult, sed_id: SedimentreeId, change_count: usize) {
     eprintln!("  doc id:     {sed_id}");
-    eprintln!("  changes:    {}", result.change_count);
+    eprintln!("  changes:    {change_count}");
     eprintln!("  fragments:  {}", result.fragment_count);
     eprintln!("  loose:      {}", result.loose_count);
     eprintln!("  covered:    {}", result.covered_count);
@@ -304,7 +185,7 @@ async fn main() -> Result<()> {
     // Ingest: automerge → sedimentree.
     eprintln!("ingesting...");
     let result = ingest_automerge(&doc, sed_id)?;
-    print_ingest_stats(&result, sed_id);
+    print_ingest_stats(&result, sed_id, doc.num_changes());
 
     if args.dry_run {
         eprintln!("dry run -- skipping upload");

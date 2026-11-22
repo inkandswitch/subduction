@@ -55,7 +55,7 @@ arbitrary = "1.4"
 async-channel = { version = "2.5", default-features = false }
 async-lock = { version = "3.4", default-features = false }
 async-tungstenite = "0.31.0"
-automerge = "0.11.0"
+automerge = { version = "0.12.0", path = "../automerge/rust/automerge" }
 axum = "0.8"
 base58 = "0.2.0"
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
