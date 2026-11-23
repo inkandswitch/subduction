@@ -7,9 +7,9 @@ use crate::{
     error::{DisconnectionError, RecvError, RunError, SendError},
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
     sleep::TokioSleeper,
+    tokio::stream::{DialStream, dial},
     websocket::{KeepAlive, KeepAliveTask, ListenerTask, SenderTask, WebSocket},
 };
-use async_tungstenite::tokio::{ConnectStream, connect_async_with_config};
 use future_form::{FutureForm, Sendable};
 use futures::{FutureExt, future::BoxFuture};
 
@@ -41,7 +41,7 @@ pub struct TokioWebSocketClient<R: Signer<Sendable> + Clone> {
     address: Uri,
     signer: R,
     audience: Audience,
-    socket: WebSocket<ConnectStream, Sendable>,
+    socket: WebSocket<DialStream, Sendable>,
     /// Carried across reconnects via [`Reconnect`]. Defaults to
     /// [`KeepAlive::balanced`]; use [`Self::with_keepalive`] to
     /// override.
@@ -179,8 +179,7 @@ impl<R: Signer<Sendable> + Clone + Send + Sync> TokioWebSocketClient<R> {
         let mut ws_config = WebSocketConfig::default();
         ws_config.max_message_size = Some(max_message_size);
         ws_config.max_frame_size = Some(max_message_size);
-        let (ws_stream, _resp) =
-            connect_async_with_config(address.clone(), Some(ws_config)).await?;
+        let (ws_stream, inbound) = dial(address.clone(), Some(ws_config)).await?;
 
         let now = TimestampSeconds::now();
         let nonce = Nonce::random();
@@ -191,6 +190,7 @@ impl<R: Signer<Sendable> + Clone + Send + Sync> TokioWebSocketClient<R> {
                 |ws_handshake, peer_id| {
                     let (socket, sender_fut, keepalive_task) = WebSocket::new_with_keepalive(
                         ws_handshake.into_inner(),
+                        inbound,
                         peer_id,
                         keepalive,
                         TokioSleeper,

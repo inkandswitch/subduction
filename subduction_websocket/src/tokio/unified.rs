@@ -4,15 +4,14 @@ use alloc::vec::Vec;
 
 use crate::{
     error::{DisconnectionError, RecvError, RunError, SendError},
+    tokio::stream::{AcceptStream, DialStream},
     websocket::WebSocket,
 };
 
-use async_tungstenite::tokio::{ConnectStream, TokioAdapter};
 use future_form::Sendable;
 use futures::future::BoxFuture;
 
 use subduction_core::transport::Transport;
-use tokio::net::TcpStream;
 
 /// A unified WebSocket connection that can hold either an accepted or dialed connection.
 ///
@@ -21,10 +20,10 @@ use tokio::net::TcpStream;
 #[derive(Debug, Clone)]
 pub enum UnifiedWebSocket {
     /// A connection we accepted (peer connected to us).
-    Accepted(WebSocket<TokioAdapter<TcpStream>, Sendable>),
+    Accepted(WebSocket<AcceptStream, Sendable>),
 
     /// A connection we dialed (we connected to peer).
-    Dialed(WebSocket<ConnectStream, Sendable>),
+    Dialed(WebSocket<DialStream, Sendable>),
 }
 
 impl UnifiedWebSocket {

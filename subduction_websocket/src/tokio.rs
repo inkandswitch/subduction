@@ -19,6 +19,9 @@ pub mod client;
 #[cfg(feature = "tokio_server_any")]
 pub mod server;
 
+#[cfg(any(feature = "tokio_client_any", feature = "tokio_server_any"))]
+pub mod stream;
+
 #[cfg(feature = "tokio_server_any")]
 pub mod unified;
 

@@ -37,6 +37,8 @@
 //!     let inner = spawner;
 //!
 //!     upgrade.on_upgrade(&spawner, WebSocketConfig::default(), move |ws| async move {
+//!         // Lets the keepalive see a large upload while it is still arriving.
+//!         let inbound = ws.get_ref().progress();
 //!         # let signer: MemorySigner = unimplemented!();
 //!         # let nonce_cache: NonceCache = unimplemented!();
 //!         # let my_peer_id: PeerId = unimplemented!();
@@ -47,6 +49,7 @@
 //!                 // moves until all three are running.
 //!                 let (socket, sender_fut, keepalive) = WebSocket::new_with_keepalive(
 //!                     hs.into_inner(),
+//!                     inbound,
 //!                     peer_id,
 //!                     KeepAlive::balanced(),
 //!                     TokioSleeper,
