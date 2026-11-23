@@ -1,7 +1,9 @@
 //! The node's handling of a store that fails or reports newer generations.
 //!
 //! The stock stores never do either, so these paths need a test double: a
-//! single-node store with real generations and switchable failures.
+//! single-node store with real generations and switchable failures, which
+//! upholds the store's error contract itself (see
+//! [`crate::minimized_tree_store`] § Errors).
 
 use super::*;
 use crate::{
@@ -27,6 +29,8 @@ struct Switches {
     fail_populate: AtomicBool,
     fail_merge: AtomicBool,
     fail_remove: AtomicBool,
+    /// Set by a failed `merge`/`remove`: the inner tree may be stale.
+    poisoned: AtomicBool,
     gets: AtomicUsize,
     populates: AtomicUsize,
     removes: AtomicUsize,
@@ -35,6 +39,10 @@ struct Switches {
 /// A store with one generation counter for every tree, bumped by `merge` and
 /// `remove` and compared by `populate`. Each check-then-write is not atomic,
 /// so this is only a faithful shared store for sequential tests.
+///
+/// A failed `merge` or `remove` poisons the store and bumps the generation:
+/// lookups miss until a populate against the new generation replaces the
+/// stale tree, and populates from before the failure are stale.
 #[derive(Debug, Clone, Default)]
 struct FlakyStore {
     inner: Cache,
@@ -52,6 +60,15 @@ impl FlakyStore {
 
     fn bump(&self) {
         self.switches.generation.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn poison(&self) {
+        self.switches.poisoned.store(true, Ordering::SeqCst);
+        self.bump();
+    }
+
+    fn is_poisoned(&self) -> bool {
+        self.switches.poisoned.load(Ordering::SeqCst)
     }
 
     async fn resident_commits(&self) -> Option<usize> {
@@ -76,6 +93,11 @@ impl MinimizedTreeStore<Sendable> for FlakyStore {
             self.switches.gets.fetch_add(1, Ordering::SeqCst);
             if self.switches.fail_get.load(Ordering::SeqCst) {
                 return Err(Injected);
+            }
+            if self.is_poisoned() {
+                return Ok(Lookup::Miss(
+                    self.switches.generation.load(Ordering::SeqCst),
+                ));
             }
             Ok(
                 match MinimizedTreeStore::<Sendable>::get(&self.inner, id)
@@ -105,6 +127,13 @@ impl MinimizedTreeStore<Sendable> for FlakyStore {
             if seen != self.switches.generation.load(Ordering::SeqCst) {
                 return Ok(Populate::Stale);
             }
+            if self.is_poisoned() {
+                // Replace the stale tree rather than keep it as resident.
+                MinimizedTreeStore::<Sendable>::remove(&self.inner, id)
+                    .await
+                    .unwrap_or_else(never);
+                self.switches.poisoned.store(false, Ordering::SeqCst);
+            }
             MinimizedTreeStore::<Sendable>::populate(&self.inner, id, tree, ())
                 .await
                 .unwrap_or_else(never);
@@ -115,6 +144,7 @@ impl MinimizedTreeStore<Sendable> for FlakyStore {
     fn merge(&self, id: SedimentreeId, update: Sedimentree) -> BoxFuture<'_, Result<(), Injected>> {
         Sendable::from_future(async move {
             if self.switches.fail_merge.load(Ordering::SeqCst) {
+                self.poison();
                 return Err(Injected);
             }
             self.bump();
@@ -129,6 +159,7 @@ impl MinimizedTreeStore<Sendable> for FlakyStore {
         Sendable::from_future(async move {
             self.switches.removes.fetch_add(1, Ordering::SeqCst);
             if self.switches.fail_remove.load(Ordering::SeqCst) {
+                self.poison();
                 return Err(Injected);
             }
             self.bump();
@@ -276,46 +307,35 @@ async fn a_failed_populate_still_serves_the_read() {
 }
 
 #[tokio::test]
-async fn a_failed_merge_bypasses_the_store_until_a_remove_succeeds() {
+async fn a_failed_merge_does_not_hide_the_write() {
     let (storage, store) = flaky_node();
     let putter = storage.local_putter(ID);
     putter.save_commit(item(1).await).await.expect("seed");
     assert_eq!(commit_count(&store, &storage).await, Some(1));
     assert_eq!(store.resident_commits().await, Some(1), "warmed");
 
-    // The write persists, but its store maintenance fails, leaving the
-    // resident tree stale.
+    // The write persists, but its store maintenance fails. The write still
+    // succeeds: the store is only an optimization.
     store.set(|s| &s.fail_merge, true);
-    store.set(|s| &s.fail_remove, true);
     putter.save_commit(item(2).await).await.expect("write");
     assert_eq!(
         store.resident_commits().await,
         Some(1),
-        "stale entry remains"
+        "the stale tree is still in the store"
     );
 
-    // While the remove keeps failing, reads skip the stale entry entirely.
-    let gets = store.count(|s| &s.gets);
+    // The node keeps no record of the failure and does not retry it; the
+    // store stops serving the stale tree, so the read sees the write.
     let removes = store.count(|s| &s.removes);
     assert_eq!(commit_count(&store, &storage).await, Some(2));
     assert_eq!(
-        store.count(|s| &s.gets),
-        gets,
-        "a bypassed tree is not looked up"
+        store.count(|s| &s.removes),
+        removes,
+        "the node does not retry store maintenance"
     );
-    assert!(
-        store.count(|s| &s.removes) > removes,
-        "the remove is retried"
-    );
-
-    // Once the remove succeeds, the store is back in use.
-    store.set(|s| &s.fail_remove, false);
-    store.set(|s| &s.fail_merge, false);
-    assert_eq!(commit_count(&store, &storage).await, Some(2));
     assert_eq!(
         store.resident_commits().await,
         Some(2),
-        "populated again after healing"
+        "the read repopulated the store with the rebuilt tree"
     );
-    assert!(store.count(|s| &s.gets) > gets, "lookups resume");
 }

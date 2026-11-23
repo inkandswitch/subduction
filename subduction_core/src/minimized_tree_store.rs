@@ -30,7 +30,7 @@
 //! | [`get`](MinimizedTreeStore::get) | Every read | Check out the resident tree, or report a miss with the tree's current [generation] |
 //! | [`populate`](MinimizedTreeStore::populate) | After a miss, once the tree is rebuilt from storage | Keep the tree, unless its generation moved since the miss |
 //! | [`merge`](MinimizedTreeStore::merge) | After a successful write | Merge the new data into a resident tree, and change the generation |
-//! | [`remove`](MinimizedTreeStore::remove) | After a failed write or a deletion, and to clear a bypassed tree | Drop the tree, and change the generation |
+//! | [`remove`](MinimizedTreeStore::remove) | After a failed write or a deletion | Drop the tree, and change the generation |
 //!
 //! [generation]: MinimizedTreeStore::Generation
 //!
@@ -88,8 +88,29 @@
 //! A store error never fails a node operation; the store is only an
 //! optimization. A failed `get` is a miss, and the node reads storage
 //! without populating. A failed `populate` is ignored. A failed `merge` or
-//! `remove` could leave a stale tree behind, so the node stops using the
-//! store for that tree until a later `remove` succeeds.
+//! `remove` is logged; the node keeps no record of it.
+//!
+//! Storage already holds the write that the failed call was maintaining, so
+//! a tree from before the failure is stale, and serving it _hides that
+//! write_. After `merge` or `remove` returns `Err` for a tree, the store
+//! must:
+//!
+//! 1. **Not serve the old tree.** Never return a [`Lookup::Hit`] for a tree
+//!    from before the failed call. Report a miss (or an error) until the
+//!    store holds a tree rebuilt after it.
+//! 2. **Reject old populates.** Return [`Populate::Stale`] for any
+//!    `populate` whose `seen` generation came from before the failed call.
+//!
+//! A store that can fail therefore needs a real
+//! [`Generation`](MinimizedTreeStore::Generation): with `()` it cannot tell
+//! an old populate from a new one. A store whose `Error` is
+//! [`Infallible`](core::convert::Infallible) has nothing to uphold here.
+//!
+//! A shared store must uphold this for _every_ node, not just the one that
+//! saw the error. Remembering the failure in the failing node's process is
+//! not enough: another node would keep serving the stale tree. Typical
+//! approaches are retrying the call until it lands, expiring entries after
+//! a bound, or validating entries against a version kept with storage.
 //!
 //! [`Storage`]: crate::storage::traits::Storage
 
@@ -158,6 +179,11 @@ pub trait MinimizedTreeStore<Async: FutureForm>: Clone {
     /// A miss leaves the tree absent, since the next read rebuilds it from
     /// storage, which already holds the data. Either way, change the
     /// generation.
+    ///
+    /// # Errors
+    ///
+    /// On `Err`, the store must stop serving the tree from before this
+    /// call; see the [module documentation](self#errors).
     fn merge(
         &self,
         id: SedimentreeId,
@@ -165,6 +191,11 @@ pub trait MinimizedTreeStore<Async: FutureForm>: Clone {
     ) -> Async::Future<'_, Result<(), Self::Error>>;
 
     /// Drop the tree for `id`, if resident, and change its generation.
+    ///
+    /// # Errors
+    ///
+    /// On `Err`, the store must stop serving the tree from before this
+    /// call; see the [module documentation](self#errors).
     fn remove(&self, id: SedimentreeId) -> Async::Future<'_, Result<(), Self::Error>>;
 }
 

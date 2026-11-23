@@ -7,7 +7,7 @@
 //! acquiring it, and mutation notifications run after releasing it. Store hits
 //! never take the lock.
 
-use super::{ReadAttempt, StorageState, TrackedMutation, TreeCoordination};
+use super::{ReadAttempt, TrackedMutation, TreeCoordination};
 use crate::{
     minimized_tree_store::{Lookup, MinimizedTreeStore},
     stored::StoredItem,
@@ -15,10 +15,7 @@ use crate::{
 use alloc::vec::Vec;
 use core::{future::Future, marker::PhantomData};
 use future_form::FutureForm;
-use sedimentree_core::{
-    id::SedimentreeId,
-    sedimentree::{Sedimentree, minimized::MinimizedSedimentree},
-};
+use sedimentree_core::sedimentree::{Sedimentree, minimized::MinimizedSedimentree};
 
 /// A tree's store entry, as seen by the node.
 pub(crate) enum Resident<Entry, Generation> {
@@ -26,31 +23,15 @@ pub(crate) enum Resident<Entry, Generation> {
     Hit(Entry),
 
     /// The tree is not resident. Populate a rebuilt copy against `Some`
-    /// generation; `None` means the store is unusable for this tree right now
-    /// (it failed, or the tree is bypassed), so read storage without populating.
+    /// generation; `None` means the lookup failed, so read storage without
+    /// populating.
     Miss(Option<Generation>),
-}
-
-impl StorageState {
-    fn is_bypassed(&self, id: SedimentreeId) -> bool {
-        self.bypassed.lock().contains(&id)
-    }
-
-    fn set_bypassed(&self, id: SedimentreeId, bypassed: bool) {
-        let mut set = self.bypassed.lock();
-        if bypassed {
-            set.insert(id);
-        } else {
-            set.remove(&id);
-        }
-    }
 }
 
 impl TreeCoordination {
     /// Look this tree up in the store.
     ///
-    /// A store error is a miss without a generation. A bypassed tree first
-    /// retries the `remove` that failed; until that succeeds, it misses too.
+    /// A store error is a miss without a generation.
     pub(crate) async fn lookup<Async, Trees>(
         &self,
         store: &Trees,
@@ -60,19 +41,6 @@ impl TreeCoordination {
         Trees: MinimizedTreeStore<Async>,
     {
         let id = self.state.id;
-        let owner = &self.state.owner;
-        if owner.is_bypassed(id) {
-            // Never queue behind another task's store maintenance: while the
-            // store is failing, a busy lock means read storage directly.
-            let Some(_store) = self.state.store.try_lock() else {
-                return Resident::Miss(None);
-            };
-            if let Err(error) = store.remove(id).await {
-                tracing::warn!(tree = ?id, %error, "minimized tree store still failing; reading storage directly");
-                return Resident::Miss(None);
-            }
-            owner.set_bypassed(id, false);
-        }
         match store.get(id).await {
             Ok(Lookup::Hit(entry)) => Resident::Hit(entry),
             Ok(Lookup::Miss(generation)) => Resident::Miss(Some(generation)),
@@ -161,7 +129,10 @@ impl<Async: FutureForm, Trees: MinimizedTreeStore<Async>> CacheRead<'_, Async, T
 impl TrackedMutation {
     /// Run admitted storage work, maintain the store, then notify.
     /// Successful writes merge into the store; deletion or failure removes the
-    /// tree. Completion never reads storage or populates a cold store.
+    /// tree. A failed store call is only logged: the store contract requires
+    /// it to stop serving the tree from before the failure, so the node needs
+    /// no state of its own for it. Completion never reads storage or
+    /// populates a cold store.
     /// Dropping this future unfinished closes coordination, just like losing
     /// the admitted mutation before its first poll.
     pub(crate) async fn persist<Async, Trees, Work, R, E>(
@@ -184,19 +155,12 @@ impl TrackedMutation {
         let succeeded = update.is_some();
         {
             let _store = state.store.lock().await;
-            let bypassed = state.owner.is_bypassed(id);
-            // A bypassed tree may hold a stale entry: replace a merge with a
-            // remove, so a success clears it.
             let outcome = match update {
-                Some(update) if !bypassed => store.merge(id, update).await,
-                _ => store
-                    .remove(id)
-                    .await
-                    .inspect(|()| state.owner.set_bypassed(id, false)),
+                Some(update) => store.merge(id, update).await,
+                None => store.remove(id).await,
             };
             if let Err(error) = outcome {
-                tracing::warn!(tree = ?id, %error, "minimized tree store maintenance failed; bypassing it for this tree");
-                state.owner.set_bypassed(id, true);
+                tracing::warn!(tree = ?id, %error, "minimized tree store maintenance failed");
             }
             // Settle even on a store miss or failure, and publish independently
             // of residency. The store lock stays held through settlement.

@@ -103,10 +103,7 @@ use alloc::{
     vec::Vec,
 };
 use async_lock::Mutex as AsyncMutex;
-use sedimentree_core::{
-    collections::{Map, Set},
-    id::SedimentreeId,
-};
+use sedimentree_core::{collections::Map, id::SedimentreeId};
 use spin::Mutex;
 
 pub(crate) const MAX_PENDING_ITEMS: usize = 256;
@@ -115,9 +112,6 @@ pub(crate) const MAX_PENDING_BYTES: usize = 4 * 1024 * 1024;
 #[derive(Debug, Default)]
 pub(crate) struct StorageState {
     trees: Mutex<Map<SedimentreeId, Weak<TreeState>>>,
-    /// Trees whose store entry may be stale after a failed `merge`/`remove`.
-    /// Reads skip the store for these until a `remove` succeeds.
-    bypassed: Mutex<Set<SedimentreeId>>,
     closed: core::sync::atomic::AtomicBool,
     changed: event_listener::Event,
 }
