@@ -60,6 +60,17 @@ Each tree has a _generation_ that changes whenever its stored state does. A miss
 
 `populate` may or may not change the generation. Both are safe.
 
+## Checking an implementation
+
+None of these rules can be checked by the compiler, so a store declares that it meets them by implementing `SharedMinimizedTreeStore`, and the `conformance` module (behind the `conformance` feature, which pulls in no executor and so builds on Wasm) tests that declaration. It has:
+
+- checks every store must pass, through one handle;
+- checks for rules 1 to 3, through two handles to one backing store, which accept only a `SharedMinimizedTreeStore`;
+- `check_ops`, which runs generated operation sequences against both handles and compares every result with a model of storage. It checks that a hit always equals storage, that a removed tree never hits, and that a populate is kept only if no write happened since its miss.
+- `check_failing_store`, for a store that can fail, which takes a switch that makes the store's calls fail. It checks rule 6 through one handle: after a failed `merge` or `remove`, the tree from before it is not served, and a populate from before it is not kept.
+
+`tests/minimized_tree_store_conformance.rs` in `subduction_core` runs the suite against every stock store and is the template for running it against your own. Generate fresh tree ids per run on a networked store. The suite runs operations one after another, and it cannot force a store to forget a marker. So rule 4, the reclamation part of rule 3, and rule 6 as seen by _other_ nodes still need the store's own tests.
+
 ## Failed maintenance on a shared store
 
 When a `merge` or `remove` fails after a write (an error, a timeout, or `ResilientMinimizedTreeStore`'s open breaker), the call may not have changed the generation, but storage already holds the write. A tree from before the call is now stale, and serving it hides the write.
@@ -73,6 +84,8 @@ The failed call is often the very thing that can't reach the store, so a network
 | Retry the invalidation until it lands      | Queue the failed call's `remove` on the writing node and retry it. Until it lands, that node misses for the tree and rejects old populates | Until the retry lands, for others  |
 | Expire entries after a time-to-live        | Bound how long any entry lives, so a missed invalidation heals on its own                                                                 | Up to the TTL                      |
 | Validate entries against storage           | Keep a per-tree version with storage, bumped by every write. Store it with each entry and compare it on a hit                             | None, at one small read per hit    |
+
+Only validating against storage meets rule 6 for every node. The other two only bound how long other nodes can be served the stale tree, which, like the layered stores below, is a weaker promise than `SharedMinimizedTreeStore` makes.
 
 `ResilientMinimizedTreeStore` implements the first approach for the process it runs in: it marks the tree, retries the `remove` on the next lookup, turns later merges into removes, and reports old populates as stale until a `remove` lands. On its own that leaves other nodes stale until the retry lands, and forever if the writing node dies first, so a networked store wrapped in it still needs one of the others. `SharedMemoryMinimizedTreeStore` cannot fail, so it needs none of these.
 
@@ -134,3 +147,5 @@ A fast per-node store in front of a shared one composes as a single store, using
 | Expire entries after a time-to-live        | Local memory         | Up to the TTL  |
 
 The first still saves a lot: it moves a few bytes rather than the whole tree.
+
+Only the first keeps every rule. The other two serve hits that can lag storage by the push delay or the TTL, which breaks "a hit means the tree as stored". A node tolerates that the way it tolerates any hit racing a write, but the store is no longer a `SharedMinimizedTreeStore`, and the conformance suite rejects it by design. Run the full suite against the shared layer, and only the single-handle checks against the layered store.
