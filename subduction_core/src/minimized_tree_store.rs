@@ -108,9 +108,22 @@
 //!
 //! A shared store must uphold this for _every_ node, not just the one that
 //! saw the error. Remembering the failure in the failing node's process is
-//! not enough: another node would keep serving the stale tree. Typical
-//! approaches are retrying the call until it lands, expiring entries after
-//! a bound, or validating entries against a version kept with storage.
+//! not enough: another node would keep serving the stale tree, and the
+//! failed call is often the very one that could not reach the store.
+//!
+//! A shared store is always run together with the [`Storage`] it derives
+//! from, so meet this inside that backend rather than through the node:
+//!
+//! - **Invalidate with the write (recommended).** Have each storage write
+//!   drop the tree's entry, or change its generation, in the same
+//!   transaction. No entry then outlives a write, whatever happens to the
+//!   node's later `merge` or `remove`; those calls only keep the entry warm.
+//! - **Validate against storage.** Have each storage write bump a per-tree
+//!   version, record the version with each entry, and treat a hit whose
+//!   version is out of date as a miss. This costs a small read per hit.
+//!
+//! Retrying the failed call, or expiring entries after a bound, only limits
+//! how long other nodes can be served the stale tree.
 //!
 //! [`Storage`]: crate::storage::traits::Storage
 
