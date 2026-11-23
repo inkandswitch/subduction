@@ -1,0 +1,6 @@
+# pnpm 11 fails the install on any dependency build script it hasn't been
+# told about. esbuild ships its binary through per-platform optional
+# dependencies; its install script only double-checks that, and pnpm 10
+# already skipped it. Keep skipping it.
+allowBuilds:
+  esbuild: false

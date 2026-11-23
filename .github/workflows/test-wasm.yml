@@ -29,9 +29,10 @@ jobs:
         with:
           cache: true
 
+      # Same major as the Nix dev shell (`pkgs.pnpm_11` in flake.nix).
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 11
 
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh

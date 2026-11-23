@@ -4,6 +4,10 @@ name: Semver check
 # Advisory: versions are bumped when releasing, so a failure here means "the
 # next crates release needs a bigger bump", not "this PR is wrong". The crates
 # release workflow runs the same check as a gate. Do not make it required.
+#
+# So the job passes either way, and a failed check shows up as a warning
+# annotation on the PR rather than a red check. (A job-level
+# `continue-on-error` would still show the job as failed.)
 
 on:
   pull_request:
@@ -19,7 +23,6 @@ jobs:
   semver:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -29,6 +32,12 @@ jobs:
       # a newer rustc than rust-toolchain.toml pins, so it uses current stable.
       # Same settings as the release gate in publish-crates.yml.
       - name: Check semver against crates.io
+        id: semver
+        continue-on-error: true
         uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2.9
         with:
           rust-toolchain: stable
+
+      - name: Flag a bigger version bump
+        if: steps.semver.outcome == 'failure'
+        run: echo "::warning title=Semver::The next crates release needs a bigger version bump for these changes. See the 'Check semver against crates.io' step for details."

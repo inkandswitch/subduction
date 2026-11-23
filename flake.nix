@@ -136,7 +136,7 @@
           cargo-flamegraph
           cargo-mutants
           cargo-nextest
-          cargo-release
+          unstable.cargo-release
           cargo-outdated
           cargo-sort
           cargo-udeps
@@ -144,15 +144,16 @@
           # llvmPackages.bintools
           twiggy
           typos
-          unstable.wasm-bindgen-cli
+          wasm-bindgen-cli
           wasm-tools
         ];
 
-        # Pinned to pnpm 10: pnpm 11 stopped reading `pnpm.overrides` from
-        # package.json (the wasm wrapper packages keep their esbuild
-        # override there) and treats ignored build scripts as a hard
-        # error, both of which break `pnpm i` in CI.
-        pnpm = pkgs.pnpm_10;
+        # Must match the `=0.2.x` pin on `wasm-bindgen` in Cargo.toml: the
+        # CLI and the crate must agree on the schema version exactly, so
+        # this can't follow whatever nixpkgs ships.
+        wasm-bindgen-cli = unstable.wasm-bindgen-cli_0_2_121;
+
+        pnpm = pkgs.pnpm_11;
 
         # Built-in command modules from nix-command-utils
         rust = command-utils.rust.${system};
@@ -195,7 +196,7 @@
         jsPackage = key: crate: pkgs.callPackage ./nix/js-package.nix {
           inherit crate key wasm-bodge;
           rustPlatform = js-rustPlatform;
-          wasm-bindgen-cli = unstable.wasm-bindgen-cli;
+          inherit wasm-bindgen-cli;
           nodejs = pkgs.nodejs_24;
           cargoLock = workspaceCargoLock;
         };
