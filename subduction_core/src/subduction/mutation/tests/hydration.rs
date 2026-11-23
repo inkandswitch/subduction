@@ -182,3 +182,15 @@ async fn cold_minimization_adopts_and_minimizes_a_newer_resident_entry() {
     assert_eq!(resident.tree(), &tree);
     assert!(!resident.is_dirty());
 }
+
+/// Newness is judged against everything storage holds, not the minimized
+/// form: a commit already stored is not new just because a fragment covers
+/// it. Reporting it as new would push it to every subscriber again.
+#[tokio::test]
+async fn a_stored_commit_covered_by_a_fragment_is_not_new_on_a_cold_read() {
+    let (storage, cache) = cold_tree().await;
+    let was_new = ingest::insert_commit_locally(&cache, &storage.local_putter(ID), item(0).await)
+        .await
+        .expect("insert");
+    assert!(!was_new, "the commit was already in storage");
+}

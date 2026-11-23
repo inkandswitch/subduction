@@ -1663,7 +1663,6 @@ where
     ) -> Result<(), IoError<Async, E::Storage, Conn, Hdl::Message>> {
         let ingested = ingest::recv_batch_sync_response(
             &self.minimized_tree_store,
-            &self.depth_metric,
             &self.storage,
             from,
             id,
@@ -2419,7 +2418,6 @@ where
         // return-direction requests belong to this captured resolver instead.
         let ingested = ingest::recv_batch_sync_response(
             &self.minimized_tree_store,
-            &self.depth_metric,
             &self.storage,
             &peer,
             id,
@@ -2918,13 +2916,7 @@ where
         putter: &Putter<Async, E::Storage>,
         verified_meta: VerifiedMeta<LooseCommit>,
     ) -> Result<bool, MutationError<E::StorageError>> {
-        ingest::insert_commit_locally(
-            &self.minimized_tree_store,
-            &self.depth_metric,
-            putter,
-            verified_meta,
-        )
-        .await
+        ingest::insert_commit_locally(&self.minimized_tree_store, putter, verified_meta).await
     }
 
     /// Insert a fragment locally, persisting to storage before updating in-memory state.
@@ -2939,13 +2931,7 @@ where
         putter: &Putter<Async, E::Storage>,
         verified_meta: VerifiedMeta<Fragment>,
     ) -> Result<bool, MutationError<E::StorageError>> {
-        ingest::insert_fragment_locally(
-            &self.minimized_tree_store,
-            &self.depth_metric,
-            putter,
-            verified_meta,
-        )
-        .await
+        ingest::insert_fragment_locally(&self.minimized_tree_store, putter, verified_meta).await
     }
 
     /// Re-minimize a sedimentree in the minimized tree store.

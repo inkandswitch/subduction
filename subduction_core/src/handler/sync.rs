@@ -1148,7 +1148,6 @@ impl<
     ) -> Result<Option<FanOut<Conn, Async>>, IoError<Async, E::Storage, Conn, SyncMessage>> {
         let ingested = ingest::recv_batch_sync_response(
             &self.minimized_tree_store,
-            &self.depth_metric,
             &self.storage,
             from,
             id,
@@ -1178,13 +1177,7 @@ impl<
         putter: &Putter<Async, E::Storage>,
         verified_meta: VerifiedMeta<LooseCommit>,
     ) -> Result<bool, MutationError<E::StorageError>> {
-        ingest::insert_commit_locally(
-            &self.minimized_tree_store,
-            &self.depth_metric,
-            putter,
-            verified_meta,
-        )
-        .await
+        ingest::insert_commit_locally(&self.minimized_tree_store, putter, verified_meta).await
     }
 
     async fn insert_fragment_locally(
@@ -1192,13 +1185,7 @@ impl<
         putter: &Putter<Async, E::Storage>,
         verified_meta: VerifiedMeta<Fragment>,
     ) -> Result<bool, MutationError<E::StorageError>> {
-        ingest::insert_fragment_locally(
-            &self.minimized_tree_store,
-            &self.depth_metric,
-            putter,
-            verified_meta,
-        )
-        .await
+        ingest::insert_fragment_locally(&self.minimized_tree_store, putter, verified_meta).await
     }
 
     async fn minimize_tree(&self, id: SedimentreeId) {
