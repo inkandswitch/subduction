@@ -136,7 +136,7 @@
           cargo-flamegraph
           cargo-mutants
           cargo-nextest
-          cargo-release
+          unstable.cargo-release
           cargo-outdated
           cargo-sort
           cargo-udeps
