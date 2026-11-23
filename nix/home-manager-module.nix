@@ -104,12 +104,16 @@ in {
       };
 
       maxMessageSize = lib.mkOption {
-        type = lib.types.int;
+        # The CLI refuses anything smaller; fail at evaluation, not at startup.
+        type = lib.types.addCheck lib.types.int (n: n >= 65536) // {description = "integer of at least 65536 (64 KiB)";};
         default = 52428800; # 50 MiB
         description = ''
-          Maximum WebSocket message size in bytes.
+          Maximum message size in bytes for every transport: WebSocket
+          messages, HTTP long-poll request bodies, and iroh frames. Every
+          peer on a path needs a limit at least this large. Must be at
+          least 65536 (64 KiB).
 
-          Sets the aggregate-message limit passed to the server. If
+          For WebSocket, this sets the aggregate-message limit. If
           {option}`services.subduction.server.maxFrameSize` is left
           unset, individual WebSocket frames are capped at the same
           value — browsers commonly send unfragmented frames, so
@@ -119,7 +123,7 @@ in {
       };
 
       maxFrameSize = lib.mkOption {
-        type = lib.types.nullOr lib.types.int;
+        type = lib.types.nullOr lib.types.ints.positive;
         default = null;
         description = ''
           Maximum WebSocket frame size in bytes. When null (the

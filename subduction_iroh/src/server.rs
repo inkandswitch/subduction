@@ -52,7 +52,10 @@ impl core::fmt::Debug for AcceptResult {
 ///
 /// Waits for an incoming QUIC connection, completes the TLS handshake,
 /// accepts a bi-directional stream, and runs the Subduction handshake
-/// to authenticate the remote peer.
+/// to authenticate the remote peer. An inbound frame longer than
+/// `max_frame_size` closes the connection with code 1009. Handshake frames
+/// arrive before the peer is authenticated, so they are always capped at
+/// [`handshake::MAX_MESSAGE_SIZE`].
 ///
 /// # Errors
 ///
@@ -65,8 +68,8 @@ impl core::fmt::Debug for AcceptResult {
 /// ```ignore
 /// loop {
 ///     let result = accept_one(
-///         &endpoint, Duration::from_secs(30), timeout.clone(),
-///         &signer, &nonce_cache, our_peer_id, None, Duration::from_secs(600),
+///         &endpoint, &signer, &nonce_cache, our_peer_id, None,
+///         Duration::from_secs(600), subduction_iroh::DEFAULT_MAX_FRAME_SIZE,
 ///     ).await?;
 ///     tokio::spawn(result.listener_task);
 ///     tokio::spawn(result.sender_task);
@@ -81,6 +84,7 @@ pub async fn accept_one<S>(
     our_peer_id: PeerId,
     discovery_audience: Option<Audience>,
     handshake_max_drift: Duration,
+    max_frame_size: usize,
 ) -> Result<AcceptResult, AcceptError>
 where
     S: Signer<Sendable>,
@@ -108,8 +112,9 @@ where
             let (conn, outbound_rx) = IrohTransport::new(peer_id, quic_conn_clone);
 
             let listener_conn = conn.clone();
-            let listener_task: BoxFuture<'static, Result<(), RunError>> =
-                Box::pin(crate::tasks::listener_task(listener_conn, recv_stream));
+            let listener_task: BoxFuture<'static, Result<(), RunError>> = Box::pin(
+                crate::tasks::listener_task(listener_conn, recv_stream, max_frame_size),
+            );
             let sender_task: BoxFuture<'static, Result<(), RunError>> =
                 Box::pin(crate::tasks::sender_task(send_stream, outbound_rx));
 

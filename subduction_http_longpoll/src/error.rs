@@ -45,9 +45,14 @@ pub enum ServerError {
     #[error("session not found")]
     SessionNotFound,
 
-    /// The request body exceeds the maximum allowed size, or failed to read.
+    /// The request body exceeds the maximum allowed size.
     #[error("request body too large")]
     BodyTooLarge,
+
+    /// The request body could not be read, for example because the client
+    /// disconnected mid-upload or sent malformed chunked encoding.
+    #[error("failed to read request body")]
+    BodyRead(#[source] alloc::boxed::Box<dyn core::error::Error + Send + Sync>),
 
     /// Internal channel error.
     #[error("channel send error")]
@@ -64,6 +69,27 @@ pub enum ServerError {
     /// Failed to build an HTTP response.
     #[error(transparent)]
     HttpBuild(#[from] hyper::http::Error),
+}
+
+#[cfg(feature = "server")]
+impl ServerError {
+    /// The HTTP status to answer with.
+    ///
+    /// A 4xx status means the request was at fault, not the server.
+    #[must_use]
+    pub const fn status(&self) -> hyper::StatusCode {
+        use hyper::StatusCode;
+
+        match self {
+            Self::InvalidSessionId | Self::BodyRead(_) => StatusCode::BAD_REQUEST,
+            Self::SessionNotFound => StatusCode::NOT_FOUND,
+            Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::ChanSend
+            | Self::HandshakeNoResponse
+            | Self::HandshakeNoChallenge
+            | Self::HttpBuild(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
 }
 
 /// Errors while connecting as a client.

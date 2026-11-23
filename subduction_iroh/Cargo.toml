@@ -28,6 +28,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+bolero = { workspace = true }
 eyre = { workspace = true }
 futures-timer = { workspace = true }
 rand = { workspace = true, features = ["std_rng"] }
