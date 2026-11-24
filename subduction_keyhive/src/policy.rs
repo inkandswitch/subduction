@@ -11,13 +11,27 @@
 //! A sedimentree's ID is the document's [`Identifier`], and a peer's ID is
 //! the member's.
 //!
-//! | Check   | Rule                                                      |
-//! |---------|-----------------------------------------------------------|
-//! | Connect | The peer ID is a valid identifier                         |
-//! | Fetch   | The peer has at least [`FETCH_POWER`] (`Relay`)           |
-//! | Put     | The commit's _author_ has at least [`PUT_POWER`] (`Edit`) |
+//! | Check   | Rule                                                 |
+//! |---------|------------------------------------------------------|
+//! | Connect | The peer ID is a valid identifier                    |
+//! | Fetch   | The peer has at least [`FETCH_POWER`] (`Relay`)      |
+//! | Put     | The _requestor_ has at least [`PUT_POWER`] (`Relay`) |
 //!
 //! There is no public access: Keyline has no public agent.
+//!
+//! # Why put checks the requestor, not the author
+//!
+//! Checking the author against the current membership makes acceptance
+//! depend on arrival order. A replica that hears of a revocation first would
+//! reject a commit that another replica already accepted, and sedimentree
+//! only grows, so they would never converge. Checking the connected peer
+//! instead only ever _delays_ a commit: any other authorized holder can push
+//! it later.
+//!
+//! Whether an author's write counts (including revocation retention
+//! watermarks) is the materializer's decision, made at read time from the
+//! commits and certificates. Both only grow, so every replica renders the
+//! same result from the same sets.
 //!
 //! Connect is permissive beyond a well-formed ID: a fresh peer has to be
 //! able to connect before it can learn the certificates that grant it
@@ -57,9 +71,11 @@ use subduction_crypto::verified_author::VerifiedAuthor;
 /// The least power a peer needs over a document to fetch it.
 pub const FETCH_POWER: Power = Power::Relay;
 
-/// The least power a commit's author needs over a document for a put of it
-/// to be accepted.
-pub const PUT_POWER: Power = Power::Edit;
+/// The least power a requestor needs over a document to push data into it.
+///
+/// `Relay` rather than `Edit`: servers push content they did not write, and
+/// readers push CGKA operations.
+pub const PUT_POWER: Power = Power::Relay;
 
 /// The error a Keyhive membership query fails with, for store `K`.
 pub type AccessError<F, K> = KeylineStorageError<<K as Keyline<F>>::Error>;
@@ -342,8 +358,9 @@ where
     Ok(())
 }
 
-/// Authorize a put to `sedimentree_id` of a commit by `author`: at least
-/// [`PUT_POWER`] over the document. Who pushes it is not checked.
+/// Authorize a put to `sedimentree_id` by `requestor`: at least
+/// [`PUT_POWER`] over the document. The commit's `author` is not checked;
+/// see the [module documentation](self).
 ///
 /// # Errors
 ///
@@ -351,8 +368,8 @@ where
 /// failed membership query.
 pub async fn authorize_put_with<F, S, T, P, C, L, R, K>(
     keyhive: &Keyhive<F, S, T, P, C, L, R, K>,
-    _requestor: PeerId,
-    author: VerifiedAuthor,
+    requestor: PeerId,
+    _author: VerifiedAuthor,
     sedimentree_id: SedimentreeId,
 ) -> Result<(), PutDisallowedError<AccessError<F, K>>>
 where
@@ -366,11 +383,10 @@ where
     K: Keyline<F, RetentionWatermark = ContentHeads<T>>,
     K::Error: Send + Sync + 'static,
 {
-    let author = Identifier::from_bytes(author.verifying_key().to_bytes())
-        .map_err(PutDisallowedError::InvalidAuthorId)?;
+    let requestor = peer_identifier(requestor).map_err(PutDisallowedError::InvalidRequestorId)?;
     let doc =
         sedimentree_identifier(sedimentree_id).map_err(PutDisallowedError::InvalidSedimentreeId)?;
-    let actual = access(keyhive, author, doc)
+    let actual = access(keyhive, requestor, doc)
         .await
         .map_err(PutDisallowedError::Storage)?;
     InsufficientPowerError::require(PUT_POWER, actual)?;
@@ -480,15 +496,15 @@ pub enum FetchDisallowedError<E> {
 /// Why a put was denied.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PutDisallowedError<E> {
-    /// The author's verifying key is not a valid identifier.
-    #[error("author is not a valid identifier")]
-    InvalidAuthorId(#[source] InvalidIdentifier),
+    /// The requestor's peer ID is not a valid identifier.
+    #[error("requestor ID is not a valid identifier")]
+    InvalidRequestorId(#[source] InvalidIdentifier),
 
     /// The sedimentree ID is not a valid identifier.
     #[error("sedimentree ID is not a valid identifier")]
     InvalidSedimentreeId(#[source] InvalidIdentifier),
 
-    /// The author's power over the document is too low.
+    /// The requestor's power over the document is too low.
     #[error(transparent)]
     InsufficientPower(#[from] InsufficientPowerError),
 
@@ -596,14 +612,7 @@ mod tests {
         };
         use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
 
-        use keyhive_content::store::memory::MemoryCiphertextStore;
-        use keyhive_core::listener::no_listener::NoListener;
-        use keyhive_crypto::signer::memory::MemorySigner as KeyhiveSigner;
-        use rand::rngs::OsRng;
-
-        use crate::test_utils::{
-            SimpleKeyhive, TestKeyline, exchange_all_contact_cards, make_keyhive,
-        };
+        use crate::test_utils::{SimpleKeyhive, exchange_all_contact_cards, make_keyhive};
 
         fn identifier(kh: &SimpleKeyhive) -> Identifier {
             kh.id().into()
@@ -617,7 +626,7 @@ mod tests {
             SedimentreeId::new(Identifier::from(doc).to_bytes())
         }
 
-        /// A commit's verified author, signing with `seed`'s key.
+        /// Some verified author. Put never checks who.
         async fn author(seed: u8) -> TestResult<VerifiedAuthor> {
             let signer = MemorySigner::from_bytes(&[seed; 32]);
             let commit = LooseCommit::new(
@@ -666,41 +675,22 @@ mod tests {
             Ok(())
         }
 
-        /// A Keyhive whose identity signs with `seed`'s key, so its commits
-        /// come from [`author`]`(seed)`.
-        async fn keyhive_with_seed(seed: u8) -> TestResult<SimpleKeyhive> {
-            Ok(Keyhive::generate(
-                KeyhiveSigner::from(SigningKey::from_bytes(&[seed; 32])),
-                MemoryCiphertextStore::new(),
-                NoListener,
-                TestKeyline::new(),
-                OsRng,
-            )
-            .await?)
-        }
-
         #[tokio::test(flavor = "current_thread")]
-        async fn put_needs_an_author_with_edit() -> TestResult {
-            let (owner, doc, peers) = setup(1).await?;
-            let [relay] = peers.as_slice() else {
-                return Err("one peer".into());
+        async fn put_checks_the_requestor_not_the_author() -> TestResult {
+            let (owner, doc, peers) = setup(2).await?;
+            let [relay, stranger] = peers.as_slice() else {
+                return Err("two peers".into());
             };
-            let editor = keyhive_with_seed(7).await?;
-            let reader = keyhive_with_seed(8).await?;
-            exchange_all_contact_cards(&[&owner, &editor, &reader]).await;
             owner
-                .add_member(identifier(&editor), doc, Power::Edit)
-                .await?;
-            owner
-                .add_member(identifier(&reader), doc, Power::Read)
+                .add_member(identifier(relay), doc, Power::Relay)
                 .await?;
 
-            // Anyone may push an editor's commit, even someone with no access.
+            // An authorized relay may push anyone's commit.
             authorize_put_with(&owner, peer(relay), author(7).await?, tree(doc)).await?;
 
-            // A reader's commit is refused, whoever pushes it.
+            // A stranger may push no one's.
             let denied =
-                authorize_put_with(&owner, peer(&editor), author(8).await?, tree(doc)).await;
+                authorize_put_with(&owner, peer(stranger), author(8).await?, tree(doc)).await;
             assert!(matches!(
                 denied,
                 Err(PutDisallowedError::InsufficientPower(_))
@@ -794,6 +784,10 @@ mod tests {
             assert!(matches!(
                 authorize_fetch_with(&owner, peer(&owner), bad_tree).await,
                 Err(FetchDisallowedError::InvalidSedimentreeId(_))
+            ));
+            assert!(matches!(
+                authorize_put_with(&owner, bad_peer, author(1).await?, tree(doc)).await,
+                Err(PutDisallowedError::InvalidRequestorId(_))
             ));
             assert!(matches!(
                 authorize_put_with(&owner, peer(&owner), author(1).await?, bad_tree).await,
