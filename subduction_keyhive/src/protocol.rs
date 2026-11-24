@@ -1137,7 +1137,7 @@ where
                 return false;
             }
         };
-        match storage_ops::save_keyhive_archive(&self.storage, storage_id, &archive).await {
+        match storage_ops::replace_keyhive_archive(&self.storage, storage_id, &archive).await {
             Ok(()) => true,
             Err(error) => {
                 tracing::warn!(%error, "failed to save keyhive archive; saving events individually");
