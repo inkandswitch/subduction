@@ -143,6 +143,10 @@ subduction_cli server --socket 0.0.0.0:8080 --key-file ./key
 
 At least one transport must be enabled.
 
+#### Contact Card Endpoint
+
+With keyhive auth enabled (the default), clients can send a request to `GET /keyhive/contact-card` for the bytes of the server's keyhive contact card. The server generates a new contact card at startup. If keyhive auth is disabled (`--auth open`), this route responds with a 404.
+
 #### WebSocket Peer Options
 
 | Flag | Description |
