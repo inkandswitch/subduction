@@ -82,6 +82,10 @@ testresult = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [[test]]
+name = "e2e"
+required-features = ["runtime", "test-utils"]
+
+[[test]]
 name = "keyhive_wasm_interop"
 required-features = ["runtime"]
 
