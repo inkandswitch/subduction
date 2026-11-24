@@ -981,7 +981,11 @@ where
             assigned_address.port(),
             peer_id,
         );
-        std::fs::write(ready_path, content)
+        // Write then rename, so a reader polling for the file never sees it
+        // half-written.
+        let partial = ready_path.with_extension("partial");
+        std::fs::write(&partial, content)
+            .and_then(|()| std::fs::rename(&partial, ready_path))
             .map_err(|e| eyre::eyre!("failed to write ready file: {e}"))?;
         tracing::info!(path = %ready_path.display(), "Ready file written");
     }
