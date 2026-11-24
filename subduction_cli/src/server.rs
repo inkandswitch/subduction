@@ -1,5 +1,7 @@
 //! Subduction server supporting WebSocket, HTTP long-poll, and Iroh (QUIC) transports.
 
+mod request_detection;
+
 use std::{
     net::SocketAddr,
     path::PathBuf,
@@ -65,6 +67,8 @@ use crate::{
     policy::CliKeyhivePolicyHandle,
     transport::UnifiedTransport,
 };
+
+use request_detection::RequestKind;
 
 /// Type alias for the unified Subduction instance.
 ///
@@ -1073,57 +1077,50 @@ async fn accept_loop<H: CliWireHandler>(
                         let task_discovery = discovery_audience;
 
                         conns.spawn(async move {
-                            // Peek to determine transport:
-                            //   GET  → WebSocket upgrade
-                            //   POST → HTTP long-poll
-                            //   OPTI → CORS preflight (OPTIONS), routed to HTTP handler
-                            let mut peek_buf = [0u8; 4];
-                            match tcp.peek(&mut peek_buf).await {
-                                Ok(n) if n >= 3 => {}
-                                Ok(_) | Err(_) => {
-                                    tracing::warn!(addr = %addr, "failed to peek TCP stream");
-                                    return;
+                            match RequestKind::detect(&tcp).await {
+                                Ok(RequestKind::WebSocket) if ws_enabled => {
+                                    handle_websocket(
+                                        tcp,
+                                        addr,
+                                        task_subduction,
+                                        task_ephemeral.clone(),
+                                        task_keyhive,
+                                        handshake_max_drift,
+                                        max_message_size,
+                                        max_frame_size,
+                                        ws_keepalive,
+                                        server_peer_id,
+                                        task_discovery,
+                                    )
+                                    .await;
                                 }
-                            }
-
-                            let is_http = peek_buf.starts_with(b"POST")
-                                || peek_buf.starts_with(b"OPTI");
-
-                            if peek_buf.starts_with(b"GET") && ws_enabled {
-                                handle_websocket(
-                                    tcp,
-                                    addr,
-                                    task_subduction,
-                                    task_ephemeral.clone(),
-                                    task_keyhive,
-                                    handshake_max_drift,
-                                    max_message_size,
-                                    max_frame_size,
-                                    ws_keepalive,
-                                    server_peer_id,
-                                    task_discovery,
-                                )
-                                .await;
-                            } else if is_http && lp_enabled {
-                                handle_http_longpoll(
-                                    tcp,
-                                    addr,
-                                    task_subduction,
-                                    task_ephemeral,
-                                    task_handler,
-                                    task_keyhive,
-                                )
-                                .await;
-                            } else if peek_buf.starts_with(b"GET") {
-                                tracing::warn!(addr = %addr, "WebSocket connection rejected (transport disabled)");
-                            } else if is_http {
-                                tracing::warn!(addr = %addr, "HTTP long-poll connection rejected (transport disabled)");
-                            } else {
-                                tracing::warn!(
-                                    addr = %addr,
-                                    peek = ?&peek_buf,
-                                    "unknown protocol"
-                                );
+                                Ok(RequestKind::LongPoll) if lp_enabled => {
+                                    handle_http_longpoll(
+                                        tcp,
+                                        addr,
+                                        task_subduction,
+                                        task_ephemeral,
+                                        task_handler,
+                                        task_keyhive,
+                                    )
+                                    .await;
+                                }
+                                Ok(RequestKind::WebSocket) => {
+                                    tracing::warn!(addr = %addr, "WebSocket connection rejected (transport disabled)");
+                                }
+                                Ok(RequestKind::LongPoll) => {
+                                    tracing::warn!(addr = %addr, "HTTP long-poll connection rejected (transport disabled)");
+                                }
+                                Err(unrecognized) if unrecognized.seen().is_empty() => {
+                                    tracing::warn!(addr = %addr, "connection sent no request before closing or timing out");
+                                }
+                                Err(unrecognized) => {
+                                    tracing::warn!(
+                                        addr = %addr,
+                                        peek = ?unrecognized.seen(),
+                                        "unknown protocol"
+                                    );
+                                }
                             }
                         });
                     }
