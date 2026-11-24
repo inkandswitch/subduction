@@ -1,7 +1,7 @@
 //! The keyhive operations the sync protocol uses.
 //!
 //! [`KeyhiveProtocol`](crate::KeyhiveProtocol) calls keyhive only through
-//! [`KeyhiveAccess`]. With the `native` feature, it is implemented for
+//! [`KeyhiveAccess`]. [`native`](crate::native) implements it for
 //! `keyhive_core`'s `Keyhive`.
 
 use alloc::{

@@ -115,9 +115,6 @@ rayon = "1.11"
 redb = "4.1"
 reqwest = { version = "0.13.4", default-features = false }
 serde = { version = "1.0", default-features = false }
-serde_bytes = { version = "0.11.10", default-features = false, features = [
-  "alloc",
-] }
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 sha1 = { version = "0.10", default-features = false }
 siphasher = { version = "1.0", default-features = false }
