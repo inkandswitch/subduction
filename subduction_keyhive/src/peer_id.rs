@@ -1,10 +1,20 @@
 //! Peer identification for the keyhive protocol.
 
-use alloc::string::{String, ToString};
+use alloc::{
+    borrow::ToOwned,
+    string::{String, ToString},
+    vec::Vec,
+};
 use core::fmt;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use keyhive_crypto::identifier::{Identifier, InvalidIdentifier};
+use sedimentree_core::codec::error::{DecodeError, InvalidEnumTag};
+
+use crate::{
+    codec::{self, Reader},
+    error::WireDecodeError,
+};
 
 /// A peer identifier.
 ///
@@ -19,13 +29,19 @@ use keyhive_crypto::identifier::{Identifier, InvalidIdentifier};
 /// * With suffix: `<base64(verifying_key)>-<suffix>`
 ///
 /// For example: `"abc123...==-my-suffix"` or just `"abc123...=="`
+///
+/// # Wire Format
+///
+/// ```text
+/// ╔═══════════════╦══════╦══════════════════════════════╗
+/// ║ Verifying Key ║ Tag  ║ Suffix (only if tag is 1)    ║
+/// ║      32B      ║  1B  ║ bijou64 length + UTF-8 bytes ║
+/// ╚═══════════════╩══════╩══════════════════════════════╝
+/// ```
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct KeyhivePeerId {
     /// The 32-byte Ed25519 verifying key.
-    ///
-    /// Encoded as a CBOR byte string on the wire.
-    #[cfg_attr(feature = "serde", serde(with = "serde_bytes"))]
     verifying_key: [u8; 32],
 
     /// Optional suffix to distinguish different connections/roles.
@@ -162,7 +178,54 @@ impl KeyhivePeerId {
             suffix,
         })
     }
+
+    /// Append this peer ID's wire encoding to `buf`.
+    pub(crate) fn encode_into(&self, buf: &mut Vec<u8>) {
+        buf.extend_from_slice(&self.verifying_key);
+        match &self.suffix {
+            None => buf.push(NO_SUFFIX),
+            Some(suffix) => {
+                buf.push(SUFFIX);
+                codec::put_bytes(suffix.as_bytes(), buf);
+            }
+        }
+    }
+
+    /// The size of [`Self::encode_into`]'s output.
+    pub(crate) fn encoded_size(&self) -> usize {
+        32 + 1
+            + self
+                .suffix
+                .as_deref()
+                .map_or(0, |s| codec::bytes_size(s.as_bytes()))
+    }
+
+    /// Read a peer ID written by [`Self::encode_into`].
+    pub(crate) fn decode_from(reader: &mut Reader<'_>) -> Result<Self, WireDecodeError> {
+        let verifying_key = reader.array::<32>()?;
+        let suffix = match reader.u8()? {
+            NO_SUFFIX => None,
+            SUFFIX => Some(core::str::from_utf8(reader.bytes()?)?.to_owned()),
+            tag => {
+                return Err(DecodeError::from(InvalidEnumTag {
+                    tag,
+                    type_name: "KeyhivePeerId suffix",
+                })
+                .into());
+            }
+        };
+        Ok(Self {
+            verifying_key,
+            suffix,
+        })
+    }
 }
+
+/// The wire tag of a peer ID without a suffix.
+const NO_SUFFIX: u8 = 0;
+
+/// The wire tag of a peer ID with a suffix.
+const SUFFIX: u8 = 1;
 
 impl fmt::Debug for KeyhivePeerId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -177,28 +240,18 @@ impl fmt::Display for KeyhivePeerId {
 }
 
 /// Errors that can occur when parsing a peer ID from a string.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ParsePeerIdError {
     /// The base64 encoding is invalid.
+    // Not a `#[source]`: without `std`, base64's error isn't a
+    // `core::error::Error`.
+    #[error("invalid base64 encoding: {0}")]
     InvalidBase64(base64::DecodeError),
 
     /// The decoded key has the wrong length.
+    #[error("invalid key length: expected 32 bytes, got {0}")]
     InvalidKeyLength(usize),
 }
-
-impl fmt::Display for ParsePeerIdError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidBase64(e) => write!(f, "invalid base64 encoding: {e}"),
-            Self::InvalidKeyLength(len) => {
-                write!(f, "invalid key length: expected 32 bytes, got {len}")
-            }
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for ParsePeerIdError {}
 
 #[cfg(test)]
 mod tests {
@@ -268,23 +321,37 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "serde")]
+    fn wire_roundtrip(peer: &KeyhivePeerId) -> Result<KeyhivePeerId, WireDecodeError> {
+        let mut buf = Vec::new();
+        peer.encode_into(&mut buf);
+        assert_eq!(buf.len(), peer.encoded_size());
+        let mut reader = Reader::new(&buf);
+        let decoded = KeyhivePeerId::decode_from(&mut reader)?;
+        reader.finish()?;
+        Ok(decoded)
+    }
+
     #[test]
-    fn verifying_key_serialises_as_cbor_byte_string() -> TestResult {
-        let peer = KeyhivePeerId::from_bytes([0xAB; 32]);
-        let mut buf = alloc::vec::Vec::new();
-        ciborium::into_writer(&peer, &mut buf)?;
-        let raw: ciborium::Value = ciborium::de::from_reader(buf.as_slice())?;
-        let map = raw.as_map().ok_or("expected CBOR map")?;
-        let (_, vk) = map
-            .iter()
-            .find(|(k, _)| k.as_text() == Some("verifying_key"))
-            .ok_or("missing verifying_key")?;
-        assert!(
-            vk.is_bytes(),
-            "verifying_key must be CBOR bytes, got {vk:?}"
-        );
+    fn wire_roundtrip_keeps_the_suffix_or_its_absence() -> TestResult {
+        for peer in [
+            KeyhivePeerId::from_bytes([7; 32]),
+            KeyhivePeerId::from_bytes_with_suffix([7; 32], String::new()),
+            KeyhivePeerId::from_bytes_with_suffix([7; 32], "relay".to_string()),
+        ] {
+            assert_eq!(wire_roundtrip(&peer)?, peer);
+        }
         Ok(())
+    }
+
+    #[test]
+    fn a_suffix_that_is_not_utf8_is_rejected() {
+        let mut buf = [7; 32].to_vec();
+        buf.push(SUFFIX);
+        codec::put_bytes(&[0xFF], &mut buf);
+        assert!(matches!(
+            KeyhivePeerId::decode_from(&mut Reader::new(&buf)),
+            Err(WireDecodeError::Suffix(_))
+        ));
     }
 
     #[test]

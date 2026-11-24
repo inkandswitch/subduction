@@ -30,17 +30,15 @@
 
 use alloc::{
     collections::{BTreeMap, BTreeSet},
-    string::ToString,
     sync::Arc,
     vec,
     vec::Vec,
 };
 
-use std::sync::{Mutex as BlockingMutex, MutexGuard, PoisonError};
-
 use async_lock::Mutex;
 use dupe::Dupe;
 use keyhive_crypto::identifier::Identifier;
+use sedimentree_core::codec::encode::Encode;
 
 use crate::{
     access::KeyhiveAccess,
@@ -130,10 +128,7 @@ where
     /// False by default. Enable it with [`Self::with_storage_recovery`].
     attempt_storage_recovery: bool,
     syncpoints: Mutex<SyncpointMap>,
-    /// A blocking mutex, because `send_events` ends a round while it has the
-    /// send's error, which need not be `Send`. Never hold the guard across
-    /// an `.await`.
-    awaiting_confirmation: BlockingMutex<AwaitingConfirmation>,
+    awaiting_confirmation: Mutex<AwaitingConfirmation>,
     cache: Mutex<PeriodicEventCache>,
     _marker: core::marker::PhantomData<Async>,
 }
@@ -178,7 +173,7 @@ where
             archive_config: None,
             attempt_storage_recovery: false,
             syncpoints: Mutex::new(SyncpointMap::new()),
-            awaiting_confirmation: BlockingMutex::new(AwaitingConfirmation::new()),
+            awaiting_confirmation: Mutex::new(AwaitingConfirmation::new()),
             cache: Mutex::new(PeriodicEventCache::new()),
             _marker: core::marker::PhantomData,
         }
@@ -212,7 +207,7 @@ where
     /// awaiting confirmation.
     pub async fn remove_peer(&self, peer_id: &KeyhivePeerId) {
         self.syncpoints.lock().await.remove(peer_id);
-        self.awaiting().remove(peer_id);
+        self.awaiting_confirmation.lock().await.remove(peer_id);
         self.peers.lock().await.remove(peer_id);
     }
 
@@ -500,8 +495,7 @@ where
             self.ingest_contact_card(contact_card).await?;
         }
 
-        let message: Message = cbor_deserialize(&verified.payload)
-            .map_err(|e| VerificationError::Deserialization(e.to_string()))?;
+        let message = Message::try_decode(&verified.payload).map_err(VerificationError::Payload)?;
 
         // Reject messages where the inner sender_id doesn't match the signer.
         if !message.sender_id().same_identity(&verified.sender_id) {
@@ -563,7 +557,7 @@ where
                     .lock()
                     .await
                     .set(sender_id.clone(), *confirmer_total);
-                let confirmed = self.awaiting().end_round(sender_id);
+                let confirmed = self.awaiting_confirmation.lock().await.end_round(sender_id);
                 Ok(MessageOutcome {
                     ingested: false,
                     confirmed,
@@ -670,18 +664,15 @@ where
         peer: &KeyhivePeerId,
         message: Message,
     ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
-        self.awaiting().record_round(peer.clone());
-        let sent = self.sign_and_send(peer, message, false).await;
-        if sent.is_err() {
-            self.awaiting().end_round(peer);
-        }
-        sent
-    }
-
-    fn awaiting(&self) -> MutexGuard<'_, AwaitingConfirmation> {
         self.awaiting_confirmation
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .await
+            .record_round(peer.clone());
+        let sent = self.sign_and_send(peer, message, false).await;
+        if sent.is_err() {
+            self.awaiting_confirmation.lock().await.end_round(peer);
+        }
+        sent
     }
 
     /// Handle a `SyncResponse`, ingest events we received, and send any
@@ -800,7 +791,11 @@ where
             "handling sync ops"
         );
 
-        let confirmed = self.awaiting().end_round(&sender_id);
+        let confirmed = self
+            .awaiting_confirmation
+            .lock()
+            .await
+            .end_round(&sender_id);
         let advanced = self.ingest_and_compare(&ops).await?;
         let outcome = MessageOutcome {
             ingested: advanced,
@@ -876,14 +871,13 @@ where
         Ok(())
     }
 
-    /// CBOR-serialize a message, sign it, and wrap it as a [`SignedMessage`].
+    /// Encode a message, sign it, and wrap it as a [`SignedMessage`].
     pub(crate) async fn build_signed_message(
         &self,
         message: Message,
         include_contact_card: bool,
     ) -> Result<SignedMessage, KeyhiveProtocolError<K, Conn, Async>> {
-        let msg_bytes =
-            cbor_serialize(&message).map_err(|e| SigningError::Serialization(e.to_string()))?;
+        let msg_bytes = message.encode();
 
         let signed_bytes = {
             let keyhive = { self.keyhive.lock().await.dupe() };
@@ -1117,11 +1111,10 @@ where
         if undecodable.is_empty() {
             Ok(())
         } else {
-            Err(ProtocolError::Deserialization(alloc::format!(
-                "{} of {} events do not decode",
-                not_ingested.undecodable.len(),
-                event_bytes_list.len()
-            )))
+            Err(ProtocolError::UndecodableEvents {
+                undecodable: not_ingested.undecodable.len(),
+                total: event_bytes_list.len(),
+            })
         }
     }
 
@@ -1308,19 +1301,6 @@ where
     keyhive.is_known_agent(id).await
 }
 
-/// Serialize a value to CBOR bytes.
-fn cbor_serialize<V: serde::Serialize>(value: &V) -> Result<Vec<u8>, StorageError> {
-    let mut buf = Vec::new();
-    ciborium::into_writer(value, &mut buf)
-        .map_err(|e| StorageError::Serialization(e.to_string()))?;
-    Ok(buf)
-}
-
-/// Deserialize a value from CBOR bytes.
-fn cbor_deserialize<V: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<V, StorageError> {
-    ciborium::from_reader(bytes).map_err(|e| StorageError::Deserialization(e.to_string()))
-}
-
 #[cfg(all(test, feature = "test-utils"))]
 #[allow(
     clippy::expect_used,
@@ -1334,6 +1314,7 @@ mod tests {
     use super::*;
     use keyhive_codec::traits::{Decode, Encode};
     use keyhive_core::event::static_event::StaticEvent;
+    use sedimentree_core::codec::encode::Encode as _;
 
     use crate::{
         message::EventBytes,
@@ -1389,7 +1370,7 @@ mod tests {
 
         // Verify and decode
         let verified = signed_msg.verify(&peer_id).unwrap();
-        let decoded_msg: Message = cbor_deserialize(&verified.payload).unwrap();
+        let decoded_msg = Message::try_decode(&verified.payload).unwrap();
 
         // The decoded message should match
         assert!(matches!(decoded_msg, Message::RequestContactCard { .. }));
@@ -1454,7 +1435,7 @@ mod tests {
             sender_id: bob_id.clone(),
             target_id: alice_id.clone(),
         };
-        let payload = cbor_serialize(&forged).expect("forged payload should serialize");
+        let payload = forged.encode();
         let signed = {
             let kh = alice.keyhive.lock().await.dupe();
             kh.sign_bytes(payload).await.expect("alice signs")
@@ -1485,7 +1466,7 @@ mod tests {
             sender_id: alice_id.clone(),
             target_id: bob.peer_id.clone(),
         };
-        let payload = cbor_serialize(&request).expect("payload should serialize");
+        let payload = request.encode();
         let signed = {
             let kh = alice.keyhive.lock().await.dupe();
             kh.sign_bytes(payload).await.expect("alice signs")
@@ -1577,7 +1558,7 @@ mod tests {
         // Verify we got a RequestContactCard
         let signed_msg = conn_to_us.inbound_rx.recv().await.unwrap();
         let verified = signed_msg.verify(&peer_id).unwrap();
-        let decoded: Message = cbor_deserialize(&verified.payload).unwrap();
+        let decoded = Message::try_decode(&verified.payload).unwrap();
 
         assert!(matches!(decoded, Message::RequestContactCard { .. }));
         // Should include our contact card so the peer can learn about us
@@ -1607,7 +1588,7 @@ mod tests {
         let signed_msg1 = bob_conn.inbound_rx.recv().await.unwrap();
 
         let verified1 = signed_msg1.clone().verify(&alice_id).unwrap();
-        let decoded1: Message = cbor_deserialize(&verified1.payload).unwrap();
+        let decoded1 = Message::try_decode(&verified1.payload).unwrap();
         assert!(
             matches!(decoded1, Message::RequestContactCard { .. }),
             "alice should request bob's contact card"
@@ -1623,7 +1604,7 @@ mod tests {
         let signed_msg2 = alice_conn.inbound_rx.recv().await.unwrap();
 
         let verified2 = signed_msg2.clone().verify(&bob_id).unwrap();
-        let decoded2: Message = cbor_deserialize(&verified2.payload).unwrap();
+        let decoded2 = Message::try_decode(&verified2.payload).unwrap();
         assert!(
             matches!(decoded2, Message::MissingContactCard { .. }),
             "bob should respond with MissingContactCard"
@@ -1645,7 +1626,7 @@ mod tests {
         // to Bob (depending on whether she successfully ingested Bob's CC)
         let signed_msg3 = bob_conn.inbound_rx.recv().await.unwrap();
         let verified3 = signed_msg3.verify(&alice_id).unwrap();
-        let decoded3: Message = cbor_deserialize(&verified3.payload).unwrap();
+        let decoded3 = Message::try_decode(&verified3.payload).unwrap();
 
         // After ingesting Bob's contact card, Alice should send a SyncRequest
         assert!(
@@ -1682,7 +1663,7 @@ mod tests {
         // Read Alice's SyncRequest from the channel
         let signed_msg1 = bob_conn.inbound_rx.recv().await.unwrap();
         let verified1 = signed_msg1.clone().verify(&alice_id).unwrap();
-        let decoded1: Message = cbor_deserialize(&verified1.payload).unwrap();
+        let decoded1 = Message::try_decode(&verified1.payload).unwrap();
 
         assert!(
             matches!(decoded1, Message::SyncRequest { .. }),
@@ -1698,7 +1679,7 @@ mod tests {
         // Bob should respond with SyncResponse
         let signed_msg2 = alice_conn.inbound_rx.recv().await.unwrap();
         let verified2 = signed_msg2.clone().verify(&bob_id).unwrap();
-        let decoded2: Message = cbor_deserialize(&verified2.payload).unwrap();
+        let decoded2 = Message::try_decode(&verified2.payload).unwrap();
 
         assert!(
             matches!(decoded2, Message::SyncResponse { .. }),
@@ -2286,7 +2267,7 @@ mod tests {
 
         assert!(matches!(
             protocol.ingest_events(&event_bytes).await,
-            Err(ProtocolError::Deserialization(_))
+            Err(ProtocolError::UndecodableEvents { .. })
         ));
 
         let stored: Set<Vec<u8>> = crate::storage_ops::load_event_bytes::<_, Local>(&storage)
@@ -2463,7 +2444,7 @@ mod tests {
             .verify(&alice_id)
             .expect("alice's signature verifies");
         let outbound: Message =
-            cbor_deserialize(&verified.payload).expect("decode alice's outbound payload");
+            Message::try_decode(&verified.payload).expect("decode alice's outbound payload");
 
         let Message::SyncOps { ops, .. } = outbound else {
             panic!(
@@ -3508,12 +3489,20 @@ mod tests {
     async fn removing_a_peer_drops_its_rounds_awaiting_confirmation() {
         let (protocol, _) = make_protocol().await;
         let peer = KeyhivePeerId::from_bytes([7; 32]);
-        protocol.awaiting().record_round(peer.clone());
-        protocol.awaiting().record_round(peer.clone());
+        protocol
+            .awaiting_confirmation
+            .lock()
+            .await
+            .record_round(peer.clone());
+        protocol
+            .awaiting_confirmation
+            .lock()
+            .await
+            .record_round(peer.clone());
 
         protocol.remove_peer(&peer).await;
 
-        assert!(!protocol.awaiting().end_round(&peer));
+        assert!(!protocol.awaiting_confirmation.lock().await.end_round(&peer));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -3540,7 +3529,13 @@ mod tests {
                 .is_err()
         );
 
-        assert!(!alice_proto.awaiting().end_round(&bob_id));
+        assert!(
+            !alice_proto
+                .awaiting_confirmation
+                .lock()
+                .await
+                .end_round(&bob_id)
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -3937,7 +3932,7 @@ mod protocol_behavioural {
             .clone()
             .verify(expected_sender)
             .expect("verify signed message");
-        ciborium::from_reader(verified.payload.as_slice()).expect("cbor decode message")
+        Message::try_decode(&verified.payload).expect("decode message")
     }
 
     fn drain_channel(conn: &ChannelConnection, expected_sender: &KeyhivePeerId) -> Vec<Message> {

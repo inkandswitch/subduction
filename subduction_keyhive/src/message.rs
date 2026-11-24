@@ -2,7 +2,16 @@
 
 use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 
-use crate::peer_id::KeyhivePeerId;
+use sedimentree_core::codec::{
+    encode::Encode,
+    error::{DecodeError, InvalidEnumTag},
+};
+
+use crate::{
+    codec::{self, Reader},
+    error::WireDecodeError,
+    peer_id::KeyhivePeerId,
+};
 
 /// A hash of a keyhive event/operation.
 ///
@@ -21,8 +30,26 @@ pub type EventBytes = Vec<u8>;
 pub type AgentHashMap = BTreeMap<EventHash, Arc<[u8]>>;
 
 /// The keyhive sync protocol messages.
+///
+/// # Wire Format
+///
+/// A message is the payload a [`SignedMessage`](crate::SignedMessage)
+/// signs. Every variant starts with the same three fields, then its own, in
+/// declaration order:
+///
+/// ```text
+/// ╔═════╦═══════════╦═══════════╦═══════════════════════╗
+/// ║ Tag ║ Sender ID ║ Target ID ║ Variant-Specific      ║
+/// ║ 1B  ║ peer ID   ║ peer ID   ║ Fields                ║
+/// ╚═════╩═══════════╩═══════════╩═══════════════════════╝
+/// ```
+///
+/// Totals are big-endian `u64`s and the digest is 32 bytes. A hash list is
+/// a big-endian `u32` count and 32 bytes per hash. An event list is a `u32`
+/// count and, per event, a bijou64 length and the event's bytes. Lists keep
+/// the order they were built in.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum Message {
     /// Request to initiate keyhive op synchronization.
     ///
@@ -38,19 +65,11 @@ pub enum Message {
         /// Operation hashes that the initiator has for the target peer.
         ///
         /// These are the intersection of operations accessible to both peers.
-        #[cfg_attr(
-            feature = "serde",
-            serde(with = "crate::serde_compat::vec_byte_array_32")
-        )]
         found: Vec<EventHash>,
 
         /// Operation hashes that are pending (awaiting dependencies).
         ///
         /// These might become relevant once dependencies are resolved.
-        #[cfg_attr(
-            feature = "serde",
-            serde(with = "crate::serde_compat::vec_byte_array_32")
-        )]
         pending: Vec<EventHash>,
     },
 
@@ -68,16 +87,11 @@ pub enum Message {
         /// Hashes of operations we want to request from the initiator.
         ///
         /// These are operations the initiator has that we don't.
-        #[cfg_attr(
-            feature = "serde",
-            serde(with = "crate::serde_compat::vec_byte_array_32")
-        )]
         requested: Vec<EventHash>,
 
         /// Serialized operations to send to the initiator.
         ///
         /// These are operations we have that the initiator is missing.
-        #[cfg_attr(feature = "serde", serde(with = "crate::serde_compat::vec_byte_buf"))]
         found: Vec<Arc<[u8]>>,
 
         /// Total operation count for the responder (intersection + pending).
@@ -103,7 +117,6 @@ pub enum Message {
         target_id: KeyhivePeerId,
 
         /// The serialized operations being sent.
-        #[cfg_attr(feature = "serde", serde(with = "crate::serde_compat::vec_byte_buf"))]
         ops: Vec<Arc<[u8]>>,
 
         /// Total operation count for the responder (from the sync response).
@@ -162,7 +175,6 @@ pub enum Message {
         sender_syncpoint: u64,
 
         /// Order-independent XOR digest of the sender's per-pair op-hash set.
-        #[cfg_attr(feature = "serde", serde(with = "serde_bytes", default))]
         sender_digest: [u8; 32],
     },
 
@@ -227,196 +239,348 @@ impl Message {
     }
 }
 
-#[cfg(all(test, feature = "serde", feature = "std"))]
-#[allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
-mod wire_format_tests {
-    //! Verify the on-wire CBOR shape: every binary field must serialize
-    //! as a CBOR byte string (major type 2), never as an array of
-    //! integers (major type 4). `keyhive_wasm` expects byte
-    //! strings. If these tests fail the cross-stack pipe is broken.
+/// The wire tag of each [`Message`] variant.
+mod tags {
+    pub(super) const SYNC_REQUEST: u8 = 0;
+    pub(super) const SYNC_RESPONSE: u8 = 1;
+    pub(super) const SYNC_OPS: u8 = 2;
+    pub(super) const REQUEST_CONTACT_CARD: u8 = 3;
+    pub(super) const MISSING_CONTACT_CARD: u8 = 4;
+    pub(super) const SYNC_CHECK: u8 = 5;
+    pub(super) const SYNC_CONFIRMATION: u8 = 6;
+}
+
+impl Message {
+    /// Decode a message from its wire encoding (see [`Message`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WireDecodeError`] if `buf` is not exactly one encoded
+    /// message.
+    pub fn try_decode(buf: &[u8]) -> Result<Self, WireDecodeError> {
+        let mut reader = Reader::new(buf);
+        let tag = reader.u8()?;
+        let sender_id = KeyhivePeerId::decode_from(&mut reader)?;
+        let target_id = KeyhivePeerId::decode_from(&mut reader)?;
+        let message = match tag {
+            tags::SYNC_REQUEST => Self::SyncRequest {
+                sender_id,
+                target_id,
+                found: read_hashes(&mut reader, "found")?,
+                pending: read_hashes(&mut reader, "pending")?,
+            },
+            tags::SYNC_RESPONSE => Self::SyncResponse {
+                sender_id,
+                target_id,
+                requested: read_hashes(&mut reader, "requested")?,
+                found: read_events(&mut reader, "found")?,
+                sync_responder_total: reader.u64()?,
+                sync_requester_total: reader.u64()?,
+            },
+            tags::SYNC_OPS => Self::SyncOps {
+                sender_id,
+                target_id,
+                ops: read_events(&mut reader, "ops")?,
+                sync_responder_total: reader.u64()?,
+                sync_requester_total: reader.u64()?,
+            },
+            tags::REQUEST_CONTACT_CARD => Self::RequestContactCard {
+                sender_id,
+                target_id,
+            },
+            tags::MISSING_CONTACT_CARD => Self::MissingContactCard {
+                sender_id,
+                target_id,
+            },
+            tags::SYNC_CHECK => Self::SyncCheck {
+                sender_id,
+                target_id,
+                sender_total: reader.u64()?,
+                sender_syncpoint: reader.u64()?,
+                sender_digest: reader.array::<32>()?,
+            },
+            tags::SYNC_CONFIRMATION => Self::SyncConfirmation {
+                sender_id,
+                target_id,
+                confirmer_total: reader.u64()?,
+            },
+            tag => {
+                return Err(DecodeError::from(InvalidEnumTag {
+                    tag,
+                    type_name: "Message",
+                })
+                .into());
+            }
+        };
+        reader.finish()?;
+        Ok(message)
+    }
+
+    const fn tag(&self) -> u8 {
+        match self {
+            Self::SyncRequest { .. } => tags::SYNC_REQUEST,
+            Self::SyncResponse { .. } => tags::SYNC_RESPONSE,
+            Self::SyncOps { .. } => tags::SYNC_OPS,
+            Self::RequestContactCard { .. } => tags::REQUEST_CONTACT_CARD,
+            Self::MissingContactCard { .. } => tags::MISSING_CONTACT_CARD,
+            Self::SyncCheck { .. } => tags::SYNC_CHECK,
+            Self::SyncConfirmation { .. } => tags::SYNC_CONFIRMATION,
+        }
+    }
+
+    /// The size of the fields after the sender and target IDs.
+    fn fields_size(&self) -> usize {
+        match self {
+            Self::SyncRequest { found, pending, .. } => hashes_size(found) + hashes_size(pending),
+            Self::SyncResponse {
+                requested, found, ..
+            } => hashes_size(requested) + events_size(found) + 8 + 8,
+            Self::SyncOps { ops, .. } => events_size(ops) + 8 + 8,
+            Self::RequestContactCard { .. } | Self::MissingContactCard { .. } => 0,
+            Self::SyncCheck { .. } => 8 + 8 + 32,
+            Self::SyncConfirmation { .. } => 8,
+        }
+    }
+}
+
+impl Encode for Message {
+    fn encode(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(self.encoded_size());
+        buf.push(self.tag());
+        self.sender_id().encode_into(&mut buf);
+        self.target_id().encode_into(&mut buf);
+        match self {
+            Self::SyncRequest { found, pending, .. } => {
+                put_hashes(found, &mut buf);
+                put_hashes(pending, &mut buf);
+            }
+            Self::SyncResponse {
+                requested,
+                found,
+                sync_responder_total,
+                sync_requester_total,
+                ..
+            } => {
+                put_hashes(requested, &mut buf);
+                put_events(found, &mut buf);
+                buf.extend_from_slice(&sync_responder_total.to_be_bytes());
+                buf.extend_from_slice(&sync_requester_total.to_be_bytes());
+            }
+            Self::SyncOps {
+                ops,
+                sync_responder_total,
+                sync_requester_total,
+                ..
+            } => {
+                put_events(ops, &mut buf);
+                buf.extend_from_slice(&sync_responder_total.to_be_bytes());
+                buf.extend_from_slice(&sync_requester_total.to_be_bytes());
+            }
+            Self::RequestContactCard { .. } | Self::MissingContactCard { .. } => {}
+            Self::SyncCheck {
+                sender_total,
+                sender_syncpoint,
+                sender_digest,
+                ..
+            } => {
+                buf.extend_from_slice(&sender_total.to_be_bytes());
+                buf.extend_from_slice(&sender_syncpoint.to_be_bytes());
+                buf.extend_from_slice(sender_digest);
+            }
+            Self::SyncConfirmation {
+                confirmer_total, ..
+            } => buf.extend_from_slice(&confirmer_total.to_be_bytes()),
+        }
+        buf
+    }
+
+    fn encoded_size(&self) -> usize {
+        1 + self.sender_id().encoded_size() + self.target_id().encoded_size() + self.fields_size()
+    }
+}
+
+fn put_hashes(hashes: &[EventHash], buf: &mut Vec<u8>) {
+    codec::put_count(hashes.len(), buf);
+    for hash in hashes {
+        buf.extend_from_slice(hash);
+    }
+}
+
+const fn hashes_size(hashes: &[EventHash]) -> usize {
+    4 + hashes.len() * 32
+}
+
+fn read_hashes(
+    reader: &mut Reader<'_>,
+    field: &'static str,
+) -> Result<Vec<EventHash>, DecodeError> {
+    let count = reader.count(field, 32)?;
+    (0..count).map(|_| reader.array::<32>()).collect()
+}
+
+fn put_events(events: &[Arc<[u8]>], buf: &mut Vec<u8>) {
+    codec::put_count(events.len(), buf);
+    for event in events {
+        codec::put_bytes(event, buf);
+    }
+}
+
+fn events_size(events: &[Arc<[u8]>]) -> usize {
+    4 + events
+        .iter()
+        .map(|event| codec::bytes_size(event))
+        .sum::<usize>()
+}
+
+fn read_events(
+    reader: &mut Reader<'_>,
+    field: &'static str,
+) -> Result<Vec<Arc<[u8]>>, DecodeError> {
+    let count = reader.count(field, 1)?;
+    (0..count).map(|_| reader.bytes().map(Arc::from)).collect()
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::indexing_slicing)]
+mod tests {
+    use alloc::{string::ToString, vec};
+
+    use testresult::TestResult;
 
     use super::*;
-    use alloc::vec;
-
-    fn cbor(msg: &Message) -> ciborium::Value {
-        let mut buf = Vec::new();
-        ciborium::into_writer(msg, &mut buf).expect("encode");
-        ciborium::de::from_reader(buf.as_slice()).expect("decode as raw value")
-    }
-
-    fn variant_payload(msg: &Message, variant: &str) -> ciborium::Value {
-        // Serialized enum is a single-key map: { "<Variant>": { ... } }.
-        let raw = cbor(msg);
-        let map = raw.as_map().expect("enum encoded as map");
-        let (_, payload) = map
-            .iter()
-            .find(|(k, _)| k.as_text() == Some(variant))
-            .expect("variant key");
-        payload.clone()
-    }
-
-    fn field<'a>(payload: &'a ciborium::Value, key: &str) -> &'a ciborium::Value {
-        let map = payload.as_map().expect("payload map");
-        let (_, v) = map
-            .iter()
-            .find(|(k, _)| k.as_text() == Some(key))
-            .expect("field key");
-        v
-    }
 
     const fn peer(byte: u8) -> KeyhivePeerId {
         KeyhivePeerId::from_bytes([byte; 32])
     }
 
-    fn assert_peer_id_uses_byte_string(payload: &ciborium::Value, key: &str) {
-        let pid = field(payload, key);
-        let pid_map = pid.as_map().expect("peer id map");
-        let (_, vk) = pid_map
-            .iter()
-            .find(|(k, _)| k.as_text() == Some("verifying_key"))
-            .expect("verifying_key field");
-        assert!(
-            vk.is_bytes(),
-            "{key}.verifying_key must be CBOR bytes, got {vk:?}"
-        );
+    /// One message of each variant.
+    fn every_variant() -> Vec<Message> {
+        vec![
+            Message::SyncRequest {
+                sender_id: peer(1),
+                target_id: KeyhivePeerId::from_bytes_with_suffix([2; 32], "relay".to_string()),
+                found: vec![[3; 32], [4; 32]],
+                pending: vec![[5; 32]],
+            },
+            Message::SyncResponse {
+                sender_id: peer(1),
+                target_id: peer(2),
+                requested: vec![[3; 32]],
+                found: vec![vec![10, 11, 12].into(), Vec::new().into()],
+                sync_responder_total: 5,
+                sync_requester_total: u64::MAX,
+            },
+            Message::SyncOps {
+                sender_id: peer(1),
+                target_id: peer(2),
+                ops: vec![vec![1, 2, 3].into()],
+                sync_responder_total: 1,
+                sync_requester_total: 2,
+            },
+            Message::RequestContactCard {
+                sender_id: peer(1),
+                target_id: peer(2),
+            },
+            Message::MissingContactCard {
+                sender_id: peer(1),
+                target_id: peer(2),
+            },
+            Message::SyncCheck {
+                sender_id: peer(1),
+                target_id: peer(2),
+                sender_total: 7,
+                sender_syncpoint: 6,
+                sender_digest: [9; 32],
+            },
+            Message::SyncConfirmation {
+                sender_id: peer(1),
+                target_id: peer(2),
+                confirmer_total: 8,
+            },
+        ]
     }
 
     #[test]
-    fn sync_request_event_hashes_are_byte_strings() {
-        let msg = Message::SyncRequest {
-            sender_id: peer(1),
-            target_id: peer(2),
-            found: vec![[3u8; 32], [4u8; 32]],
-            pending: vec![[5u8; 32]],
-        };
-        let payload = variant_payload(&msg, "SyncRequest");
-        assert_peer_id_uses_byte_string(&payload, "sender_id");
-        assert_peer_id_uses_byte_string(&payload, "target_id");
-        for (label, key) in [("found", "found"), ("pending", "pending")] {
-            let arr = field(&payload, key).as_array().expect("array");
-            assert!(
-                arr.iter().all(ciborium::Value::is_bytes),
-                "{label} elements must be CBOR bytes"
-            );
+    fn every_variant_roundtrips_at_its_encoded_size() -> TestResult {
+        for message in every_variant() {
+            let bytes = message.encode();
+            assert_eq!(bytes.len(), message.encoded_size(), "{message:?}");
+            assert_eq!(Message::try_decode(&bytes)?, message);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn every_proper_prefix_is_rejected() {
+        for message in every_variant() {
+            let bytes = message.encode();
+            for len in 0..bytes.len() {
+                assert!(
+                    Message::try_decode(bytes.get(..len).expect("in range")).is_err(),
+                    "{} accepted at {len} of {} bytes",
+                    message.variant_name(),
+                    bytes.len()
+                );
+            }
         }
     }
 
     #[test]
-    fn sync_response_event_hashes_and_event_bytes_are_byte_strings() {
-        let msg = Message::SyncResponse {
-            sender_id: peer(1),
-            target_id: peer(2),
-            requested: vec![[3u8; 32]],
-            found: vec![vec![10, 11, 12].into(), vec![20, 21].into()],
-            sync_responder_total: 5,
-            sync_requester_total: 4,
-        };
-        let payload = variant_payload(&msg, "SyncResponse");
-        let requested = field(&payload, "requested").as_array().expect("array");
-        assert!(requested.iter().all(ciborium::Value::is_bytes));
-        let found = field(&payload, "found").as_array().expect("array");
-        assert!(
-            found.iter().all(ciborium::Value::is_bytes),
-            "found event-bytes elements must be CBOR bytes"
-        );
+    fn trailing_bytes_are_rejected() {
+        let mut bytes = every_variant().swap_remove(0).encode();
+        bytes.push(0);
+        assert!(matches!(
+            Message::try_decode(&bytes),
+            Err(WireDecodeError::Codec(DecodeError::SizeMismatch(_)))
+        ));
     }
 
     #[test]
-    fn sync_ops_event_bytes_are_byte_strings() {
-        let msg = Message::SyncOps {
-            sender_id: peer(1),
-            target_id: peer(2),
-            ops: vec![vec![1, 2, 3].into(), vec![4, 5].into()],
-            sync_responder_total: 1,
-            sync_requester_total: 1,
-        };
-        let payload = variant_payload(&msg, "SyncOps");
-        let ops = field(&payload, "ops").as_array().expect("array");
-        assert!(
-            ops.iter().all(ciborium::Value::is_bytes),
-            "ops elements must be CBOR bytes"
-        );
+    fn an_unknown_tag_is_rejected() {
+        let mut bytes = every_variant().swap_remove(3).encode();
+        bytes[0] = 0xFF;
+        assert!(matches!(
+            Message::try_decode(&bytes),
+            Err(WireDecodeError::Codec(DecodeError::InvalidEnumTag(_)))
+        ));
     }
 
     #[test]
-    fn round_trip_through_cbor() {
-        let original = Message::SyncRequest {
+    fn a_count_the_buffer_cannot_hold_is_rejected_before_allocating() {
+        let mut bytes = Message::SyncRequest {
             sender_id: peer(1),
             target_id: peer(2),
-            found: vec![[7u8; 32], [9u8; 32]],
-            pending: vec![[11u8; 32]],
-        };
-        let mut buf = Vec::new();
-        ciborium::into_writer(&original, &mut buf).expect("encode");
-        let recovered: Message = ciborium::de::from_reader(buf.as_slice()).expect("decode");
-        assert_eq!(original, recovered);
+            found: Vec::new(),
+            pending: Vec::new(),
+        }
+        .encode();
+        // Overwrite `found`'s count, which follows the tag and two
+        // suffix-less peer IDs.
+        let count_at = 1 + 33 + 33;
+        bytes[count_at..count_at + 4].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert!(matches!(
+            Message::try_decode(&bytes),
+            Err(WireDecodeError::Codec(DecodeError::ArrayTooLarge(_)))
+        ));
     }
 
-    /// `SyncResponse.found` byte payloads must survive a CBOR round-trip with
-    /// their content intact.
+    #[cfg(feature = "bolero")]
     #[test]
-    fn sync_response_round_trips_found_bytes() {
-        let original = Message::SyncResponse {
-            sender_id: peer(1),
-            target_id: peer(2),
-            requested: vec![[7u8; 32]],
-            found: vec![
-                vec![0xDE, 0xAD, 0xBE, 0xEF].into(),
-                Vec::new().into(),
-                vec![1, 2, 3, 4, 5].into(),
-            ],
-            sync_responder_total: 9,
-            sync_requester_total: 4,
-        };
-        let mut buf = Vec::new();
-        ciborium::into_writer(&original, &mut buf).expect("encode");
-        let recovered: Message = ciborium::de::from_reader(buf.as_slice()).expect("decode");
-        assert_eq!(original, recovered);
+    fn prop_roundtrip_at_encoded_size() {
+        bolero::check!()
+            .with_arbitrary::<Message>()
+            .for_each(|message| {
+                let bytes = message.encode();
+                assert_eq!(bytes.len(), message.encoded_size());
+                assert_eq!(Message::try_decode(&bytes).as_ref(), Ok(message));
+            });
     }
 
-    /// `SyncOps.ops` byte payloads must survive a CBOR round-trip intact.
+    #[cfg(feature = "bolero")]
     #[test]
-    fn sync_ops_round_trips_op_bytes() {
-        let original = Message::SyncOps {
-            sender_id: peer(1),
-            target_id: peer(2),
-            ops: vec![
-                vec![1, 2, 3].into(),
-                vec![4, 5, 6, 7].into(),
-                Vec::new().into(),
-            ],
-            sync_responder_total: 2,
-            sync_requester_total: 3,
-        };
-        let mut buf = Vec::new();
-        ciborium::into_writer(&original, &mut buf).expect("encode");
-        let recovered: Message = ciborium::de::from_reader(buf.as_slice()).expect("decode");
-        assert_eq!(original, recovered);
-    }
-
-    /// `SyncCheck.sender_digest` must serialize as a CBOR byte string (not an
-    /// array of integers) and survive a round-trip.
-    #[test]
-    fn sync_check_digest_is_byte_string_and_round_trips() {
-        let original = Message::SyncCheck {
-            sender_id: peer(1),
-            target_id: peer(2),
-            sender_total: 35,
-            sender_syncpoint: 28,
-            sender_digest: [
-                0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A,
-                0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
-                0x19, 0x1A, 0x1B, 0x1C,
-            ],
-        };
-        let payload = variant_payload(&original, "SyncCheck");
-        assert!(
-            field(&payload, "sender_digest").is_bytes(),
-            "sender_digest must be CBOR bytes"
-        );
-        let mut buf = Vec::new();
-        ciborium::into_writer(&original, &mut buf).expect("encode");
-        let recovered: Message = ciborium::de::from_reader(buf.as_slice()).expect("decode");
-        assert_eq!(original, recovered);
+    fn prop_decoding_any_bytes_does_not_panic() {
+        bolero::check!()
+            .with_type::<Vec<u8>>()
+            .for_each(|bytes| drop(Message::try_decode(bytes)));
     }
 }

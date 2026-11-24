@@ -52,7 +52,7 @@ const TS_FRAME_HANDLER: &str = r#"
  * itself and does not call this handler.
  */
 export interface FrameHandler {
-    /** Called with the CBOR payload (no SUK envelope) for each inbound keyhive frame. */
+    /** Called with each inbound keyhive frame's payload, an encoded `SignedMessage` without its `SUK\x01` envelope. */
     onMessage(payload: Uint8Array, peerId: PeerId): void;
     /** Called when a peer's last connection drops. */
     onPeerDisconnect(peerId: PeerId): void;

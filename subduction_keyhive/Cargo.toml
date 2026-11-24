@@ -12,54 +12,57 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+arbitrary = { workspace = true, optional = true, features = ["derive"] }
 async-channel = { workspace = true, optional = true }
 async-lock = { workspace = true }
 base64 = { workspace = true }
+bijoux = { workspace = true }
 blake3 = { workspace = true }
 bolero = { workspace = true, optional = true, features = ["arbitrary"] }
-ciborium = { workspace = true }
 dhat = { workspace = true, optional = true }
-dupe = { version = "0.9", optional = true }
-ed25519-dalek = { workspace = true, features = ["serde"] }
+dupe = "0.9"
+ed25519-dalek = { workspace = true, optional = true }
 future_form = { workspace = true }
 futures = { workspace = true }
-keyhive_codec = { workspace = true, features = ["std"] }
-keyhive_content = { workspace = true, optional = true, features = ["std"] }
-keyhive_core = { workspace = true, optional = true }
-keyhive_crypto = { workspace = true, features = ["std"] }
-keyline = { workspace = true, optional = true, features = ["std"] }
-keyline_memory = { workspace = true, optional = true, features = ["std"] }
+keyhive_codec = { workspace = true }
+keyhive_content = { workspace = true }
+keyhive_core = { workspace = true }
+keyhive_crypto = { workspace = true }
+keyline = { workspace = true }
+keyline_memory = { workspace = true, optional = true }
 nonempty = { workspace = true }
-rand = "0.8.5"
+rand = { workspace = true }
 sedimentree_core = { workspace = true }
-serde = { workspace = true, optional = true, features = ["derive"] }
-serde_bytes = { workspace = true, optional = true }
 subduction_core = { workspace = true }
 subduction_crypto = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true, features = ["rt", "sync", "time"] }
-tokio-util = { workspace = true, optional = true }
 tracing = { workspace = true, features = ["attributes"] }
 
 [features]
 default = []
-bolero = ["dep:bolero"]
+arbitrary = ["dep:arbitrary", "std"]
+bolero = ["arbitrary", "dep:bolero"]
 handler = [
   "dep:keyline_memory",
   "dep:subduction_crypto",
-  "native",
   "std",
 ]
-# Implements the protocol's keyhive traits for `keyhive_core`'s `Keyhive`.
-native = ["dep:keyhive_content", "dep:keyhive_core", "dep:keyline"]
-runtime = ["handler", "serde", "dep:tokio"]
-serde = ["dep:serde", "dep:serde_bytes", "dep:dupe", "std"]
-std = ["thiserror/std"]
+runtime = ["handler", "dep:tokio"]
+std = [
+  "keyhive_codec/std",
+  "keyhive_content/std",
+  "keyhive_crypto/std",
+  "keyline/std",
+  "keyline_memory?/std",
+  "rand/std",
+  "thiserror/std",
+]
 test-utils = [
   "dep:async-channel",
+  "dep:ed25519-dalek",
   "dep:keyline_memory",
-  "native",
-  "serde",
+  "std",
   "subduction_core/test_utils",
 ]
 # In-crate heap-profiling harness (the periodic-cache serving/refresh membench
@@ -71,6 +74,7 @@ dhat-heap = ["dep:dhat", "test-utils"]
 [dev-dependencies]
 async-channel = { workspace = true }
 criterion = { workspace = true }
+ed25519-dalek = { workspace = true }
 nonempty = { workspace = true }
 subduction_core = { workspace = true, features = ["std", "test_utils"] }
 subduction_crypto = { workspace = true }

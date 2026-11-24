@@ -22,7 +22,7 @@ use subduction_core::{
 
 use crate::{
     KeyhiveAccess, KeyhiveMessage, KeyhivePeerId, KeyhiveProtocol, KeyhiveProtocolError,
-    MessageOutcome, SignedMessage, connection::KeyhiveConnection, signed_message::CborError,
+    MessageOutcome, SignedMessage, WireDecodeError, connection::KeyhiveConnection,
     storage::KeyhiveStorage,
 };
 
@@ -68,10 +68,6 @@ impl<Conn: Clone, Async: FutureForm> core::fmt::Debug for PeerConnections<Conn, 
 /// Why [`PeerConnections`] could not send a frame.
 #[derive(Debug, thiserror::Error)]
 pub enum PeerSendError<E: core::error::Error + 'static> {
-    /// The signed message could not be encoded.
-    #[error("encode signed message: {0}")]
-    Encode(#[from] CborError),
-
     /// Subduction has no connection to the peer.
     #[error("the peer is not connected")]
     NotConnected,
@@ -99,7 +95,7 @@ impl<Async: FutureForm, Conn> KeyhiveConnection<Async> for PeerConnections<Conn,
 
     fn send(&self, message: SignedMessage) -> Async::Future<'_, Result<(), Self::SendError>> {
         Async::from_future(async move {
-            let frame = KeyhiveMessage::from_signed(&message)?;
+            let frame = KeyhiveMessage::from_signed(&message);
             let conns: Vec<Authenticated<Conn, Async>> = self
                 .connections
                 .lock()
@@ -127,8 +123,8 @@ pub type HandlerProtocol<K, Store, Conn, Async> =
 #[derive(Debug, thiserror::Error)]
 pub enum HandleError<E: core::error::Error + 'static> {
     /// The frame's payload is not a signed message.
-    #[error("failed to decode keyhive payload: {0}")]
-    Decode(#[from] CborError),
+    #[error("failed to decode keyhive payload")]
+    Decode(#[from] WireDecodeError),
 
     /// The keyhive protocol returned an error. Events can already have been
     /// ingested.

@@ -15,9 +15,13 @@ use keyhive_core::{
 };
 use keyhive_crypto::identifier::Identifier;
 use keyline::power::Power;
-use sedimentree_core::loose_commit::id::CommitId;
+use sedimentree_core::{
+    codec::{decode::Decode as _, encode::Encode as _},
+    loose_commit::id::CommitId,
+};
 use subduction_keyhive::{
-    KeyhivePeerId, SignedMessage, change_id::ChangeId, runtime::init_sendable_keyhive,
+    KeyhiveMessage, KeyhivePeerId, SignedMessage, change_id::ChangeId,
+    runtime::init_sendable_keyhive,
 };
 use testresult::TestResult;
 
@@ -29,7 +33,8 @@ const VECTORS: &str = include_str!("fixtures/keyhive_wasm/vectors.txt");
 fn signed_bytes_verify_as_a_keyhive_message() -> TestResult {
     let v = Vectors::parse()?;
     let sent = SignedMessage::with_contact_card(v.signed, v.contact_card.clone());
-    let received = SignedMessage::from_cbor(&sent.to_cbor()?)?;
+    let frame = KeyhiveMessage::from_signed(&sent).encode();
+    let received = KeyhiveMessage::try_decode(&frame)?.into_signed()?;
 
     let verified = received.verify(&KeyhivePeerId::from_bytes(v.alice))?;
     assert_eq!(verified.payload, v.payload);

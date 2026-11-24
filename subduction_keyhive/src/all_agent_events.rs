@@ -1,7 +1,5 @@
 //! Bulk per-agent event snapshot for the periodic event cache.
 
-#![cfg(all(feature = "serde", feature = "std"))]
-
 use alloc::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
