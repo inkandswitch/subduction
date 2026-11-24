@@ -65,6 +65,7 @@ fn serving_membench() {
     use keyhive_crypto::identifier::Identifier;
     use keyline::power::Power;
     use nonempty::nonempty;
+    use sedimentree_core::codec::encode::Encode;
 
     use crate::{
         message::Message,
@@ -221,9 +222,7 @@ fn serving_membench() {
                         sync_responder_total: 0,
                         sync_requester_total: 0,
                     };
-                    let mut buf = alloc::vec::Vec::new();
-                    ciborium::into_writer(&msg, &mut buf).expect("encode SyncResponse");
-                    frames.push(buf);
+                    frames.push(msg.encode());
                     // response and found_ops drop here, as in the handler.
                 } else {
                     let found_ops: Vec<Arc<[u8]>> = if cold {

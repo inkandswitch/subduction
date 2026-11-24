@@ -5635,12 +5635,13 @@ dependencies = [
 name = "subduction_keyhive"
 version = "0.13.0"
 dependencies = [
+ "arbitrary",
  "async-channel",
  "async-lock",
  "base64",
+ "bijoux",
  "blake3",
  "bolero",
- "ciborium",
  "criterion",
  "dhat",
  "dupe",
@@ -5656,14 +5657,11 @@ dependencies = [
  "nonempty",
  "rand 0.8.8",
  "sedimentree_core",
- "serde",
- "serde_bytes",
  "subduction_core",
  "subduction_crypto",
  "testresult",
  "thiserror 2.0.20",
  "tokio",
- "tokio-util",
  "tracing",
 ]
 

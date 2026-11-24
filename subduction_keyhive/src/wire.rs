@@ -2,19 +2,22 @@
 //!
 //! # Wire Layout
 //!
-//! Every keyhive message on the wire begins with the `SUK\x00` schema
-//! header, followed by a 4-byte big-endian total size and the
-//! CBOR-encoded [`SignedMessage`] payload:
+//! Every keyhive message on the wire begins with the `SUK\x01` schema
+//! header, followed by a 4-byte big-endian total size and an encoded
+//! [`SignedMessage`]:
 //!
 //! ```text
 //! +--------+-----------+-----------------------+
-//! | Schema | TotalSize |    CBOR Payload       |
-//! |   4B   |    4B     |      variable         |
+//! | Schema | TotalSize | SignedMessage         |
+//! |   4B   |    4B     | variable              |
 //! +--------+-----------+-----------------------+
 //! ```
 //!
-//! Unlike `SUM` and `SUE`, there is no tag byte — the payload is always
-//! a single CBOR-encoded [`SignedMessage`].
+//! Unlike `SUM` and `SUE`, there is no tag byte: the payload is always one
+//! [`SignedMessage`], in the layout its docs give.
+//!
+//! `SUK\x00` carried the same envelope around CBOR. It is rejected as an
+//! unknown schema rather than misread.
 
 use alloc::vec::Vec;
 
@@ -30,61 +33,56 @@ use subduction_core::connection::message::{
     BatchSyncResponse, TryAsBatchSyncResponse, TryAsSubscribeRequest,
 };
 
-#[cfg(all(feature = "serde", feature = "std"))]
-use crate::signed_message::SignedMessage;
+use crate::{error::WireDecodeError, signed_message::SignedMessage};
 
-/// Schema header for keyhive messages: **SU**bduction **K**eyhive v0.
-pub const KEYHIVE_SCHEMA: [u8; 4] = *b"SUK\x00";
+/// Schema header for keyhive messages: **SU**bduction **K**eyhive v1.
+pub const KEYHIVE_SCHEMA: [u8; 4] = *b"SUK\x01";
 
 /// Minimum envelope size: `schema(4) + total_size(4)`.
 const ENVELOPE_HEADER_SIZE: usize = 4 + 4;
 
 /// A keyhive protocol message framed for the wire.
 ///
-/// Wraps a CBOR-encoded [`SignedMessage`] in a `SUK\x00` binary frame.
-/// The inner bytes are the raw CBOR payload — serialization and
-/// deserialization of `SignedMessage` happen at a higher layer (requires
-/// the `serde` feature on `SignedMessage`).
+/// Wraps an encoded [`SignedMessage`] in a `SUK\x01` binary frame. The
+/// frame doesn't check its payload: [`Self::into_signed`] decodes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyhiveMessage {
-    /// The raw CBOR-encoded payload (a serialized [`SignedMessage`]).
+    /// The payload: an encoded [`SignedMessage`].
     payload: Vec<u8>,
 }
 
 impl KeyhiveMessage {
-    /// Create a keyhive message from raw CBOR bytes.
+    /// Create a keyhive message from a raw payload.
     #[must_use]
     pub const fn new(payload: Vec<u8>) -> Self {
         Self { payload }
     }
 
-    /// Create a keyhive message by serializing a [`SignedMessage`] to CBOR.
+    /// Create a keyhive message carrying `msg`.
+    #[must_use]
+    pub fn from_signed(msg: &SignedMessage) -> Self {
+        Self {
+            payload: msg.encode(),
+        }
+    }
+
+    /// Decode the payload as a [`SignedMessage`].
     ///
     /// # Errors
     ///
-    /// Returns an error if CBOR serialization fails.
-    #[cfg(all(feature = "serde", feature = "std"))]
-    pub fn from_signed(msg: &SignedMessage) -> Result<Self, crate::signed_message::CborError> {
-        msg.to_cbor().map(|payload| Self { payload })
+    /// Returns [`WireDecodeError`] if the payload is not one encoded signed
+    /// message.
+    pub fn into_signed(self) -> Result<SignedMessage, WireDecodeError> {
+        SignedMessage::try_decode(&self.payload)
     }
 
-    /// Deserialize the payload into a [`SignedMessage`].
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if CBOR deserialization fails.
-    #[cfg(all(feature = "serde", feature = "std"))]
-    pub fn into_signed(self) -> Result<SignedMessage, crate::signed_message::CborError> {
-        SignedMessage::from_cbor(&self.payload)
-    }
-
-    /// Get the raw CBOR payload bytes.
+    /// Get the raw payload bytes.
     #[must_use]
     pub fn payload(&self) -> &[u8] {
         &self.payload
     }
 
-    /// Consume and return the raw CBOR payload bytes.
+    /// Consume and return the raw payload bytes.
     #[must_use]
     pub fn into_payload(self) -> Vec<u8> {
         self.payload
@@ -216,7 +214,7 @@ mod tests {
         let msg = KeyhiveMessage::new(vec![1, 2, 3]);
         let encoded = msg.encode();
 
-        assert_eq!(&encoded[0..4], b"SUK\x00");
+        assert_eq!(&encoded[0..4], b"SUK\x01");
     }
 
     #[test]
@@ -302,21 +300,28 @@ mod tests {
             });
     }
 
-    #[cfg(all(feature = "serde", feature = "std"))]
     #[test]
     fn signed_message_roundtrip() {
-        use crate::signed_message::SignedMessage;
-
-        // Exercises the SUK frame envelope around an arbitrary
-        // SignedMessage payload. Contact-card serialization is covered
-        // separately in `signed_message::tests`.
+        // The SUK frame around a SignedMessage. The signed message's own
+        // encoding is covered in `signed_message::tests`.
         let signed = SignedMessage::new(vec![1, 2, 3]);
-        let keyhive_msg = KeyhiveMessage::from_signed(&signed).expect("serialize");
 
-        let encoded = keyhive_msg.encode();
+        let encoded = KeyhiveMessage::from_signed(&signed).encode();
         let decoded = KeyhiveMessage::try_decode(&encoded).expect("decode frame");
-        let recovered = decoded.into_signed().expect("deserialize");
+        let recovered = decoded.into_signed().expect("decode signed message");
 
         assert_eq!(recovered, signed);
+    }
+
+    #[test]
+    fn a_v0_frame_is_rejected_as_an_unknown_schema() {
+        let mut encoded = KeyhiveMessage::new(vec![1, 2, 3]).encode();
+        encoded[3] = 0;
+
+        let err = KeyhiveMessage::try_decode(&encoded).unwrap_err();
+        assert!(
+            matches!(err, DecodeError::InvalidSchema(_)),
+            "expected InvalidSchema, got {err:?}"
+        );
     }
 }
