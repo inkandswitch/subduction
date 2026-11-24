@@ -2,10 +2,11 @@
 //!
 //! # Why one type, several traits
 //!
-//! A node has five effects: storage, policy, signing, spawning, and timing.
-//! Naming each as its own type parameter makes every node and handler type
-//! long, and lets a node and its handler drift apart. Instead, one effects type `E` names
-//! them all, so a node and its handler name their components once:
+//! A node has six effects: storage, policy, signing, spawning, timing, and
+//! keeping minimized trees. Naming each as its own type parameter makes every
+//! node and handler type long, and lets a node and its handler drift apart.
+//! Instead, one effects type `E` names them all, so a node and its handler
+//! name their components once:
 //!
 //! ```ignore
 //! type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, InstantTimeout, TokioSpawn>;
@@ -16,25 +17,26 @@
 //! Each effect is its own capability trait, so each consumer bounds `E` only
 //! by what it uses. [`Subduction`] needs all of [`Effects`].
 //! [`SyncHandler`](crate::handler::sync::SyncHandler) needs
-//! [`HasStoragePolicy`], [`HasSpawner`], and [`HasStorage`], and never sees
-//! a connection policy, signer, or timer.
+//! [`HasMinimizedTreeStore`], [`HasStoragePolicy`], [`HasSpawner`], and
+//! [`HasStorage`], and never sees a connection policy, signer, or timer.
 //!
 //! Transport ([`Connection`]) and protocol ([`Handler`]) stay separate
 //! parameters: they vary per connection and per message type, not per node.
 //!
 //! # Effects
 //!
-//! Six traits cover the five effects; policy has two. Each names its
+//! Seven traits cover the six effects; policy has two. Each names its
 //! component as an associated type:
 //!
-//! | Capability              | Associated type | Bound                   | Purpose                               |
-//! |-------------------------|-----------------|-------------------------|---------------------------------------|
-//! | [`HasStoragePolicy`]    | `Policy`        | [`StoragePolicy`]       | Decide who may fetch and put          |
-//! | [`HasConnectionPolicy`] | `Policy`        | + [`ConnectionPolicy`]  | Also decide who may connect           |
-//! | [`HasSigner`]           | `Signer`        | [`Signer`]              | Sign handshakes with the node's key   |
-//! | [`HasSpawner`]          | `Spawner`       | [`Spawn`] + [`Clone`]   | Run background tasks                  |
-//! | [`HasStorage`]          | `Storage`       | [`Storage`]             | Persist commits, fragments, and blobs |
-//! | [`HasTimer`]            | `Timer`         | [`Timeout`] + [`Clone`] | Bound roundtrip calls                 |
+//! | Capability                | Associated type      | Bound                   | Purpose                               |
+//! |---------------------------|----------------------|-------------------------|---------------------------------------|
+//! | [`HasMinimizedTreeStore`] | `MinimizedTreeStore` | [`MinimizedTreeStore`]  | Keep built trees for hot reads        |
+//! | [`HasStoragePolicy`]      | `Policy`             | [`StoragePolicy`]       | Decide who may fetch and put          |
+//! | [`HasConnectionPolicy`]   | `Policy`             | + [`ConnectionPolicy`]  | Also decide who may connect           |
+//! | [`HasSigner`]             | `Signer`             | [`Signer`]              | Sign handshakes with the node's key   |
+//! | [`HasSpawner`]            | `Spawner`            | [`Spawn`] + [`Clone`]   | Run background tasks                  |
+//! | [`HasStorage`]            | `Storage`            | [`Storage`]             | Persist commits, fragments, and blobs |
+//! | [`HasTimer`]              | `Timer`              | [`Timeout`] + [`Clone`] | Bound roundtrip calls                 |
 //!
 //! The two policy capabilities share one `Policy` type, because a node
 //! checks connections and storage access against the same object.
@@ -58,20 +60,23 @@
 //! Requirements come in three tiers:
 //!
 //! - [`Effects`] is form-agnostic. It carries the component traits,
-//!   `'static` on the timer, and `Send + Sync + 'static` on the spawner. The
-//!   spawner is thread-safe even on [`Local`], because connection management
-//!   and the storage powerbox take one spawner bound for both forms.
+//!   `'static` on the timer, `Send + Sync + 'static` on the spawner, and
+//!   `Send + Sync` on the minimized tree store. Both are thread-safe even on
+//!   [`Local`], because connection management and the storage powerbox take
+//!   one spawner bound for both forms, and the powerbox's mutation runner,
+//!   which holds the store, is `Send + Sync` on both.
 //! - [`SendableEffects`] adds thread-safety: every component `Send + Sync`,
 //!   every error `Send`. Bound generic `Sendable` code by this.
 //! - [`LocalEffects`] adds only `'static` on `E`. On [`Local`], everything
-//!   but the spawner may be `!Send`. Bound generic `Local` code by this.
+//!   but the spawner and the store may be `!Send`. Bound generic `Local` code
+//!   by this.
 //!
 //! Both refinements make `E: 'static`, which makes every slot `'static`: a
 //! projection of a `'static` type outlives `'static` too.
 //!
 //! Node types and constructors bound `E: Effects<Async>`; only the impls
 //! that spawn node work ask for a refinement. [`SyncHandler`] bounds only
-//! the three capabilities it uses.
+//! the four capabilities it uses.
 //!
 //! [`SyncHandler`]: crate::handler::sync::SyncHandler
 //!
@@ -105,6 +110,10 @@
 //!     type StorageError = RedbStorageError;
 //! }
 //!
+//! impl HasMinimizedTreeStore<Sendable> for ServerEffects {
+//!     type MinimizedTreeStore = MemoryMinimizedTreeStore;
+//! }
+//!
 //! impl HasSigner<Sendable> for ServerEffects { type Signer = MemorySigner; }
 //! impl HasSpawner<Sendable> for ServerEffects { type Spawner = TokioSpawn; }
 //! impl HasTimer<Sendable> for ServerEffects { type Timer = FuturesTimerTimeout; }
@@ -116,7 +125,9 @@
 //! [`ConnectionPolicy`]: crate::policy::connection::ConnectionPolicy
 //! [`Config`]: config::Config
 //! [`Handler`]: crate::handler::Handler
+//! [`MinimizedTreeStore`]: crate::minimized_tree_store::MinimizedTreeStore
 //! [`HasConnectionPolicy`]: policy::HasConnectionPolicy
+//! [`HasMinimizedTreeStore`]: minimized_tree_store::HasMinimizedTreeStore
 //! [`HasStoragePolicy`]: policy::HasStoragePolicy
 //! [`Signer`]: subduction_crypto::signer::Signer
 //! [`Spawn`]: crate::spawn::Spawn
@@ -128,6 +139,7 @@
 //! [`Timeout`]: crate::timeout::Timeout
 
 pub mod config;
+pub mod minimized_tree_store;
 pub mod policy;
 pub mod signer;
 pub mod spawner;
@@ -136,11 +148,11 @@ pub mod timer;
 
 use future_form::{FutureForm, Local, Sendable};
 
-use crate::policy::connection::ConnectionPolicy;
+use crate::{minimized_tree_store::MinimizedTreeStore, policy::connection::ConnectionPolicy};
 
 use self::{
-    policy::HasConnectionPolicy, signer::HasSigner, spawner::HasSpawner, storage::HasStorage,
-    timer::HasTimer,
+    minimized_tree_store::HasMinimizedTreeStore, policy::HasConnectionPolicy, signer::HasSigner,
+    spawner::HasSpawner, storage::HasStorage, timer::HasTimer,
 };
 
 /// Every capability a [`Subduction`](crate::subduction::Subduction) node uses.
@@ -148,14 +160,17 @@ use self::{
 /// This is a trait alias with a blanket impl. Implement the `Has*` traits
 /// instead. See the [module documentation](self) for details.
 ///
-/// The spawner is `Send + Sync` even on [`Local`], because
-/// [`RunManager::run_manager`] and [`StorageTasks::storage_powerbox`] each
-/// take one spawner bound for both forms.
+/// The spawner and the minimized tree store are `Send + Sync` even on
+/// [`Local`]. [`RunManager::run_manager`] and
+/// [`StorageTasks::storage_powerbox`] each take one spawner bound for both
+/// forms, and the powerbox's mutation runner, which captures the store, is
+/// `Send + Sync` on both.
 ///
 /// [`RunManager::run_manager`]: crate::connection::manager::RunManager::run_manager
 /// [`StorageTasks::storage_powerbox`]: crate::subduction::StorageTasks::storage_powerbox
 pub trait Effects<Async: FutureForm>:
     HasConnectionPolicy<Async>
+    + HasMinimizedTreeStore<Async, MinimizedTreeStore: Send + Sync>
     + HasSigner<Async>
     + HasSpawner<Async, Spawner: Send + Sync + 'static>
     + HasStorage<Async>
@@ -166,6 +181,7 @@ pub trait Effects<Async: FutureForm>:
 impl<
     Async: FutureForm,
     E: HasConnectionPolicy<Async>
+        + HasMinimizedTreeStore<Async, MinimizedTreeStore: Send + Sync>
         + HasSigner<Async>
         + HasSpawner<Async, Spawner: Send + Sync + 'static>
         + HasStorage<Async>
@@ -188,6 +204,7 @@ pub trait SendableEffects:
     + Effects<
         Sendable,
         FetchDisallowed: Send,
+        MinimizedTreeStore: MinimizedTreeStore<Sendable, Error: Send, Generation: Send + Sync>,
         Policy: Send + Sync + ConnectionPolicy<Sendable, ConnectionDisallowed: Send>,
         PutDisallowed: Send,
         Signer: Send + Sync,
@@ -203,6 +220,7 @@ impl<
         + Effects<
             Sendable,
             FetchDisallowed: Send,
+            MinimizedTreeStore: MinimizedTreeStore<Sendable, Error: Send, Generation: Send + Sync>,
             Policy: Send + Sync + ConnectionPolicy<Sendable, ConnectionDisallowed: Send>,
             PutDisallowed: Send,
             Signer: Send + Sync,
@@ -218,8 +236,8 @@ impl<
 /// `'static`, so node work can live in spawned single-threaded tasks.
 ///
 /// Only `E` itself is bounded: a projection of a `'static` type outlives
-/// `'static` too. Nothing needs to be `Send` except the spawner, which
-/// [`Effects`] already requires.
+/// `'static` too. Nothing needs to be `Send` except the spawner and the
+/// minimized tree store, which [`Effects`] already requires.
 ///
 /// Blanket-implemented. Generic `Local` code bounds `E: LocalEffects`
 /// instead of restating each slot.

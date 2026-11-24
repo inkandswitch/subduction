@@ -585,7 +585,7 @@ async fn sync_with_real_minimize_pruning() -> TestResult {
 ///
 /// To make the cold-tree condition deterministic regardless of shard/hash
 /// distribution, the target documents are *explicitly* evicted from Alice's
-/// resident cache (`sedimentrees().remove`) — they remain in durable storage —
+/// resident store (`minimized_tree_store().evict`) — they remain in durable storage —
 /// before syncing.
 #[tokio::test]
 async fn full_sync_with_peer_includes_evicted_documents() -> TestResult {
@@ -627,9 +627,13 @@ async fn full_sync_with_peer_includes_evicted_documents() -> TestResult {
     // resident cache (they stay in storage), creating the cold-tree condition
     // a resident-only enumeration would skip.
     for sed_id in &doc_ids[..EVICT_BELOW as usize] {
-        alice.sedimentrees().remove(sed_id).await;
+        alice.minimized_tree_store().evict(*sed_id).await;
         assert!(
-            alice.sedimentrees().get_cloned(sed_id).await.is_none(),
+            alice
+                .minimized_tree_store()
+                .get_cloned(*sed_id)
+                .await
+                .is_none(),
             "target document must be non-resident after explicit eviction"
         );
     }

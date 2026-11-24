@@ -2,11 +2,12 @@
 #![allow(clippy::expect_used, clippy::panic)]
 
 mod hydration;
+mod store_failures;
 
 use crate::{
-    collections::bounded_sharded_map::BoundedShardedMap,
     connection::test_utils::{InstantTimeout, TokioSpawn, test_signer},
     effects::config::Config,
+    minimized_tree_store::{MinimizedTreeStore, memory::MemoryMinimizedTreeStore},
     policy::open::OpenPolicy,
     storage::{
         fetcher::Fetcher,
@@ -35,8 +36,8 @@ use subduction_crypto::{
 
 // Primitive regressions admit inline; ownership tests below exercise the real
 // StorageTasks submission boundary, including cancellation and spawner rejection.
-async fn complete<Async, Store, Work, R, const SHARDS: usize>(
-    cache: &BoundedShardedMap<SedimentreeId, MinimizedSedimentree, SHARDS>,
+async fn complete<Async, Store, Trees, Work, R>(
+    cache: &Trees,
     fetcher: &Fetcher<Async, Store>,
     work: Work,
     update: Option<Sedimentree>,
@@ -44,17 +45,18 @@ async fn complete<Async, Store, Work, R, const SHARDS: usize>(
 where
     Async: FutureForm,
     Store: Storage<Async>,
+    Trees: MinimizedTreeStore<Async>,
     Work: Future<Output = Result<R, Store::Error>>,
 {
     fetcher
         .coordination()
         .track_mutation()
-        .persist(cache, work, update, None)
+        .persist::<Async, _, _, _, _>(cache, work, update, None)
         .await
 }
 
-type Cache = BoundedShardedMap<SedimentreeId, MinimizedSedimentree, 1>;
-type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, InstantTimeout, TokioSpawn>;
+type Cache = MemoryMinimizedTreeStore<1>;
+type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, InstantTimeout, TokioSpawn, Cache>;
 
 type WatchedNode = crate::subduction::Subduction<
     'static,
@@ -66,17 +68,16 @@ type WatchedNode = crate::subduction::Subduction<
         Cfg,
         crate::connection::test_utils::MockConnection,
         CountLeadingZeroBytes,
-        1,
     >,
     CountLeadingZeroBytes,
-    1,
 >;
 fn watched_node(backend: MemoryStorage) -> Arc<WatchedNode> {
     use crate::{
         connection::test_utils::{InstantTimeout, MockConnection, TokioSpawn},
         subduction::builder::SubductionBuilder,
     };
-    let (node, _handler, _listener, _manager) = SubductionBuilder::<_, _, _, _, _, _, 1>::new()
+    let (node, _handler, _listener, _manager) = SubductionBuilder::new()
+        .minimized_tree_store(Cache::new())
         .signer(test_signer())
         .storage(backend, Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
@@ -106,7 +107,10 @@ async fn watching_waits_for_cancelled_mutations_to_settle_then_publishes_or_reco
         if resident {
             assert!(node.get_commits(ID).await.is_some());
         }
-        assert_eq!(node.sedimentrees.get_cloned(&ID).await.is_some(), resident);
+        assert_eq!(
+            node.minimized_tree_store.get_cloned(ID).await.is_some(),
+            resident
+        );
         let mut stream = node.load_and_watch(ID);
         assert!(matches!(
             observed_event(&mut stream).await,
@@ -151,13 +155,13 @@ async fn watching_waits_for_cancelled_mutations_to_settle_then_publishes_or_reco
                 count, 2,
                 "recover partial effects, not just successful calls"
             );
-            assert!(node.sedimentrees.get_cloned(&ID).await.is_none());
+            assert!(node.minimized_tree_store.get_cloned(ID).await.is_none());
         } else {
             let StoredEvent::Item(StoredItem::Commit(v)) = observed_event(&mut stream).await else {
                 panic!("settled item")
             };
             assert_eq!(v.payload().head(), CommitId::new([2; 32]));
-            let cached = node.sedimentrees.get_cloned(&ID).await;
+            let cached = node.minimized_tree_store.get_cloned(ID).await;
             if resident {
                 assert_eq!(cached.expect("resident").loose_commits().count(), 2);
             } else {
@@ -299,7 +303,7 @@ async fn successful_cold_write_does_not_read_storage_or_populate_cache() {
     complete(&cache, &fetcher, persist(&fetcher, incoming), Some(update))
         .await
         .expect("a successful write must not depend on storage reads");
-    assert!(cache.get_cloned(&ID).await.is_none());
+    assert!(cache.get_cloned(ID).await.is_none());
     assert!(
         fetcher
             .coordination()
@@ -339,7 +343,7 @@ async fn successful_resident_write_updates_cache_without_reading_storage() {
         .expect("resident update needs no storage reads");
     assert_eq!(
         cache
-            .get_cloned(&ID)
+            .get_cloned(ID)
             .await
             .expect("still resident")
             .loose_commits()
@@ -358,7 +362,7 @@ async fn successful_resident_write_updates_cache_without_reading_storage() {
 
 #[tokio::test]
 async fn eviction_during_write_does_not_trigger_repopulation() {
-    let cache = Arc::new(Cache::new().with_capacity(1));
+    let cache = Cache::with_capacity(1);
     let backend = ProbeStorage::default();
     let storage = managed_with_cache(backend.clone(), cache.clone(), TokioSpawn);
     let fetcher = storage.local_fetcher(ID);
@@ -379,9 +383,9 @@ async fn eviction_during_write_does_not_trigger_repopulation() {
         async {
             // Force eviction after the mutation starts, before it completes.
             cache
-                .get_or_insert_with(other_id, MinimizedSedimentree::default)
+                .insert_if_absent(other_id, MinimizedSedimentree::default())
                 .await;
-            assert!(cache.get_cloned(&ID).await.is_none());
+            assert!(cache.get_cloned(ID).await.is_none());
             backend.fail(ID);
             persist(&fetcher, incoming).await
         },
@@ -389,8 +393,8 @@ async fn eviction_during_write_does_not_trigger_repopulation() {
     )
     .await
     .expect("eviction must not turn a successful write into a read failure");
-    assert!(cache.get_cloned(&ID).await.is_none());
-    assert!(cache.get_cloned(&other_id).await.is_some());
+    assert!(cache.get_cloned(ID).await.is_none());
+    assert!(cache.get_cloned(other_id).await.is_some());
     assert!(
         fetcher
             .coordination()
@@ -433,7 +437,7 @@ async fn partial_persistence_invalidates_a_resident_tree() {
     )
     .await;
     assert!(result.is_err());
-    let rebuilt = ingest::get_or_hydrate::<Sendable, _, _, _, 1>(
+    let rebuilt = ingest::get_or_hydrate::<Sendable, _, _, _, Cache>(
         &cache,
         &storage,
         &CountLeadingZeroBytes,
@@ -468,7 +472,7 @@ async fn partial_deletion_does_not_leave_phantom_cached_items() {
         .await
         .is_err()
     );
-    let rebuilt = ingest::get_or_hydrate::<Sendable, _, _, _, 1>(
+    let rebuilt = ingest::get_or_hydrate::<Sendable, _, _, _, Cache>(
         &cache,
         &storage,
         &CountLeadingZeroBytes,
@@ -481,11 +485,14 @@ async fn partial_deletion_does_not_leave_phantom_cached_items() {
 }
 
 #[tokio::test]
-async fn pre_failure_scan_cannot_reinstall_after_invalidation() {
+async fn pre_failure_scan_cannot_repopulate_after_invalidation() {
     let (storage, cache) = managed(MemoryStorage::new(), TokioSpawn);
     save(&cache, &storage, 1).await;
     let fetcher = storage.local_fetcher(ID);
-    let read = fetcher.coordination().prepare_cache_read(&cache).await;
+    let read = fetcher
+        .coordination()
+        .prepare_cache_read::<Sendable, _>(&cache, Some(()))
+        .await;
     let old = ingest::load_tree(&fetcher).await.expect("scan");
     assert!(
         complete(
@@ -500,9 +507,9 @@ async fn pre_failure_scan_cannot_reinstall_after_invalidation() {
         .await
         .is_err()
     );
-    let stale = read.install(old, |_| ()).await;
-    assert!(stale.is_none(), "stale scan must retry, not reinstall");
-    assert!(cache.get_cloned(&ID).await.is_none());
+    let stale = read.populate(old, &mut |_| ()).await;
+    assert!(stale.is_none(), "stale scan must retry, not repopulate");
+    assert!(cache.get_cloned(ID).await.is_none());
     assert_eq!(
         ingest::read_cached(&cache, &fetcher, |tree| tree.loose_commits().count())
             .await
@@ -512,18 +519,29 @@ async fn pre_failure_scan_cannot_reinstall_after_invalidation() {
 }
 
 #[tokio::test]
-async fn scan_adopts_a_concurrently_completed_cache_entry() {
+async fn scan_overlapped_by_a_completed_write_retries_into_the_resident_entry() {
     let (storage, cache) = managed(MemoryStorage::new(), TokioSpawn);
     save(&cache, &storage, 1).await;
     let fetcher = storage.local_fetcher(ID);
-    let read = fetcher.coordination().prepare_cache_read(&cache).await;
+    let read = fetcher
+        .coordination()
+        .prepare_cache_read::<Sendable, _>(&cache, Some(()))
+        .await;
     let old = ingest::load_tree(&fetcher).await.expect("scan");
     save(&cache, &storage, 2).await;
-    let adopted = read.install(old, |tree| tree.loose_commits().count()).await;
+    let overlapped = read
+        .populate(old, &mut |tree| tree.loose_commits().count())
+        .await;
     assert_eq!(
-        adopted,
-        Some(Some(2)),
-        "use the resident value, not the old loaded copy"
+        overlapped, None,
+        "an overlapped scan must not populate its old copy"
+    );
+    assert_eq!(
+        ingest::read_cached(&cache, &fetcher, |tree| tree.loose_commits().count())
+            .await
+            .expect("read"),
+        Some(2),
+        "the retry sees the resident value, not the old loaded copy"
     );
 }
 
@@ -566,22 +584,19 @@ async fn cold_readers_all_wake_after_an_unsettled_mutation() {
     writing.await.expect("writer joins");
 }
 
-fn managed<Store, Sp>(
-    backend: Store,
-    spawner: Sp,
-) -> (StoragePowerbox<Store, OpenPolicy>, Arc<Cache>)
+fn managed<Store, Sp>(backend: Store, spawner: Sp) -> (StoragePowerbox<Store, OpenPolicy>, Cache)
 where
     Store: Storage<Sendable> + core::fmt::Debug + Send + Sync + 'static,
     Store::Error: Send + 'static,
     Sp: crate::spawn::Spawn<Sendable> + Clone + Send + Sync + 'static,
 {
-    let cache = Arc::new(Cache::new());
+    let cache = Cache::new();
     (managed_with_cache(backend, cache.clone(), spawner), cache)
 }
 
 fn managed_with_cache<Store, Sp>(
     backend: Store,
-    cache: Arc<Cache>,
+    cache: Cache,
     spawner: Sp,
 ) -> StoragePowerbox<Store, OpenPolicy>
 where
@@ -590,7 +605,7 @@ where
     Sp: crate::spawn::Spawn<Sendable> + Clone + Send + Sync + 'static,
 {
     use crate::subduction::StorageTasks;
-    <Sendable as StorageTasks<Store, OpenPolicy, 1>>::storage_powerbox(
+    <Sendable as StorageTasks<Store, OpenPolicy, Cache>>::storage_powerbox(
         backend,
         Arc::new(OpenPolicy),
         cache,
@@ -624,7 +639,7 @@ async fn cancelled_waiter_does_not_abandon_resident_cache_completion() {
     settled(&putter.as_fetcher()).await;
     assert_eq!(
         cache
-            .get_cloned(&ID)
+            .get_cloned(ID)
             .await
             .expect("resident")
             .loose_commits()
@@ -656,7 +671,7 @@ async fn cancelled_waiter_still_invalidates_after_late_partial_failure() {
     let fetcher = putter.as_fetcher();
     settled(&fetcher).await;
     assert!(
-        cache.get_cloned(&ID).await.is_none(),
+        cache.get_cloned(ID).await.is_none(),
         "repair must not rely on eviction"
     );
     assert_eq!(
@@ -773,7 +788,7 @@ async fn cloned_powerboxes_manage_capabilities_from_the_first_write() {
     assert_eq!(spawner.0.lock().len(), 2);
     assert_eq!(
         cache
-            .get_cloned(&ID)
+            .get_cloned(ID)
             .await
             .expect("resident")
             .loose_commits()
@@ -797,13 +812,14 @@ async fn local_execution_owns_completion_without_a_network_listener() {
         .run_until(async {
             let backend = MemoryStorage::new();
             let (started, release) = backend.gate_next_commit();
-            let cache = Arc::new(Cache::new());
-            let storage = <Local as StorageTasks<MemoryStorage, OpenPolicy, 1>>::storage_powerbox(
-                backend,
-                Arc::new(OpenPolicy),
-                cache.clone(),
-                TokioSpawn,
-            );
+            let cache = Cache::new();
+            let storage =
+                <Local as StorageTasks<MemoryStorage, OpenPolicy, Cache>>::storage_powerbox(
+                    backend,
+                    Arc::new(OpenPolicy),
+                    cache.clone(),
+                    TokioSpawn,
+                );
             let putter = storage.local_putter(ID);
             let mut waiter = Box::pin(putter.save_commit(item(1).await));
             assert!(waiter.as_mut().now_or_never().is_none());
@@ -813,7 +829,7 @@ async fn local_execution_owns_completion_without_a_network_listener() {
             let fetcher = putter.as_fetcher();
             let _attempt = fetcher.coordination().prepare_read().await;
             assert!(
-                cache.get_cloned(&ID).await.is_none(),
+                cache.get_cloned(ID).await.is_none(),
                 "cold write stays uncached"
             );
             assert!(!storage.state.closed(), "owned task completed normally");
