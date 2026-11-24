@@ -12,6 +12,7 @@ use crate::{
         WasmInitError, WasmIoError, WasmLongPollConnectError, WasmWriteError,
     },
     handler::{JsFrameHandler, WasmComposedHandler, WasmKeyhiveHandler},
+    keyhive::{KeyhiveSync, access::JsKeyhiveAccess},
     policy::{
         JsPolicy,
         ephemeral::{JsEphemeralPolicy, make_open_ephemeral_policy},
@@ -31,6 +32,7 @@ use crate::{
 use alloc::{
     boxed::Box,
     collections::BTreeSet,
+    rc::Rc,
     string::{String, ToString},
     sync::Arc,
     vec::Vec,
@@ -74,7 +76,7 @@ use subduction_ephemeral::{
     message::{EphemeralMessage, EphemeralPayload},
     topic::Topic,
 };
-use subduction_keyhive::KeyhiveMessage;
+use subduction_keyhive::{KeyhiveMessage, SyncMode};
 use wasm_bindgen::prelude::*;
 
 #[path = "api.rs"]
@@ -114,6 +116,7 @@ pub struct Node {
     js_storage: JsValue,
     ephemeral_handler: NodeEphemeral,
     keyhive_handler: Arc<Mutex<Option<JsFrameHandler>>>,
+    keyhive: Option<Rc<KeyhiveSync>>,
     runtime: Runtime,
     ephemeral_task: AbortHandle,
 }
@@ -195,10 +198,17 @@ impl Node {
         let ephemeral_for_node = ephemeral_handler.clone();
         let send_counter = sync_handler.send_counter().clone();
         let keyhive_handler = Arc::new(Mutex::new(None));
+        let keyhive = opts.keyhive().map(|access| {
+            Rc::new(KeyhiveSync::new(
+                access,
+                opts.on_keyhive_outcome(),
+                connections.clone(),
+            ))
+        });
         let handler = Arc::new(WasmComposedHandler::new(
             sync_handler,
             ephemeral_handler,
-            WasmKeyhiveHandler::new(keyhive_handler.clone()),
+            WasmKeyhiveHandler::new(keyhive_handler.clone(), keyhive.clone()),
         ));
         let (core, listener_fut, manager_fut) = Subduction::new(
             handler,
@@ -247,6 +257,7 @@ impl Node {
             js_storage,
             ephemeral_handler: ephemeral_for_node,
             keyhive_handler,
+            keyhive,
             runtime,
             ephemeral_task,
         })
@@ -262,6 +273,11 @@ impl Node {
         let fresh = self.core.add_connection(managed).await?;
         if fresh {
             self.ephemeral_handler.subscribe_peer(peer).await;
+            if let Some(keyhive) = &self.keyhive
+                && let Err(e) = keyhive.add_peer(peer).await
+            {
+                tracing::warn!(%peer, "keyhive could not register the peer: {e}");
+            }
         }
         Ok(fresh)
     }
@@ -738,6 +754,37 @@ impl Node {
             })
             .await
     }
+    /// Start a keyhive sync round with a connected peer, as `mode` says.
+    pub async fn sync_keyhive_with_peer(
+        &self,
+        peer: &PeerId,
+        mode: SyncMode,
+    ) -> Result<(), JsValue> {
+        self.runtime
+            .run::<_, JsValue>(async {
+                self.builtin_keyhive()?
+                    .sync_with_peer(*peer, mode)
+                    .await
+                    .map_err(|e| JsValue::from_str(&e.to_string()))
+            })
+            .await
+    }
+    /// Rebuild the keyhive event cache if keyhive's op count has changed.
+    pub async fn refresh_keyhive_cache(&self) -> Result<(), JsValue> {
+        self.runtime
+            .run::<_, JsValue>(async {
+                self.builtin_keyhive()?
+                    .refresh_cache()
+                    .await
+                    .map_err(|e| JsValue::from_str(&e.to_string()))
+            })
+            .await
+    }
+    fn builtin_keyhive(&self) -> Result<&KeyhiveSync, JsValue> {
+        self.keyhive
+            .as_deref()
+            .ok_or_else(|| JsValue::from_str("Subduction was constructed without a keyhive"))
+    }
     /// List known trees.
     pub async fn sedimentree_ids(&self) -> Result<Vec<SedimentreeId>, JsValue> {
         self.runtime.run_value(self.core.sedimentree_ids()).await
@@ -821,6 +868,10 @@ extern "C" {
     fn on_remote_heads(this: &JsSubductionOptions) -> Option<js_sys::Function>;
     #[wasm_bindgen(method, getter, js_name = onEphemeral)]
     fn on_ephemeral(this: &JsSubductionOptions) -> Option<js_sys::Function>;
+    #[wasm_bindgen(method, getter)]
+    fn keyhive(this: &JsSubductionOptions) -> Option<JsKeyhiveAccess>;
+    #[wasm_bindgen(method, getter, js_name = onKeyhiveOutcome)]
+    fn on_keyhive_outcome(this: &JsSubductionOptions) -> Option<js_sys::Function>;
     #[wasm_bindgen(method, getter, js_name = defaultTimeoutMilliseconds)]
     fn default_timeout_milliseconds(this: &JsSubductionOptions) -> Option<u32>;
 }
