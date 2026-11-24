@@ -21,8 +21,10 @@
     unreachable_pub
 )]
 
+mod common;
+
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::BTreeSet,
     process::{Child, Command, Stdio},
     sync::Arc,
     time::Duration,
@@ -52,7 +54,6 @@ use subduction_websocket::timeout::FuturesTimerTimeout;
 
 const SYNC_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(10_000);
 const SERVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
-const READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 type Cfg = Config<MemoryStorage, OpenPolicy, MemorySigner, FuturesTimerTimeout, TokioSpawn>;
 
@@ -75,32 +76,8 @@ struct ServerInfo {
     iroh_addrs: Vec<String>,
 }
 
-fn cli_binary() -> std::path::PathBuf {
-    let mut path = std::env::current_exe().expect("test executable path");
-    path.pop(); // remove test binary name
-    path.pop(); // remove `deps`
-    path.push("subduction_cli");
-    assert!(
-        path.exists(),
-        "CLI binary not found at {} — run `cargo build -p subduction_cli` first",
-        path.display()
-    );
-    path
-}
-
 fn signer(seed: u8) -> MemorySigner {
     MemorySigner::from_bytes(&[seed; 32])
-}
-
-/// Parse a simple `key=value\n` file into a map.
-fn parse_ready_file(content: &str) -> HashMap<String, String> {
-    content
-        .lines()
-        .filter_map(|line| {
-            let (k, v) = line.split_once('=')?;
-            Some((k.to_owned(), v.to_owned()))
-        })
-        .collect()
 }
 
 /// Spawn a server process with port 0 (OS-assigned) and wait for its ready file.
@@ -115,7 +92,7 @@ async fn spawn_server(
     data_dir: &std::path::Path,
     ready_file: &std::path::Path,
 ) -> ServerInfo {
-    let mut cmd = Command::new(cli_binary());
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_subduction_cli"));
     cmd.arg("server")
         .arg("--socket")
         .arg("127.0.0.1:0")
@@ -144,35 +121,30 @@ async fn spawn_server(
 
     let child = cmd.spawn().expect("failed to spawn server");
 
-    // Poll for the ready file
-    let deadline = tokio::time::Instant::now() + SERVER_STARTUP_TIMEOUT;
-    loop {
-        assert!(
-            tokio::time::Instant::now() <= deadline,
-            "timed out waiting for ready file at {}",
-            ready_file.display()
-        );
-        if ready_file.exists()
-            && let Ok(content) = std::fs::read_to_string(ready_file)
-        {
-            let map = parse_ready_file(&content);
-            if let (Some(port_str), Some(node_id)) = (map.get("port"), map.get("iroh_node_id")) {
-                let port: u16 = port_str
-                    .parse()
-                    .expect("ready file port should be a valid u16");
-                let iroh_addrs = map
-                    .get("iroh_addrs")
-                    .map(|s| s.split(',').map(String::from).collect())
-                    .unwrap_or_default();
-                return ServerInfo {
-                    child,
-                    port,
-                    node_id: node_id.clone(),
-                    iroh_addrs,
-                };
-            }
-        }
-        tokio::time::sleep(READY_POLL_INTERVAL).await;
+    let ready = common::wait_for_ready_file(ready_file, SERVER_STARTUP_TIMEOUT)
+        .await
+        .unwrap_or_else(|| {
+            panic!(
+                "timed out waiting for ready file at {}",
+                ready_file.display()
+            )
+        });
+    let port = ready["port"]
+        .parse()
+        .expect("ready file port should be a valid u16");
+    let node_id = ready
+        .get("iroh_node_id")
+        .expect("an iroh server's ready file has its node ID")
+        .clone();
+    let iroh_addrs = ready
+        .get("iroh_addrs")
+        .map(|s| s.split(',').map(String::from).collect())
+        .unwrap_or_default();
+    ServerInfo {
+        child,
+        port,
+        node_id,
+        iroh_addrs,
     }
 }
 
