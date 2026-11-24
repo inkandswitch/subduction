@@ -81,7 +81,10 @@ where
     S: KeyhiveStorage<Async>,
     Async: FutureForm,
 {
-    let bytes = encode_value(archive);
+    // The archive holds this replica's secret keys. `encode_zeroizing` writes
+    // them into one exact-sized buffer, so no reallocation leaves a copy
+    // behind, and the buffer moves to storage without another copy.
+    let bytes = core::mem::take(&mut *archive.encode_zeroizing());
 
     tracing::debug!(
         hash = %storage_id.to_hex(),
