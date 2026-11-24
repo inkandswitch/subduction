@@ -1096,16 +1096,15 @@ where
             .archive_config
             .filter(|(threshold, _)| event_bytes_list.len() > *threshold);
 
-        if let Some((_, storage_id)) = use_archive {
-            let archive = {
-                let keyhive = self.keyhive.lock().await;
-                keyhive
-                    .into_archive()
-                    .await
-                    .map_err(ProtocolError::Keyhive)?
-            };
-            storage_ops::save_keyhive_archive(&self.storage, storage_id, &archive).await?;
-        } else {
+        // The events are already applied in memory, so persist them one way or
+        // another: an archive when the batch is large, otherwise (or if the
+        // archive cannot be exported or saved) each event's bytes.
+        let archived = match use_archive {
+            Some((_, storage_id)) => self.save_archive(storage_id).await,
+            None => false,
+        };
+
+        if !archived {
             for event_bytes in event_bytes_list {
                 if let Err(e) =
                     storage_ops::save_event_bytes(&self.storage, event_bytes.as_ref().to_vec())
@@ -1117,6 +1116,34 @@ where
         }
 
         Ok(())
+    }
+
+    /// Export the Keyhive as an archive and save it at `storage_id`.
+    ///
+    /// Returns whether it was saved. A failure is logged rather than
+    /// returned, so the caller can persist the events another way.
+    ///
+    /// The Keyhive stays locked until the save finishes, as in
+    /// [`Self::compact`], so archives are saved in the order they were
+    /// exported. Otherwise an older export could be saved over a newer one,
+    /// and the events only the newer one holds (or that compaction deleted
+    /// after folding them into it) would be lost.
+    async fn save_archive(&self, storage_id: StorageHash) -> bool {
+        let keyhive = self.keyhive.lock().await;
+        let archive = match keyhive.into_archive().await {
+            Ok(archive) => archive,
+            Err(error) => {
+                tracing::warn!(%error, "failed to export keyhive archive; saving events individually");
+                return false;
+            }
+        };
+        match storage_ops::save_keyhive_archive(&self.storage, storage_id, &archive).await {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(%error, "failed to save keyhive archive; saving events individually");
+                false
+            }
+        }
     }
 
     /// Attempt to recover by ingesting from storage and retrying.
@@ -1962,6 +1989,296 @@ mod tests {
             "expected no individual event files when threshold path fires (got {})",
             events.len()
         );
+    }
+
+    /// How `ingest_events` persists what it applied when a batch is large
+    /// enough for the archive path.
+    mod archive_saves {
+        use alloc::{sync::Arc, vec, vec::Vec};
+        use core::{
+            convert::Infallible,
+            sync::atomic::{AtomicBool, Ordering},
+        };
+
+        use async_lock::Mutex;
+        use dupe::Dupe;
+        use future_form::Local;
+        use futures::{FutureExt, future::LocalBoxFuture};
+        use keyhive_content::store::memory::MemoryCiphertextStore;
+        use keyhive_core::listener::no_listener::NoListener;
+        use keyhive_crypto::signer::memory::MemorySigner;
+        use rand::rngs::OsRng;
+        use testresult::TestResult;
+
+        use crate::{
+            protocol::KeyhiveProtocol,
+            storage::{KeyhiveStorage, MemoryKeyhiveStorage, StorageHash},
+            storage_ops,
+            test_utils::{
+                ChannelConnection, SimpleKeyhive, TestKeyline, create_group_with_read_members,
+                keyhive_peer_id, make_keyhive,
+            },
+        };
+
+        #[derive(Debug, thiserror::Error)]
+        #[error("archives refused")]
+        struct ArchivesRefused;
+
+        /// What [`ArchiveTestStorage`] does when asked to save an archive.
+        #[derive(Debug, Clone)]
+        enum OnSaveArchive {
+            /// Refuse every archive.
+            Refuse,
+
+            /// Signal `entered` and wait for `release` before saving the
+            /// first archive; save the rest at once.
+            HoldFirst {
+                entered: async_channel::Sender<()>,
+                release: async_channel::Receiver<()>,
+                held: Arc<AtomicBool>,
+            },
+        }
+
+        /// Storage that keeps everything, except as [`OnSaveArchive`] says.
+        #[derive(Debug, Clone)]
+        struct ArchiveTestStorage {
+            inner: MemoryKeyhiveStorage,
+            on_save_archive: OnSaveArchive,
+        }
+
+        impl ArchiveTestStorage {
+            fn new(on_save_archive: OnSaveArchive) -> Self {
+                Self {
+                    inner: MemoryKeyhiveStorage::new(),
+                    on_save_archive,
+                }
+            }
+        }
+
+        fn never<T>(never: Infallible) -> T {
+            match never {}
+        }
+
+        impl KeyhiveStorage<Local> for ArchiveTestStorage {
+            type Error = ArchivesRefused;
+
+            fn save_archive(
+                &self,
+                hash: StorageHash,
+                data: Vec<u8>,
+            ) -> LocalBoxFuture<'_, Result<(), ArchivesRefused>> {
+                async move {
+                    match &self.on_save_archive {
+                        OnSaveArchive::Refuse => return Err(ArchivesRefused),
+                        OnSaveArchive::HoldFirst {
+                            entered,
+                            release,
+                            held,
+                        } => {
+                            if !held.swap(true, Ordering::SeqCst) {
+                                entered.send(()).await.expect("the test waits for it");
+                                release.recv().await.expect("the test releases it");
+                            }
+                        }
+                    }
+                    KeyhiveStorage::<Local>::save_archive(&self.inner, hash, data)
+                        .await
+                        .unwrap_or_else(never);
+                    Ok(())
+                }
+                .boxed_local()
+            }
+
+            fn load_archives(
+                &self,
+            ) -> LocalBoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, ArchivesRefused>>
+            {
+                async move {
+                    Ok(KeyhiveStorage::<Local>::load_archives(&self.inner)
+                        .await
+                        .unwrap_or_else(never))
+                }
+                .boxed_local()
+            }
+
+            fn delete_archive(
+                &self,
+                hash: StorageHash,
+            ) -> LocalBoxFuture<'_, Result<(), ArchivesRefused>> {
+                async move {
+                    KeyhiveStorage::<Local>::delete_archive(&self.inner, hash)
+                        .await
+                        .unwrap_or_else(never);
+                    Ok(())
+                }
+                .boxed_local()
+            }
+
+            fn save_event(
+                &self,
+                hash: StorageHash,
+                data: Vec<u8>,
+            ) -> LocalBoxFuture<'_, Result<(), ArchivesRefused>> {
+                async move {
+                    KeyhiveStorage::<Local>::save_event(&self.inner, hash, data)
+                        .await
+                        .unwrap_or_else(never);
+                    Ok(())
+                }
+                .boxed_local()
+            }
+
+            fn load_events(
+                &self,
+            ) -> LocalBoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, ArchivesRefused>>
+            {
+                async move {
+                    Ok(KeyhiveStorage::<Local>::load_events(&self.inner)
+                        .await
+                        .unwrap_or_else(never))
+                }
+                .boxed_local()
+            }
+
+            fn delete_event(
+                &self,
+                hash: StorageHash,
+            ) -> LocalBoxFuture<'_, Result<(), ArchivesRefused>> {
+                async move {
+                    KeyhiveStorage::<Local>::delete_event(&self.inner, hash)
+                        .await
+                        .unwrap_or_else(never);
+                    Ok(())
+                }
+                .boxed_local()
+            }
+        }
+
+        type TestProtocol = KeyhiveProtocol<
+            MemorySigner,
+            [u8; 32],
+            Vec<u8>,
+            MemoryCiphertextStore<[u8; 32], Vec<u8>>,
+            NoListener,
+            OsRng,
+            TestKeyline,
+            ChannelConnection,
+            ArchiveTestStorage,
+            Local,
+        >;
+
+        /// Alice, with a group shared with Bob, and the events Bob's agent
+        /// is sent: a batch over a threshold of 2.
+        async fn alice_and_a_batch()
+        -> TestResult<(SimpleKeyhive, TestProtocolParts, Vec<Arc<[u8]>>)> {
+            let alice_kh = make_keyhive().await;
+            let bob_kh = make_keyhive().await;
+            let alice_id = keyhive_peer_id(&alice_kh);
+            let bob_id = keyhive_peer_id(&bob_kh);
+            let alice_cc = alice_kh.generate_contact_card().await?;
+            let bob_cc = bob_kh.generate_contact_card().await?;
+            alice_kh.receive_contact_card(&bob_cc).await?;
+            bob_kh.receive_contact_card(&alice_cc).await?;
+            create_group_with_read_members(&alice_kh, &[&bob_id]).await;
+
+            let probe = TestProtocol::new(
+                Arc::new(Mutex::new(alice_kh.clone())),
+                ArchiveTestStorage::new(OnSaveArchive::Refuse),
+                alice_id.clone(),
+                alice_cc.clone(),
+            );
+            let batch: Vec<Arc<[u8]>> = probe
+                .get_events_for_agent(&bob_id)
+                .await?
+                .ok_or("bob should resolve to an agent")?
+                .values()
+                .map(Dupe::dupe)
+                .collect();
+            assert!(batch.len() > 2, "need a batch over the threshold");
+            Ok((alice_kh, (alice_id, alice_cc), batch))
+        }
+
+        type TestProtocolParts = (
+            crate::peer_id::KeyhivePeerId,
+            keyhive_core::contact_card::ContactCard,
+        );
+
+        const STORAGE_ID: StorageHash = StorageHash::new([42u8; 32]);
+
+        fn protocol(
+            alice_kh: &SimpleKeyhive,
+            (alice_id, alice_cc): TestProtocolParts,
+            storage: ArchiveTestStorage,
+        ) -> TestProtocol {
+            TestProtocol::new(
+                Arc::new(Mutex::new(alice_kh.clone())),
+                storage,
+                alice_id,
+                alice_cc,
+            )
+            .with_archive_threshold(2, STORAGE_ID)
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn a_refused_archive_falls_back_to_saving_each_event() -> TestResult {
+            let (alice_kh, parts, batch) = alice_and_a_batch().await?;
+            let storage = ArchiveTestStorage::new(OnSaveArchive::Refuse);
+            let protocol = protocol(&alice_kh, parts, storage.clone());
+
+            protocol.ingest_events(&batch).await?;
+
+            let saved = storage_ops::load_events::<[u8; 32], _, Local>(&storage.inner).await?;
+            assert_eq!(
+                saved.len(),
+                batch.len(),
+                "every applied event is saved when the archive is refused"
+            );
+            Ok(())
+        }
+
+        /// Two large batches ingested at once save their archives in the
+        /// order they were exported, so the newest is what storage keeps.
+        #[tokio::test(flavor = "current_thread")]
+        async fn concurrent_batches_keep_the_newest_archive() -> TestResult {
+            let (alice_kh, parts, batch) = alice_and_a_batch().await?;
+            let (entered_tx, entered) = async_channel::bounded(1);
+            let (release, release_rx) = async_channel::bounded(1);
+            let storage = ArchiveTestStorage::new(OnSaveArchive::HoldFirst {
+                entered: entered_tx,
+                release: release_rx,
+                held: Arc::new(AtomicBool::new(false)),
+            });
+            let protocol = protocol(&alice_kh, parts, storage.clone());
+
+            let first = protocol.ingest_events(&batch);
+            let second = async {
+                entered.recv().await?;
+                // The Keyhive changes while the first archive is being saved,
+                // so the second batch exports a newer one.
+                alice_kh.generate_group(vec![]).await?;
+                let release_later = async {
+                    for _ in 0..100 {
+                        tokio::task::yield_now().await;
+                    }
+                    release.send(()).await
+                };
+                let (ingested, released) =
+                    futures::join!(protocol.ingest_events(&batch), release_later);
+                released?;
+                ingested?;
+                TestResult::Ok(())
+            };
+            let (first, second) = futures::join!(first, second);
+            first?;
+            second?;
+
+            let newest = alice_kh.into_archive().await?.encode_zeroizing().to_vec();
+            let stored = KeyhiveStorage::<Local>::load_archives(&storage.inner)
+                .await
+                .unwrap_or_else(never);
+            assert_eq!(stored, vec![(STORAGE_ID, newest)]);
+            Ok(())
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
