@@ -9,12 +9,12 @@ use crate::peer_id::KeyhivePeerId;
 /// Events are identified by their 32-byte BLAKE3 hash.
 pub type EventHash = [u8; 32];
 
-/// Bincode-serialized `StaticEvent<T>`.
+/// A `StaticEvent<T>`'s `KH` frame.
 pub type EventBytes = Vec<u8>;
 
 /// Hash-keyed map of serialized events for a peer or peer pair.
 ///
-/// Values are `Arc`-shared bincode event bytes: the periodic cache stores one
+/// Values are `Arc`-shared event `KH` frames: the periodic cache stores one
 /// copy of each event and hands every peer-pair response an `Arc` clone, so
 /// cloning a whole response is a set of refcount bumps, not a byte-for-byte
 /// copy of every event.
