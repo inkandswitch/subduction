@@ -9,7 +9,8 @@
 
 use keyhive_codec::traits::{Decode, Encode};
 use keyhive_core::{
-    contact_card::ContactCard, event::static_event::StaticEvent,
+    contact_card::ContactCard,
+    event::{Event, static_event::StaticEvent},
     principal::document::id::DocumentId,
 };
 use keyhive_crypto::identifier::Identifier;
@@ -27,13 +28,23 @@ const VECTORS: &str = include_str!("fixtures/keyhive_wasm/vectors.txt");
 #[test]
 fn signed_bytes_verify_as_a_keyhive_message() -> TestResult {
     let v = Vectors::parse()?;
-    let card = ContactCard::from_bytes(&v.contact_card)?;
-    let sent = SignedMessage::with_contact_card(v.signed, card);
+    let sent = SignedMessage::with_contact_card(v.signed, v.contact_card.clone());
     let received = SignedMessage::from_cbor(&sent.to_cbor()?)?;
 
     let verified = received.verify(&KeyhivePeerId::from_bytes(v.alice))?;
     assert_eq!(verified.payload, v.payload);
-    assert!(verified.contact_card.is_some());
+    assert_eq!(verified.contact_card, Some(v.contact_card));
+    Ok(())
+}
+
+/// A contact card's bytes are its prekey operation's event bytes, so a JS
+/// client can persist a received card as that event.
+#[test]
+fn contact_card_bytes_are_its_prekey_event() -> TestResult {
+    let v = Vectors::parse()?;
+    let card = ContactCard::from_bytes(&v.contact_card)?;
+    let event: StaticEvent<ChangeId> = Event::<ChangeId>::from(card.op().clone()).into();
+    assert_eq!(event.encode().into_bytes(), v.contact_card);
     Ok(())
 }
 
