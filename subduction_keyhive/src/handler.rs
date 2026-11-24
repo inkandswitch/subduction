@@ -3,9 +3,9 @@
 //! Two [`Handler`] implementations:
 //!
 //! - [`SendableKeyhiveHandler`]: for multi-threaded runtimes. Calls
-//!   [`KeyhiveProtocol`] directly.
+//!   [`KeyhiveProtocol`](crate::KeyhiveProtocol) directly.
 //! - [`KeyhiveProtocolHandle`]: for single-threaded runtimes. Bridges
-//!   to a [`KeyhiveProtocol`] on a `LocalSet` via async channels.
+//!   to a [`KeyhiveProtocol`](crate::KeyhiveProtocol) on a `LocalSet` via async channels.
 
 extern crate alloc;
 
@@ -253,12 +253,18 @@ where
 
 use alloc::sync::Arc;
 
-use crate::{KeyhivePeerId, connection::KeyhiveConnection, storage::KeyhiveStorage};
-
-use keyhive_core::{
-    listener::no_listener::NoListener, store::ciphertext::memory::MemoryCiphertextStore,
+use crate::{
+    KeyhivePeerId, change_id::ChangeId, connection::KeyhiveConnection, storage::KeyhiveStorage,
 };
+
+use keyhive_content::store::memory::MemoryCiphertextStore;
+use keyhive_core::{content::heads::ContentHeads, listener::no_listener::NoListener};
 use keyhive_crypto::signer::memory::MemorySigner;
+use keyline_memory::MemoryKeyline;
+
+/// The runtime's Keyline store: in memory, refilled from the stored archive
+/// and events on startup.
+pub type RuntimeKeyline = MemoryKeyline<ContentHeads<ChangeId>>;
 
 /// [`KeyhiveProtocol`](crate::KeyhiveProtocol) parameterized on
 /// [`SendableRuntimeKeyhive`](crate::runtime::SendableRuntimeKeyhive)'s
@@ -266,11 +272,12 @@ use keyhive_crypto::signer::memory::MemorySigner;
 /// the connection and storage backends.
 pub type SendableRuntimeProtocol<Conn, Store> = crate::KeyhiveProtocol<
     MemorySigner,
+    ChangeId,
     Vec<u8>,
-    Vec<u8>,
-    MemoryCiphertextStore<Vec<u8>, Vec<u8>>,
+    MemoryCiphertextStore<ChangeId, Vec<u8>>,
     NoListener,
     OsRng,
+    RuntimeKeyline,
     Conn,
     Store,
     future_form::Sendable,

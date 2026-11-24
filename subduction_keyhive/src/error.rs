@@ -17,7 +17,7 @@ pub enum SigningError {
 
     /// The signing operation failed.
     #[error("signing failed")]
-    SigningFailed(#[source] keyhive_crypto::signed::SigningError),
+    SigningFailed(#[source] keyhive_crypto::verified::SignError),
 }
 
 /// Errors that can occur during message verification.
@@ -45,7 +45,10 @@ pub enum VerificationError {
 /// Errors that can occur during protocol operations.
 #[cfg(feature = "std")]
 #[derive(Debug, Error)]
-pub enum ProtocolError<SendErr: core::error::Error + 'static> {
+pub enum ProtocolError<
+    SendErr: core::error::Error + 'static,
+    KeyhiveErr: core::error::Error + 'static,
+> {
     /// Failed to send a message.
     #[error("send error")]
     Send(#[source] SendErr),
@@ -73,15 +76,15 @@ pub enum ProtocolError<SendErr: core::error::Error + 'static> {
 
     /// Failed to convert peer ID to identifier.
     #[error("failed to convert peer ID")]
-    InvalidIdentifier(#[source] ed25519_dalek::SignatureError),
+    InvalidIdentifier(#[source] keyhive_crypto::identifier::InvalidIdentifier),
+
+    /// A Keyhive operation failed in its Keyline store.
+    #[error("keyhive operation failed")]
+    Keyhive(#[source] KeyhiveErr),
 
     /// Failed to receive contact card.
     #[error("failed to receive contact card")]
     ReceiveContactCard(#[source] keyhive_core::principal::individual::ReceivePrekeyOpError),
-
-    /// Serialization failed.
-    #[error("serialization error: {0}")]
-    Serialization(String),
 
     /// Deserialization failed.
     #[error("deserialization error: {0}")]
