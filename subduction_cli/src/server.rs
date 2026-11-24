@@ -1,5 +1,7 @@
 //! Subduction server supporting WebSocket, HTTP long-poll, and Iroh (QUIC) transports.
 
+mod request_detection;
+
 use std::{
     net::SocketAddr,
     path::PathBuf,
@@ -44,6 +46,8 @@ use subduction_websocket::{
 };
 use tokio::{net::TcpListener, task::JoinSet, time};
 use tokio_util::sync::CancellationToken;
+
+use request_detection::peek_while;
 use tungstenite::{http::Uri, protocol::WebSocketConfig};
 
 use subduction_ephemeral::{
@@ -1076,12 +1080,15 @@ async fn accept_loop<H: CliWireHandler>(
                             //   POST → HTTP long-poll
                             //   OPTI → CORS preflight (OPTIONS), routed to HTTP handler
                             let mut peek_buf = [0u8; 4];
-                            match tcp.peek(&mut peek_buf).await {
-                                Ok(n) if n >= 3 => {}
-                                Ok(_) | Err(_) => {
-                                    tracing::warn!(addr = %addr, "failed to peek TCP stream");
-                                    return;
-                                }
+                            let peeked = peek_while(&tcp, &mut peek_buf, |seen| {
+                                [b"GET ", b"POST", b"OPTI"]
+                                    .iter()
+                                    .any(|method| method.starts_with(seen))
+                            })
+                            .await;
+                            if peeked < 3 {
+                                tracing::warn!(addr = %addr, "failed to peek TCP stream");
+                                return;
                             }
 
                             let is_http = peek_buf.starts_with(b"POST")
