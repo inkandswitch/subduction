@@ -14,6 +14,16 @@ use std::{
 
 use eyre::Result;
 use future_form::Sendable;
+use http_body_util::Full;
+use hyper::{
+    Method, Response, StatusCode,
+    body::Bytes,
+    header::{
+        ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN,
+        ACCESS_CONTROL_MAX_AGE, CONTENT_TYPE, HeaderValue,
+    },
+};
+use hyper_util::rt::TokioIo;
 use iroh::{EndpointAddr, endpoint::presets};
 use sedimentree_core::depth::CountLeadingZeroBytes;
 use subduction_core::{
@@ -47,7 +57,7 @@ use subduction_websocket::{
 use tokio::{net::TcpListener, task::JoinSet, time};
 use tokio_util::sync::CancellationToken;
 
-use request_detection::peek_while;
+use request_detection::{CONTACT_CARD_PATH, peek_while, requests_contact_card};
 use tungstenite::{http::Uri, protocol::WebSocketConfig};
 
 use subduction_ephemeral::{
@@ -1080,6 +1090,7 @@ async fn accept_loop<H: CliWireHandler>(
 
                         conns.spawn(async move {
                             // Peek to determine transport:
+                            //   GET /keyhive/contact-card → this server's contact card
                             //   GET  → WebSocket upgrade
                             //   POST → HTTP long-poll
                             //   OPTI → CORS preflight (OPTIONS), routed to HTTP handler
@@ -1098,7 +1109,9 @@ async fn accept_loop<H: CliWireHandler>(
                             let is_http = peek_buf.starts_with(b"POST")
                                 || peek_buf.starts_with(b"OPTI");
 
-                            if peek_buf.starts_with(b"GET") && ws_enabled {
+                            if peek_buf.starts_with(b"GET") && requests_contact_card(&tcp).await {
+                                handle_contact_card(tcp, addr, task_keyhive.as_ref()).await;
+                            } else if peek_buf.starts_with(b"GET") && ws_enabled {
                                 handle_websocket(
                                     tcp,
                                     addr,
@@ -1143,6 +1156,46 @@ async fn accept_loop<H: CliWireHandler>(
     }
 
     while (conns.join_next().await).is_some() {}
+}
+
+/// Serve [`CONTACT_CARD_PATH`] on `tcp`. Responds with the bytes of this
+/// server's keyhive contact card, readable from any origin. Responds
+/// 404 when keyhive is disabled and to any other path.
+async fn handle_contact_card(
+    tcp: tokio::net::TcpStream,
+    addr: SocketAddr,
+    keyhive_proto: Option<&CliKeyhiveProtocol>,
+) {
+    let card = keyhive_proto.map(|proto| Bytes::from(proto.contact_card().to_bytes()));
+    let service = hyper::service::service_fn(move |req| {
+        let card = card
+            .clone()
+            .filter(|_| req.method() == Method::GET && req.uri().path() == CONTACT_CARD_PATH);
+        async move {
+            let mut resp = if let Some(card) = card {
+                let mut resp = Response::new(Full::new(card));
+                resp.headers_mut().insert(
+                    CONTENT_TYPE,
+                    HeaderValue::from_static("application/octet-stream"),
+                );
+                resp
+            } else {
+                let mut resp = Response::new(Full::new(Bytes::new()));
+                *resp.status_mut() = StatusCode::NOT_FOUND;
+                resp
+            };
+            resp.headers_mut()
+                .insert(ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
+            Ok::<_, std::convert::Infallible>(resp)
+        }
+    });
+
+    if let Err(e) = hyper::server::conn::http1::Builder::new()
+        .serve_connection(TokioIo::new(tcp), service)
+        .await
+    {
+        tracing::debug!(addr = %addr, error = %e, "contact card connection ended");
+    }
 }
 
 /// Handle a WebSocket connection: upgrade, handshake, add connection.
@@ -1296,16 +1349,6 @@ async fn handle_http_longpoll<H: CliWireHandler>(
     handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
     keyhive_proto: Option<CliKeyhiveProtocol>,
 ) {
-    use http_body_util::Full;
-    use hyper::{
-        body::Bytes,
-        header::{
-            ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
-            ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_MAX_AGE, HeaderValue,
-        },
-    };
-    use hyper_util::rt::TokioIo;
-
     let io = TokioIo::new(tcp);
 
     let service = hyper::service::service_fn(move |req| {
