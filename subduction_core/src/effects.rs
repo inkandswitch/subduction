@@ -60,16 +60,14 @@
 //! Requirements come in three tiers:
 //!
 //! - [`Effects`] is form-agnostic. It carries the component traits,
-//!   `'static` on the timer, `Send + Sync + 'static` on the spawner, and
-//!   `Send + Sync` on the minimized tree store. Both are thread-safe even on
-//!   [`Local`], because connection management and the storage powerbox take
-//!   one spawner bound for both forms, and the powerbox's mutation runner,
-//!   which holds the store, is `Send + Sync` on both.
+//!   `'static` on the timer, and `Send + Sync + 'static` on the spawner. The
+//!   spawner is thread-safe even on [`Local`], because connection management
+//!   and the storage powerbox take one spawner bound for both forms.
 //! - [`SendableEffects`] adds thread-safety: every component `Send + Sync`,
 //!   every error `Send`. Bound generic `Sendable` code by this.
 //! - [`LocalEffects`] adds only `'static` on `E`. On [`Local`], everything
-//!   but the spawner and the store may be `!Send`. Bound generic `Local` code
-//!   by this.
+//!   but the spawner may be `!Send`, including a minimized tree store that
+//!   holds JS values. Bound generic `Local` code by this.
 //!
 //! Both refinements make `E: 'static`, which makes every slot `'static`: a
 //! projection of a `'static` type outlives `'static` too.
@@ -160,17 +158,15 @@ use self::{
 /// This is a trait alias with a blanket impl. Implement the `Has*` traits
 /// instead. See the [module documentation](self) for details.
 ///
-/// The spawner and the minimized tree store are `Send + Sync` even on
-/// [`Local`]. [`RunManager::run_manager`] and
-/// [`StorageTasks::storage_powerbox`] each take one spawner bound for both
-/// forms, and the powerbox's mutation runner, which captures the store, is
-/// `Send + Sync` on both.
+/// The spawner is `Send + Sync` even on [`Local`]:
+/// [`RunManager::run_manager`] and [`StorageTasks::storage_powerbox`] each
+/// take one spawner bound for both forms.
 ///
 /// [`RunManager::run_manager`]: crate::connection::manager::RunManager::run_manager
 /// [`StorageTasks::storage_powerbox`]: crate::subduction::StorageTasks::storage_powerbox
 pub trait Effects<Async: FutureForm>:
     HasConnectionPolicy<Async>
-    + HasMinimizedTreeStore<Async, MinimizedTreeStore: Send + Sync>
+    + HasMinimizedTreeStore<Async>
     + HasSigner<Async>
     + HasSpawner<Async, Spawner: Send + Sync + 'static>
     + HasStorage<Async>
@@ -181,7 +177,7 @@ pub trait Effects<Async: FutureForm>:
 impl<
     Async: FutureForm,
     E: HasConnectionPolicy<Async>
-        + HasMinimizedTreeStore<Async, MinimizedTreeStore: Send + Sync>
+        + HasMinimizedTreeStore<Async>
         + HasSigner<Async>
         + HasSpawner<Async, Spawner: Send + Sync + 'static>
         + HasStorage<Async>
@@ -199,12 +195,13 @@ impl<
 /// Blanket-implemented. Generic `Sendable` code bounds `E: SendableEffects`
 /// instead of restating each slot.
 // The blanket impl repeats this bound list; keep the two in sync.
-pub trait SendableEffects:
-    'static
+pub trait SendableEffects: 'static
     + Effects<
         Sendable,
         FetchDisallowed: Send,
-        MinimizedTreeStore: MinimizedTreeStore<Sendable, Error: Send, Generation: Send + Sync>,
+        MinimizedTreeStore: Send
+                                + Sync
+                                + MinimizedTreeStore<Sendable, Error: Send, Generation: Send + Sync>,
         Policy: Send + Sync + ConnectionPolicy<Sendable, ConnectionDisallowed: Send>,
         PutDisallowed: Send,
         Signer: Send + Sync,
@@ -220,7 +217,13 @@ impl<
         + Effects<
             Sendable,
             FetchDisallowed: Send,
-            MinimizedTreeStore: MinimizedTreeStore<Sendable, Error: Send, Generation: Send + Sync>,
+            MinimizedTreeStore: Send
+                                    + Sync
+                                    + MinimizedTreeStore<
+                Sendable,
+                Error: Send,
+                Generation: Send + Sync,
+            >,
             Policy: Send + Sync + ConnectionPolicy<Sendable, ConnectionDisallowed: Send>,
             PutDisallowed: Send,
             Signer: Send + Sync,
@@ -236,8 +239,8 @@ impl<
 /// `'static`, so node work can live in spawned single-threaded tasks.
 ///
 /// Only `E` itself is bounded: a projection of a `'static` type outlives
-/// `'static` too. Nothing needs to be `Send` except the spawner and the
-/// minimized tree store, which [`Effects`] already requires.
+/// `'static` too. Nothing needs to be `Send` except the spawner, which
+/// [`Effects`] already requires.
 ///
 /// Blanket-implemented. Generic `Local` code bounds `E: LocalEffects`
 /// instead of restating each slot.
