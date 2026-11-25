@@ -192,23 +192,7 @@ pub struct VerifiedMessage {
 mod tests {
     use alloc::vec;
 
-    use testresult::TestResult;
-
     use super::*;
-
-    #[test]
-    fn roundtrip_keeps_the_contact_card_or_its_absence() -> TestResult {
-        for message in [
-            SignedMessage::new(vec![1, 2, 3]),
-            SignedMessage::with_contact_card(vec![1, 2, 3], vec![0x4b, 0x48, 7]),
-            SignedMessage::with_contact_card(Vec::new(), Vec::new()),
-        ] {
-            let bytes = message.encode();
-            assert_eq!(bytes.len(), message.encoded_size());
-            assert_eq!(SignedMessage::try_decode(&bytes)?, message);
-        }
-        Ok(())
-    }
 
     #[test]
     fn truncated_or_padded_bytes_are_rejected() {

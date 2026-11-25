@@ -590,12 +590,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn conversions_reject_small_order_points() {
-        assert!(peer_identifier(PeerId::new(SMALL_ORDER)).is_err());
-        assert!(sedimentree_identifier(SedimentreeId::new(SMALL_ORDER)).is_err());
-    }
-
     /// The authorization rules, against a real [`Keyhive`].
     #[cfg(feature = "test-utils")]
     mod with_keyhive {

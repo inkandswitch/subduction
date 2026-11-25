@@ -136,9 +136,14 @@ async fn the_server_enforces_membership_it_learns_over_suk() -> TestResult {
     })
     .await?;
 
+    // Bob's own policy won't sync a document he hasn't heard of, so a client
+    // without keyhive stands in for a non-member: its request reaches the
+    // server.
+    let (mallory, _) = server.connect_open(0x13).await?;
+    let (authorized, _) = open_push(&mallory, server_peer, id, 7).await?;
+    assert!(!authorized, "a non-member is refused");
+
     commit(bob, id, 2).await?;
-    let (authorized, _) = sync_tree(bob, server_peer, id).await?;
-    assert!(!authorized, "bob is not a member");
 
     alice
         .keyhive
@@ -210,6 +215,100 @@ async fn the_server_enforces_membership_it_learns_over_suk() -> TestResult {
     server.stop()
 }
 
+/// Two peered servers: Alice uses one, Bob the other. What Alice grants or
+/// revokes through her server reaches Bob's only over the servers' own
+/// connection.
+///
+/// ```text
+///   alice ──▶ server A ◀── ws ── server B ◀── bob
+/// ```
+#[tokio::test]
+#[ignore = "servers never start a keyhive sync with each other, so B never learns the membership"]
+async fn a_peered_server_follows_membership_from_its_peer() -> TestResult {
+    let server_a = Server::spawn_peered([0x5a; 32], None).await?;
+    let server_b = Server::spawn_peered([0x5b; 32], Some(&server_a)).await?;
+    let (alice, bob) = (LpNode::new(0x31).await?, LpNode::new(0x32).await?);
+    let (alice, bob) = (&alice, &bob);
+    let peer_a = server_a.connect(alice).await?;
+    let peer_b = server_b.connect(bob).await?;
+    let id_a = Identifier::from_bytes(*peer_a.as_bytes())?;
+    let id_b = Identifier::from_bytes(*peer_b.as_bytes())?;
+
+    for (client, server_id) in [(alice, id_a), (bob, id_b)] {
+        client.sync_keyhive().await?;
+        until("client learns its server", move || async move {
+            is_known_agent(&client.keyhive, server_id)
+                .await
+                .unwrap_or(false)
+        })
+        .await?;
+    }
+
+    // Alice knows Bob and his server out of band.
+    alice
+        .keyhive
+        .receive_contact_card(&server_b.contact_card().await?)
+        .await?;
+    let card = bob.keyhive.generate_contact_card().await?;
+    alice.keyhive.receive_contact_card(&card).await?;
+
+    let doc = alice
+        .keyhive
+        .generate_doc(vec![], nonempty![change(1)])
+        .await?;
+    for (member, power) in [
+        (id_a, Power::Relay),
+        (id_b, Power::Relay),
+        (bob.identifier(), Power::Read),
+    ] {
+        alice.keyhive.add_member(member, doc, power).await?;
+    }
+    let id = tree(doc);
+    commit(alice, id, 1).await?;
+    alice.sync_keyhive().await?;
+    until("server A stores alice's commit", move || async move {
+        sync_tree(alice, peer_a, id)
+            .await
+            .is_ok_and(|(authorized, _)| authorized)
+    })
+    .await?;
+
+    until_synced(
+        bob,
+        "bob learns server B relays the document",
+        move || async move {
+            bob.keyhive
+                .access_for_doc(id_b, doc)
+                .await
+                .is_ok_and(|p| p == Some(Power::Relay))
+        },
+    )
+    .await?;
+    until(
+        "bob gets alice's commit through server B",
+        move || async move {
+            drop(sync_tree(bob, peer_b, id).await);
+            commit_count(bob, id).await == 1
+        },
+    )
+    .await?;
+
+    alice
+        .keyhive
+        .revoke_member(bob.identifier(), true, doc)
+        .await?;
+    alice.sync_keyhive().await?;
+    until("server B stops authorizing bob", move || async move {
+        sync_tree(bob, peer_b, id)
+            .await
+            .is_ok_and(|(authorized, _)| !authorized)
+    })
+    .await?;
+
+    server_b.stop()?;
+    server_a.stop()
+}
+
 /// Legacy document IDs (zero-padded) are open to anyone: the server stores
 /// and serves them without any membership. Their users predate keyhive, so
 /// the clients here run without it.
@@ -223,17 +322,7 @@ async fn legacy_documents_need_no_membership() -> TestResult {
     legacy[..16].copy_from_slice(&[7; 16]);
     let id = SedimentreeId::new(legacy);
 
-    carol
-        .add_commit(
-            id,
-            CommitId::new([1; 32]),
-            BTreeSet::new(),
-            Blob::new(vec![1; 8]),
-        )
-        .await?;
-    let (authorized, stats, _) = carol
-        .sync_with_peer(&server_peer, id, false, SYNC_TIMEOUT)
-        .await?;
+    let (authorized, stats) = open_push(&carol, server_peer, id, 1).await?;
     assert!(
         authorized && stats.commits_sent == 1,
         "carol pushes her commit"
@@ -274,20 +363,32 @@ async fn the_server_serves_its_own_contact_card() -> TestResult {
 struct Server {
     child: Child,
     base_url: String,
+    port: u16,
     _data_dir: tempfile::TempDir,
 }
 
 impl Server {
     async fn spawn() -> TestResult<Self> {
+        Self::spawn_peered(SERVER_KEY_SEED, None).await
+    }
+
+    /// Spawn a server with signing key `key_seed` that dials `peer` over
+    /// WebSocket on startup.
+    async fn spawn_peered(key_seed: [u8; 32], peer: Option<&Self>) -> TestResult<Self> {
         let data_dir = tempfile::tempdir()?;
         let ready_file = data_dir.path().join("ready");
-        let child = Command::new(env!("CARGO_BIN_EXE_subduction_cli"))
-            .args(["server", "--socket", "127.0.0.1:0", "--key-seed"])
-            .arg(hex::encode(SERVER_KEY_SEED))
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_subduction_cli"));
+        cmd.args(["server", "--socket", "127.0.0.1:0", "--key-seed"])
+            .arg(hex::encode(key_seed))
             .args(["--service-name", SERVICE_NAME, "--data-dir"])
             .arg(data_dir.path())
             .arg("--ready-file")
-            .arg(&ready_file)
+            .arg(&ready_file);
+        if let Some(peer) = peer {
+            cmd.arg("--ws-peer")
+                .arg(format!("ws://127.0.0.1:{}", peer.port));
+        }
+        let child = cmd
             .env("RUST_LOG", "warn")
             .stderr(Stdio::inherit())
             .stdout(Stdio::null())
@@ -295,6 +396,7 @@ impl Server {
         let mut server = Self {
             child,
             base_url: String::new(),
+            port: 0,
             _data_dir: data_dir,
         };
         let ready = server_ready::wait_for(&ready_file, SERVER_STARTUP_TIMEOUT)
@@ -305,7 +407,16 @@ impl Server {
             .ok_or("no port in the ready file")?
             .parse()?;
         server.base_url = format!("http://127.0.0.1:{port}");
+        server.port = port;
         Ok(server)
+    }
+
+    /// The server's contact card, from `GET /keyhive/contact-card`.
+    async fn contact_card(&self) -> TestResult<ContactCard> {
+        let resp = reqwest::get(format!("{}/keyhive/contact-card", self.base_url))
+            .await?
+            .error_for_status()?;
+        Ok(ContactCard::from_bytes(&resp.bytes().await?)?)
     }
 
     /// Connect `node` to the server over HTTP long-poll, returning the
@@ -419,6 +530,28 @@ async fn sync_tree(
 ) -> TestResult<(bool, SyncStats)> {
     let (authorized, stats, _errors) = node
         .subduction
+        .sync_with_peer(&server, id, false, SYNC_TIMEOUT)
+        .await?;
+    Ok((authorized, stats))
+}
+
+/// Author a commit of `id` on a keyhive-free `client` and sync the tree with
+/// the server: whether the server authorized it, and what moved.
+async fn open_push(
+    client: &OpenClient,
+    server: PeerId,
+    id: SedimentreeId,
+    seed: u8,
+) -> TestResult<(bool, SyncStats)> {
+    client
+        .add_commit(
+            id,
+            CommitId::new([seed; 32]),
+            BTreeSet::new(),
+            Blob::new(vec![seed; 8]),
+        )
+        .await?;
+    let (authorized, stats, _errors) = client
         .sync_with_peer(&server, id, false, SYNC_TIMEOUT)
         .await?;
     Ok((authorized, stats))

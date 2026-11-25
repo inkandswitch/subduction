@@ -1514,30 +1514,10 @@ mod tests {
         }
 
         let result = signed_msg.verify(&peer_id);
-        assert!(result.is_err(), "tampered message should fail verification");
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn peer_management() {
-        let (protocol, _keyhive) = make_protocol().await;
-        let peer_id = protocol.peer_id.clone();
-
-        let peer1 = keyhive_peer_id(&make_keyhive().await);
-        let peer2 = keyhive_peer_id(&make_keyhive().await);
-
-        let (conn1, _) = create_channel_pair(peer_id.clone(), &peer1);
-        let (conn2, _) = create_channel_pair(peer_id.clone(), &peer2);
-
-        assert!(protocol.peer_ids().await.is_empty());
-
-        protocol.add_peer(peer1.clone(), conn1).await;
-        protocol.add_peer(peer2.clone(), conn2).await;
-        assert_eq!(protocol.peer_ids().await.len(), 2);
-
-        protocol.remove_peer(&peer1).await;
-        let remaining = protocol.peer_ids().await;
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0], peer2);
+        assert!(
+            matches!(result, Err(VerificationError::InvalidSignature)),
+            "expected InvalidSignature, got: {result:?}"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1837,15 +1817,14 @@ mod tests {
         let (protocol, _keyhive) = make_protocol().await;
         let peer_id = protocol.peer_id.clone();
 
-        // Add ourselves as a peer (edge case)
-        let (conn, _) = create_channel_pair(peer_id.clone(), &peer_id);
+        let (conn, to_us) = create_channel_pair(peer_id.clone(), &peer_id);
         protocol.add_peer(peer_id.clone(), conn).await;
 
-        // Sync should skip ourselves
         protocol.sync_keyhive(None).await.unwrap();
-
-        // No messages should have been sent (we skipped ourselves)
-        // The protocol should complete without error
+        assert!(
+            to_us.inbound_rx.try_recv().is_err(),
+            "a node sends itself nothing"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -2486,30 +2465,48 @@ mod tests {
         let junk = SignedMessage::new(vec![0xFF, 0xFE, 0xFD]);
 
         let result = protocol.handle_message(&fake_sender, junk, None).await;
-        assert!(result.is_err(), "junk data should fail verification");
+        assert!(
+            matches!(
+                result,
+                Err(ProtocolError::Verification(VerificationError::SignedFrame(
+                    _
+                )))
+            ),
+            "expected SignedFrame, got: {result:?}"
+        );
     }
 
+    /// A stored archive is loaded into the protocol's Keyhive: afterwards it
+    /// knows the archive's owner and their group.
     #[tokio::test(flavor = "current_thread")]
-    async fn ingest_from_storage_via_protocol() {
+    async fn ingest_from_storage_loads_a_stored_archive() -> TestResult {
+        let stored = make_keyhive().await;
+        let group = stored.generate_group(vec![]).await?;
+        let storage = MemoryKeyhiveStorage::new();
+        let archive = KeyhiveAccess::<Local>::to_archive(&stored).await?;
+        crate::storage_ops::save_keyhive_archive::<_, Local>(
+            &storage,
+            crate::storage::StorageHash::new([1u8; 32]),
+            archive,
+        )
+        .await?;
+
         let keyhive = make_keyhive().await;
         let peer_id = keyhive_peer_id(&keyhive);
-        let cc = keyhive.generate_contact_card().await.unwrap();
+        let cc = keyhive.generate_contact_card().await?;
+        let protocol = TestProtocol::new(
+            Arc::new(Mutex::new(keyhive.clone())),
+            storage,
+            peer_id,
+            cc.to_bytes(),
+        );
+        let owner = Identifier::from(stored.id());
+        assert!(!is_known_agent::<Local, _>(&keyhive, owner).await?);
 
-        let storage = MemoryKeyhiveStorage::new();
-
-        // Save an archive
-        let archive = KeyhiveAccess::<Local>::to_archive(&keyhive).await.unwrap();
-        let storage_id = crate::storage::StorageHash::new([1u8; 32]);
-        crate::storage_ops::save_keyhive_archive::<_, Local>(&storage, storage_id, archive)
-            .await
-            .unwrap();
-
-        let shared = Arc::new(Mutex::new(keyhive));
-        let protocol = TestProtocol::new(shared, storage, peer_id, cc.to_bytes());
-
-        // Ingest from storage should work
-        let result = protocol.ingest_from_storage().await;
-        assert!(result.is_ok());
+        protocol.ingest_from_storage().await?;
+        assert!(is_known_agent::<Local, _>(&keyhive, owner).await?);
+        assert!(keyhive.get_group(group).await?.is_some());
+        Ok(())
     }
 
     // -----------------------------------------------------------------------

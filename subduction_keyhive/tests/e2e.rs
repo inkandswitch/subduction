@@ -13,29 +13,58 @@
 //!   bob ────┘                 the server
 //! ```
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 
+use future_form::Sendable;
 use keyhive_core::principal::document::id::DocumentId;
 use keyhive_crypto::identifier::Identifier;
 use keyline::power::Power;
 use nonempty::nonempty;
-use sedimentree_core::{blob::Blob, id::SedimentreeId, loose_commit::id::CommitId};
+use sedimentree_core::{
+    blob::Blob, depth::CountLeadingZeroBytes, id::SedimentreeId, loose_commit::id::CommitId,
+};
 use subduction_core::{
     authenticated::{Authenticated, Direction},
-    connection::test_utils::ChannelTransport,
+    connection::test_utils::{ChannelTransport, TokioSpawn},
+    effects::config::Config,
+    handler::sync::SyncHandler,
     peer::id::PeerId,
-    subduction::error::AddConnectionError,
+    policy::open::OpenPolicy,
+    storage::memory::MemoryStorage,
+    subduction::{Subduction, builder::SubductionBuilder, error::AddConnectionError},
     timeout::call::CallTimeout,
     transport::message::MessageTransport,
 };
+use subduction_crypto::signer::memory::MemorySigner;
 use subduction_keyhive::{
     change_id::ChangeId,
     protocol::is_known_agent,
-    test_utils::node::{CONVERGENCE_TIMEOUT, Node, eventually},
+    test_utils::node::{CONVERGENCE_TIMEOUT, Node, TokioTimeout, eventually},
 };
 use testresult::TestResult;
 
 type TestNode = Node<ChannelTransport>;
+
+type OpenConn = MessageTransport<ChannelTransport>;
+
+type OpenEffects = Config<MemoryStorage, OpenPolicy, MemorySigner, TokioTimeout, TokioSpawn>;
+
+/// A client without keyhive: in-memory storage and an open policy.
+///
+/// A keyhive node's own policy refuses to sync a document with a peer it
+/// doesn't know relays it, so a non-member's request never reaches the
+/// server. An outsider sends whatever it is asked to, so what comes back is
+/// the server's decision alone.
+type Outsider = Arc<
+    Subduction<
+        'static,
+        Sendable,
+        OpenEffects,
+        OpenConn,
+        SyncHandler<Sendable, OpenEffects, OpenConn, CountLeadingZeroBytes>,
+        CountLeadingZeroBytes,
+    >,
+>;
 
 const SYNC_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(5_000);
 
@@ -86,7 +115,8 @@ async fn membership_travels_over_the_subduction_connection() -> TestResult {
 }
 
 /// The server learns Alice's document, and later Bob's membership, only over
-/// `SUK`; until then it neither stores nor serves the document.
+/// `SUK`; until then it neither stores nor serves the document, and it never
+/// does for a non-member.
 #[tokio::test]
 async fn the_server_admits_what_alice_grants() -> TestResult {
     let scene = Scene::new().await?;
@@ -108,17 +138,23 @@ async fn the_server_admits_what_alice_grants() -> TestResult {
 
     scene.alice_publishes().await?;
 
-    bob.commit(id, 2).await?;
-    bob.sync_tree(server, id).await?;
-    assert_eq!(bob.commit_count(id).await, 1, "bob is not served");
+    let mallory = outsider(13, server).await?;
+    let authorized = outsider_syncs(&mallory, server, id, 7).await?;
+    assert!(!authorized, "a non-member is refused");
+    assert_eq!(
+        mallory.get_commits(id).await.map_or(0, |c| c.len()),
+        1,
+        "a non-member is not served"
+    );
     assert_eq!(
         server.commit_count(id).await,
         1,
-        "bob's commit is not stored"
+        "a non-member's commit is not stored"
     );
 
     scene.alice_admits_bob().await?;
 
+    bob.commit(id, 2).await?;
     bob.sync_tree(server, id).await?;
     eventually("bob is served", CONVERGENCE_TIMEOUT, count_is(bob, id, 2)).await?;
     eventually(
@@ -251,9 +287,12 @@ async fn strangers_connect_but_unrelayed_documents_stay_refused() -> TestResult 
     )
     .await?;
 
+    // Carol's own policy won't send the document to a non-member, so she
+    // pushes it without keyhive, under the same key.
     let id = tree(doc);
-    carol.commit(id, 1).await?;
-    carol.sync_tree(&server, id).await?;
+    let carol_unchecked = outsider(21, &server).await?;
+    let authorized = outsider_syncs(&carol_unchecked, &server, id, 1).await?;
+    assert!(!authorized);
     assert_eq!(server.commit_count(id).await, 0);
     assert!(!server.keyhive.has_document(doc).await);
     Ok(())
@@ -427,6 +466,57 @@ impl TestNodeExt for TestNode {
     async fn commit_count(&self, id: SedimentreeId) -> usize {
         self.subduction.get_commits(id).await.map_or(0, |c| c.len())
     }
+}
+
+/// Connect an [`Outsider`] with signing key `[seed; 32]` to `server`.
+async fn outsider(seed: u8, server: &TestNode) -> TestResult<Outsider> {
+    let (client, _handler, listener, manager) = SubductionBuilder::new()
+        .signer(MemorySigner::from_bytes(&[seed; 32]))
+        .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .timer(TokioTimeout)
+        .build::<Sendable, OpenConn>();
+    tokio::spawn(listener);
+    tokio::spawn(manager);
+
+    let (ours, theirs) = ChannelTransport::pair();
+    client
+        .add_connection(Authenticated::new_for_test(
+            MessageTransport::new(ours),
+            server.peer_id(),
+            Direction::Dialed,
+        ))
+        .await?;
+    server
+        .attach(Authenticated::new_for_test(
+            MessageTransport::new(theirs),
+            client.peer_id(),
+            Direction::Accepted,
+        ))
+        .await?;
+    Ok(client)
+}
+
+/// Author a commit of `id` on `client` and sync the tree with `server`:
+/// whether the server authorized the sync.
+async fn outsider_syncs(
+    client: &Outsider,
+    server: &TestNode,
+    id: SedimentreeId,
+    seed: u8,
+) -> TestResult<bool> {
+    client
+        .add_commit(
+            id,
+            CommitId::new([seed; 32]),
+            BTreeSet::new(),
+            Blob::new(vec![seed; 8]),
+        )
+        .await?;
+    let (authorized, _, _) = client
+        .sync_with_peer(&server.peer_id(), id, false, SYNC_TIMEOUT)
+        .await?;
+    Ok(authorized)
 }
 
 const fn change(seed: u8) -> ChangeId {

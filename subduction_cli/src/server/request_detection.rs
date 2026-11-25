@@ -162,32 +162,6 @@ mod tests {
         Ok(server)
     }
 
-    fn could_be_post(seen: &[u8]) -> bool {
-        b"POST".starts_with(seen)
-    }
-
-    #[tokio::test]
-    async fn a_method_split_across_segments_is_peeked_whole() -> TestResult {
-        let tcp = server_side_of(&[b"PO", b"ST /longpoll HTTP/1.1\r\n\r\n"]).await?;
-        let mut buf = [0u8; 4];
-        assert_eq!(peek_while(&tcp, &mut buf, could_be_post).await, 4);
-        assert_eq!(&buf, b"POST");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn a_prefix_that_cannot_match_is_returned_without_waiting() -> TestResult {
-        let tcp = server_side_of(&[b"XY"]).await?;
-        let started = Instant::now();
-        let mut buf = [0u8; 4];
-        assert_eq!(peek_while(&tcp, &mut buf, could_be_post).await, 2);
-        assert!(
-            started.elapsed() < PEEK_DEADLINE,
-            "a prefix that cannot match must not wait out the deadline"
-        );
-        Ok(())
-    }
-
     #[tokio::test]
     async fn a_method_split_across_segments_is_detected() -> TestResult {
         let tcp = server_side_of(&[b"GE", b"T / HTTP/1.1\r\n\r\n"]).await?;
@@ -196,12 +170,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unroutable_prefix_is_returned() -> TestResult {
+    async fn an_unroutable_prefix_is_returned_without_waiting() -> TestResult {
         let tcp = server_side_of(&[b"XY"]).await?;
+        let started = Instant::now();
         let unrecognized = RequestKind::detect(&tcp)
             .await
             .expect_err("XY starts no routed request");
         assert_eq!(unrecognized.seen(), b"XY");
+        assert!(
+            started.elapsed() < PEEK_DEADLINE,
+            "a prefix that cannot match must not wait out the deadline"
+        );
         Ok(())
     }
 
