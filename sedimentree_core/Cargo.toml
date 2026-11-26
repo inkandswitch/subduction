@@ -33,12 +33,12 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 arbitrary = { workspace = true, optional = false, features = ["derive"] }
-bincode = { workspace = true }
 bolero = { workspace = true, features = ["arbitrary"] }
 ciborium = { workspace = true }
 criterion = { workspace = true }
 criterion_pprof = { workspace = true }
 dhat = { workspace = true }
+postcard = { workspace = true, features = ["alloc"] }
 sedimentree_core = { path = ".", features = [
   "bolero",
   "getrandom",

@@ -106,6 +106,7 @@ metrics-util = "0.20.4"
 nix = { version = "0.29", features = ["fs"] }
 nonempty = { version = "0.12.0", default-features = false }
 num-bigint = { version = "0.4.6", default-features = false }
+postcard = { version = "1.1", default-features = false }
 rand = { version = "0.8.5", default-features = false }
 rayon = "1.11"
 redb = "4.1"

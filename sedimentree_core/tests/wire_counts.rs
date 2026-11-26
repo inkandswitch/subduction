@@ -155,11 +155,16 @@ mod serde_validation {
         checkpoints: BTreeSet<Checkpoint>,
     }
 
+    // Each check runs in CBOR, which is self-describing, and in postcard,
+    // which is not, so deserialization takes both serde paths: with and
+    // without `deserialize_any`.
     fn assert_rejected<T: serde::de::DeserializeOwned>(raw: &impl Serialize) {
         let mut cbor = Vec::new();
         ciborium::into_writer(raw, &mut cbor).expect("serialize");
         assert!(ciborium::from_reader::<T, _>(cbor.as_slice()).is_err());
-        assert!(bincode::deserialize::<T>(&bincode::serialize(raw).expect("serialize")).is_err());
+        assert!(
+            postcard::from_bytes::<T>(&postcard::to_allocvec(raw).expect("serialize")).is_err()
+        );
     }
 
     #[test]
@@ -195,9 +200,9 @@ mod serde_validation {
             ciborium::from_reader::<T, _>(cbor.as_slice()).expect("deserialize"),
             *value
         );
-        let binary = bincode::serialize(value).expect("serialize");
+        let binary = postcard::to_allocvec(value).expect("serialize");
         assert_eq!(
-            bincode::deserialize::<T>(&binary).expect("deserialize"),
+            postcard::from_bytes::<T>(&binary).expect("deserialize"),
             *value
         );
     }
@@ -214,8 +219,8 @@ mod serde_validation {
             blob_meta: meta(),
         };
         assert_eq!(
-            bincode::serialize(&raw).expect("serialize"),
-            bincode::serialize(&commit).expect("serialize")
+            postcard::to_allocvec(&raw).expect("serialize"),
+            postcard::to_allocvec(&commit).expect("serialize")
         );
 
         let boundary = (0..MAX_BOUNDARIES).map(id).collect();
@@ -231,8 +236,8 @@ mod serde_validation {
             checkpoints: fragment.checkpoints().clone(),
         };
         assert_eq!(
-            bincode::serialize(&raw).expect("serialize"),
-            bincode::serialize(&fragment).expect("serialize")
+            postcard::to_allocvec(&raw).expect("serialize"),
+            postcard::to_allocvec(&fragment).expect("serialize")
         );
     }
 }
