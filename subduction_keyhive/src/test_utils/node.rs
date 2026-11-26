@@ -467,9 +467,14 @@ impl<T: NodeTransport> fmt::Debug for NodeHandler<T> {
     }
 }
 
-impl<T: NodeTransport> RemoteHeadsNotifier for NodeHandler<T> {
-    fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
-        RemoteHeadsNotifier::notify_remote_heads(self.sync.as_ref(), id, peer, heads);
+impl<T: NodeTransport> RemoteHeadsNotifier<Sendable> for NodeHandler<T> {
+    fn notify_remote_heads(
+        &self,
+        id: SedimentreeId,
+        peer: PeerId,
+        heads: RemoteHeads,
+    ) -> BoxFuture<'_, ()> {
+        RemoteHeadsNotifier::<Sendable>::notify_remote_heads(self.sync.as_ref(), id, peer, heads)
     }
 }
 
