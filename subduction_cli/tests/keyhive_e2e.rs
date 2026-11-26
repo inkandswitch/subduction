@@ -87,7 +87,9 @@ type OpenClient = Arc<
 const SERVICE_NAME: &str = "keyhive-e2e-test";
 const SERVER_KEY_SEED: [u8; 32] = [0x5e; 32];
 const SERVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
-const SYNC_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(10_000);
+/// Well under [`CONVERGENCE_TIMEOUT`]: most syncs run inside [`until`], and a
+/// lost long-poll response must leave time to retry.
+const SYNC_TIMEOUT: CallTimeout = CallTimeout::TimeoutMillis(3_000);
 
 /// Alice publishes a document through the server, admits Bob, then revokes
 /// him. Every change reaches the server over `SUK`.
@@ -482,22 +484,21 @@ impl Drop for Server {
 }
 
 /// Poll `check` until it holds.
-async fn until<F, Fut>(what: &'static str, check: F) -> TestResult
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = bool>,
-{
+async fn until<F: FnMut() -> Fut, Fut: Future<Output = bool>>(
+    what: &'static str,
+    check: F,
+) -> TestResult {
     eventually(what, CONVERGENCE_TIMEOUT, check).await?;
     Ok(())
 }
 
 /// Poll `check` until it holds, running `node`'s keyhive sync before each
 /// try: what it waits for may not have reached the server yet.
-async fn until_synced<F, Fut>(node: &LpNode, what: &'static str, mut check: F) -> TestResult
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = bool>,
-{
+async fn until_synced<F: FnMut() -> Fut, Fut: Future<Output = bool>>(
+    node: &LpNode,
+    what: &'static str,
+    mut check: F,
+) -> TestResult {
     until(what, || {
         let checked = check();
         async move {

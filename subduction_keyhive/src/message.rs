@@ -446,6 +446,8 @@ fn read_events(
 mod tests {
     use alloc::{string::ToString, vec};
 
+    use testresult::TestResult;
+
     use super::*;
 
     const fn peer(byte: u8) -> KeyhivePeerId {
@@ -497,6 +499,16 @@ mod tests {
                 confirmer_total: 8,
             },
         ]
+    }
+
+    #[test]
+    fn every_variant_roundtrips_at_its_encoded_size() -> TestResult {
+        for message in every_variant() {
+            let bytes = message.encode();
+            assert_eq!(bytes.len(), message.encoded_size(), "{message:?}");
+            assert_eq!(Message::try_decode(&bytes)?, message);
+        }
+        Ok(())
     }
 
     #[test]

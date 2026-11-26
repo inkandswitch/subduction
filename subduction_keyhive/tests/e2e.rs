@@ -39,7 +39,7 @@ use subduction_crypto::signer::memory::MemorySigner;
 use subduction_keyhive::{
     change_id::ChangeId,
     protocol::is_known_agent,
-    test_utils::node::{CONVERGENCE_TIMEOUT, Node, TokioTimeout, eventually},
+    test_utils::node::{CONVERGENCE_TIMEOUT, Node, SETTLE_WINDOW, TokioTimeout, eventually, stays},
 };
 use testresult::TestResult;
 
@@ -129,12 +129,14 @@ async fn the_server_admits_what_alice_grants() -> TestResult {
     let id = tree(*doc);
 
     alice.commit(id, 1).await?;
-    alice.sync_tree(server, id).await?;
-    assert_eq!(
-        server.commit_count(id).await,
-        0,
-        "the server has not heard of the document yet"
-    );
+    let authorized = alice.sync_tree(server, id).await?;
+    assert!(!authorized, "the server has not heard of the document yet");
+    stays(
+        "the server stores nothing of a document it hasn't heard of",
+        SETTLE_WINDOW,
+        count_is(server, id, 0),
+    )
+    .await?;
 
     scene.alice_publishes().await?;
 
@@ -146,11 +148,12 @@ async fn the_server_admits_what_alice_grants() -> TestResult {
         1,
         "a non-member is not served"
     );
-    assert_eq!(
-        server.commit_count(id).await,
-        1,
-        "a non-member's commit is not stored"
-    );
+    stays(
+        "a non-member's commit is not stored",
+        SETTLE_WINDOW,
+        count_is(server, id, 1),
+    )
+    .await?;
 
     scene.alice_admits_bob().await?;
 
@@ -206,17 +209,19 @@ async fn the_server_refuses_bob_once_alice_revokes_him() -> TestResult {
     .await?;
 
     bob.commit(id, 4).await?;
-    bob.sync_tree(server, id).await?;
+    let authorized = bob.sync_tree(server, id).await?;
+    assert!(!authorized, "the server refuses bob once revoked");
     assert_eq!(
         bob.commit_count(id).await,
         2,
         "bob misses alice's new commit"
     );
-    assert_eq!(
-        server.commit_count(id).await,
-        2,
-        "bob's commit is not stored"
-    );
+    stays(
+        "bob's commit is not stored",
+        SETTLE_WINDOW,
+        count_is(server, id, 2),
+    )
+    .await?;
     Ok(())
 }
 
@@ -437,7 +442,7 @@ impl Scene {
 
 trait TestNodeExt {
     async fn commit(&self, id: SedimentreeId, seed: u8) -> TestResult;
-    async fn sync_tree(&self, peer: &TestNode, id: SedimentreeId) -> TestResult;
+    async fn sync_tree(&self, peer: &TestNode, id: SedimentreeId) -> TestResult<bool>;
     async fn commit_count(&self, id: SedimentreeId) -> usize;
 }
 
@@ -456,11 +461,13 @@ impl TestNodeExt for TestNode {
     }
 
     /// Sync one tree with `peer`, both ways.
-    async fn sync_tree(&self, peer: &TestNode, id: SedimentreeId) -> TestResult {
-        self.subduction
+    /// Sync one tree with `peer`: whether `peer` authorized it.
+    async fn sync_tree(&self, peer: &TestNode, id: SedimentreeId) -> TestResult<bool> {
+        let (authorized, _stats, _errors) = self
+            .subduction
             .sync_with_peer(&peer.peer_id(), id, false, SYNC_TIMEOUT)
             .await?;
-        Ok(())
+        Ok(authorized)
     }
 
     async fn commit_count(&self, id: SedimentreeId) -> usize {

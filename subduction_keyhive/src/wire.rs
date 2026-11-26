@@ -190,6 +190,26 @@ mod tests {
     use alloc::vec;
 
     #[test]
+    fn empty_payload_roundtrip() {
+        let msg = KeyhiveMessage::new(vec![]);
+
+        let encoded = msg.encode();
+        let decoded = KeyhiveMessage::try_decode(&encoded).expect("decode");
+
+        assert_eq!(decoded, msg);
+    }
+
+    #[test]
+    fn nonempty_payload_roundtrip() {
+        let msg = KeyhiveMessage::new(vec![0xDE, 0xAD, 0xBE, 0xEF, 0x42]);
+
+        let encoded = msg.encode();
+        let decoded = KeyhiveMessage::try_decode(&encoded).expect("decode");
+
+        assert_eq!(decoded, msg);
+    }
+
+    #[test]
     fn encoded_starts_with_schema() {
         let msg = KeyhiveMessage::new(vec![1, 2, 3]);
         let encoded = msg.encode();
@@ -206,6 +226,19 @@ mod tests {
         let total_size = u32::from_be_bytes(encoded[4..8].try_into().unwrap()) as usize;
         assert_eq!(total_size, encoded.len());
         assert_eq!(total_size, ENVELOPE_HEADER_SIZE + payload.len());
+    }
+
+    #[test]
+    fn wrong_schema_rejected() {
+        let msg = KeyhiveMessage::new(vec![1, 2, 3]);
+        let mut encoded = msg.encode();
+        encoded[2] = b'M'; // SUK -> SUM
+
+        let err = KeyhiveMessage::try_decode(&encoded).unwrap_err();
+        assert!(
+            matches!(err, DecodeError::InvalidSchema(_)),
+            "expected InvalidSchema, got {err:?}"
+        );
     }
 
     #[test]

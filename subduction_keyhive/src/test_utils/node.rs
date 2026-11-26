@@ -68,6 +68,12 @@ use crate::{
 /// How long [`eventually`] waits by default.
 pub const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long [`stays`] watches for something that must not happen.
+///
+/// Data that is accepted lands within milliseconds in these tests, so a
+/// regression that accepts what it should refuse shows up well inside this.
+pub const SETTLE_WINDOW: Duration = Duration::from_millis(500);
+
 /// What a transport needs for a [`Node`] to run over it.
 pub trait NodeTransport:
     Transport<
@@ -272,13 +278,20 @@ impl Node<ChannelTransport> {
             Direction::Dialed,
         ))
         .await?;
-        other
+        let accepted = other
             .attach(Authenticated::new_for_test(
                 MessageTransport::new(theirs),
                 self.peer_id(),
                 Direction::Accepted,
             ))
-            .await
+            .await;
+        if accepted.is_err() {
+            // Undo our half, so a refused connection leaves no live peer
+            // behind that later syncs would send into and time out on.
+            let Ok(_) = self.subduction.disconnect_from_peer(&other.peer_id()).await;
+            self.keyhive_handler.remove_peer(other.peer_id()).await;
+        }
+        accepted
     }
 }
 
@@ -292,25 +305,54 @@ impl<T: NodeTransport> fmt::Debug for Node<T> {
 
 /// Wait until `check` holds, polling every few milliseconds.
 ///
+/// Each check is cut off at the deadline, so a slow one can't overrun
+/// `timeout`. A check that does its own network calls should give them a
+/// timeout well under `timeout`, or a single lost response uses up the whole
+/// budget and leaves no time to retry.
+///
 /// # Errors
 ///
 /// Returns [`NotConverged`] if `check` still fails after `timeout`.
-pub async fn eventually<F, Fut>(
+pub async fn eventually<F: FnMut() -> Fut, Fut: Future<Output = bool>>(
     what: &'static str,
     timeout: Duration,
     mut check: F,
-) -> Result<(), NotConverged>
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = bool>,
-{
+) -> Result<(), NotConverged> {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        if check().await {
+        if matches!(tokio::time::timeout_at(deadline, check()).await, Ok(true)) {
             return Ok(());
         }
         if tokio::time::Instant::now() >= deadline {
             return Err(NotConverged::new(what));
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// Check that `check` keeps holding for `window`, polling every few
+/// milliseconds.
+///
+/// The negative counterpart of [`eventually`]. A node handles pushed data
+/// asynchronously and doesn't report a refused put, so checking a refusal
+/// once, right after the push, proves nothing: the data may simply not have
+/// arrived yet. `window` is how long a regression gets to show itself.
+///
+/// # Errors
+///
+/// Returns [`StoppedHolding`] as soon as `check` fails.
+pub async fn stays<F: FnMut() -> Fut, Fut: Future<Output = bool>>(
+    what: &'static str,
+    window: Duration,
+    mut check: F,
+) -> Result<(), StoppedHolding> {
+    let deadline = tokio::time::Instant::now() + window;
+    loop {
+        if !check().await {
+            return Err(StoppedHolding::new(what));
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(());
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -501,6 +543,19 @@ pub struct NotConverged(&'static str);
 
 impl NotConverged {
     /// The condition `what` never held.
+    #[must_use]
+    pub const fn new(what: &'static str) -> Self {
+        Self(what)
+    }
+}
+
+/// A condition [`stays`] watched stopped holding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("stopped holding: {0}")]
+pub struct StoppedHolding(&'static str);
+
+impl StoppedHolding {
+    /// The condition `what` stopped holding.
     #[must_use]
     pub const fn new(what: &'static str) -> Self {
         Self(what)
