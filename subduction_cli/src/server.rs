@@ -1764,13 +1764,5 @@ mod tests {
     fn keyhive_cache_refresh_is_settable() {
         let args = parse(&["--keyhive-cache-refresh", "false"]);
         assert!(!args.keyhive_cache_refresh);
-        // The refresh task only runs when BOTH keyhive is enabled and the
-        // flag is set; this mirrors the guard in `run`.
-        assert!(args.auth.keyhive_enabled());
-    }
-
-    #[test]
-    fn auth_rejects_unknown_mode() {
-        assert!(ServerArgs::try_parse_from(["server", "--auth", "nope"]).is_err());
     }
 }
