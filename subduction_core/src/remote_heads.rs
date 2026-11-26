@@ -21,7 +21,7 @@ use crate::peer::id::PeerId;
 ///
 /// The counter is scoped per-peer and incremented each time the sender
 /// sends a message carrying heads. Receivers should only accept updates
-/// where `counter` is strictly greater than the last seen value.
+/// where `counter` is strictly greater than the last seen for that sedimentree.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -62,11 +62,14 @@ impl RemoteHeadsObserver for NoRemoteHeadsObserver {
     fn on_remote_heads(&self, _id: SedimentreeId, _peer: PeerId, _heads: RemoteHeads) {}
 }
 
-/// Wraps a [`RemoteHeadsObserver`] with a per-peer staleness filter.
+/// Wraps a [`RemoteHeadsObserver`] with a per-(peer, sedimentree) staleness filter.
 ///
 /// The observer is only reachable through [`notify`](Self::notify), which
 /// checks the monotonic counter before forwarding. This makes it impossible
 /// to bypass the staleness filter.
+///
+/// Per tree, not per peer: the counter spans all trees, and frames for
+/// different trees can reach the wire out of stamp order.
 ///
 /// ```text
 /// incoming RemoteHeads ──► FilteredHeadsNotifier::notify
@@ -77,7 +80,7 @@ impl RemoteHeadsObserver for NoRemoteHeadsObserver {
 /// ```
 pub struct FilteredHeadsNotifier<R: RemoteHeadsObserver> {
     observer: R,
-    recv_counter: Arc<Mutex<Map<PeerId, u64>>>,
+    recv_counter: Arc<Mutex<Map<(PeerId, SedimentreeId), u64>>>,
 }
 
 impl<R: RemoteHeadsObserver> FilteredHeadsNotifier<R> {
@@ -100,7 +103,7 @@ impl<R: RemoteHeadsObserver> FilteredHeadsNotifier<R> {
             return;
         };
 
-        let last = counters.entry(peer).or_insert(0);
+        let last = counters.entry((peer, id)).or_insert(0);
         if heads.counter <= *last {
             return;
         }
@@ -144,4 +147,39 @@ impl<R: RemoteHeadsObserver + Clone> Clone for FilteredHeadsNotifier<R> {
 pub trait RemoteHeadsNotifier {
     /// Notify the application of a remote peer's current heads for a sedimentree.
     fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone, Default)]
+    struct Recording(Arc<spin::Mutex<Vec<SedimentreeId>>>);
+
+    impl RemoteHeadsObserver for Recording {
+        fn on_remote_heads(&self, id: SedimentreeId, _peer: PeerId, _heads: RemoteHeads) {
+            self.0.lock().push(id);
+        }
+    }
+
+    fn heads(counter: u64) -> RemoteHeads {
+        RemoteHeads {
+            counter,
+            heads: alloc::vec![CommitId::new([0xA; 32])],
+        }
+    }
+
+    #[test]
+    fn newer_report_for_one_tree_does_not_stale_another() {
+        let recording = Recording::default();
+        let notifier = FilteredHeadsNotifier::new(recording.clone());
+        let peer = PeerId::new([1; 32]);
+        let first = SedimentreeId::new([1; 32]);
+        let second = SedimentreeId::new([2; 32]);
+
+        notifier.notify(second, peer, heads(2));
+        notifier.notify(first, peer, heads(1));
+
+        assert_eq!(*recording.0.lock(), alloc::vec![second, first]);
+    }
 }

@@ -377,7 +377,7 @@ impl<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, Trees>
     /// Set the [`RemoteHeadsObserver`] invoked whenever a remote peer
     /// reports its heads for a sedimentree — via a `HeadsUpdate` message,
     /// `sender_heads` on subscription pushes, or `responder_heads` in a
-    /// sync response. Updates pass through a per-peer staleness filter
+    /// sync response. Updates pass through a per-tree staleness filter
     /// (monotonic counter) before reaching the observer.
     ///
     /// Defaults to [`NoRemoteHeadsObserver`], which discards all
