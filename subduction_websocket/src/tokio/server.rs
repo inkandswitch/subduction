@@ -10,7 +10,9 @@ use crate::{
 };
 
 use alloc::sync::Arc;
-use async_tungstenite::tokio::{accept_hdr_async_with_config, connect_async_with_config};
+use async_tungstenite::tokio::{
+    ConnectStream, TokioAdapter, accept_hdr_async_with_config, connect_async_with_config,
+};
 use core::{
     net::SocketAddr,
     sync::atomic::{AtomicBool, Ordering},
@@ -39,7 +41,10 @@ use subduction_core::{
 use subduction_crypto::{nonce::Nonce, signer::Signer};
 use tracing::Instrument;
 
-use tokio::{net::TcpListener, task::JoinSet};
+use tokio::{
+    net::{TcpListener, TcpStream},
+    task::JoinSet,
+};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tungstenite::{handshake::server::NoCallback, http::Uri, protocol::WebSocketConfig};
 
@@ -281,109 +286,17 @@ where
                                     // `accept_hdr_async_with_config` and `handshake::respond`
                                     // are not cancellation-aware; race against the token so
                                     // a stalled client can't block server teardown.
-                                    let handshake_fut = async {
-                                        let mut ws_config = WebSocketConfig::default();
-                                        ws_config.max_message_size = Some(max_message_size);
-                                        ws_config.max_frame_size = Some(max_message_size);
-
-                                        // Step 1: WebSocket protocol upgrade
-                                        let ws_stream = match accept_hdr_async_with_config(tcp, NoCallback, Some(ws_config)).await {
-                                            Ok(ws) => ws,
-                                            Err(e) => {
-                                                tracing::error!(error = %e, "WebSocket upgrade error");
-                                                return;
-                                            }
-                                        };
-
-                                        tracing::debug!("WebSocket upgrade complete");
-
-                                        // Step 2: Subduction handshake and connection setup
-                                        // Accepts either Audience::Known(peer_id) or discovery audience
-                                        let now = TimestampSeconds::now();
-                                        let listen_cancel = task_cancel.clone();
-                                        let sender_cancel = task_cancel.clone();
-                                        let listen_tracker = task_tracker.clone();
-                                        let sender_tracker = task_tracker.clone();
-                                        let keepalive_tracker = task_tracker.clone();
-                                        let keepalive_cancel = task_cancel.clone();
-                                        let result = handshake::respond::<Sendable, _, _, _, _>(
-                                            WebSocketHandshake::new(ws_stream),
-                                            move |ws_handshake, peer_id| {
-                                                // Create WebSocket wrapper with verified PeerId
-                                                let (ws, sender_fut, keepalive_task) =
-                                                    WebSocket::new_with_keepalive(
-                                                        ws_handshake.into_inner(),
-                                                        peer_id,
-                                                        keepalive,
-                                                        TokioSleeper,
-                                                    );
-
-                                                let listen_ws = ws.clone();
-                                                listen_tracker.spawn(async move {
-                                                    tokio::select! {
-                                                        () = listen_cancel.cancelled() => {
-                                                            tracing::debug!("WebSocket listener cancelled");
-                                                        }
-                                                        result = listen_ws.listen() => {
-                                                            if let Err(e) = result {
-                                                                tracing::info!(error = %e, "WebSocket listener disconnected");
-                                                            }
-                                                        }
-                                                    }
-                                                });
-
-                                                sender_tracker.spawn(async move {
-                                                    tokio::select! {
-                                                        () = sender_cancel.cancelled() => {
-                                                            tracing::debug!("WebSocket sender cancelled");
-                                                        }
-                                                        result = sender_fut => {
-                                                            if let Err(e) = result {
-                                                                tracing::info!(error = %e, "WebSocket sender disconnected");
-                                                            }
-                                                        }
-                                                    }
-                                                });
-
-                                                let keepalive_fut = keepalive_task.into_future();
-                                                keepalive_tracker.spawn(async move {
-                                                    tokio::select! {
-                                                        () = keepalive_cancel.cancelled() => {
-                                                            tracing::debug!("WebSocket keepalive cancelled");
-                                                        }
-                                                        outcome = keepalive_fut => {
-                                                            tracing::debug!(?outcome, "WebSocket keepalive exited");
-                                                        }
-                                                    }
-                                                });
-
-                                                (UnifiedWebSocket::Accepted(ws), ())
-                                            },
-                                            task_subduction.signer(),
-                                            task_subduction.nonce_cache(),
-                                            server_peer_id,
-                                            task_discovery_audience,
-                                            now,
-                                            handshake_max_drift,
-                                        ).await;
-
-                                        let authenticated = match result {
-                                            Ok((auth, ())) => {
-                                                tracing::info!(peer = %auth.peer_id(), "handshake complete");
-                                                auth
-                                            }
-                                            Err(e) => {
-                                                tracing::warn!(error = %e, "handshake failed");
-                                                return;
-                                            }
-                                        };
-
-                                        // Step 3: Add connection to Subduction
-                                        let auth_mt = authenticated.map(MessageTransport::new);
-                                        if let Err(e) = task_subduction.add_connection(auth_mt).await {
-                                            tracing::error!(error = %e, "failed to add connection");
-                                        }
-                                    };
+                                    let handshake_fut = Self::accept_connection(
+                                        tcp,
+                                        task_subduction,
+                                        server_peer_id,
+                                        task_discovery_audience,
+                                        handshake_max_drift,
+                                        max_message_size,
+                                        keepalive,
+                                        task_tracker,
+                                        task_cancel,
+                                    );
 
                                     tokio::select! {
                                         () = outer_cancel.cancelled() => {
@@ -411,6 +324,75 @@ where
             max_message_size,
             keepalive,
         })
+    }
+
+    /// Upgrade an accepted TCP stream, run the Subduction handshake, and
+    /// register the resulting connection.
+    ///
+    /// A named function rather than an inline `async` block so
+    /// rust-analyzer infers it separately from the accept loop (see
+    /// [`start_accepted_connection`]). Not cancellation-aware: the caller
+    /// races it against server shutdown.
+    #[allow(clippy::too_many_arguments)]
+    async fn accept_connection(
+        tcp: TcpStream,
+        subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
+        server_peer_id: PeerId,
+        discovery_audience: Option<Audience>,
+        handshake_max_drift: Duration,
+        max_message_size: usize,
+        keepalive: KeepAlive,
+        tasks: TaskTracker,
+        cancel: CancellationToken,
+    ) {
+        let mut ws_config = WebSocketConfig::default();
+        ws_config.max_message_size = Some(max_message_size);
+        ws_config.max_frame_size = Some(max_message_size);
+
+        // Step 1: WebSocket protocol upgrade
+        let ws_stream = match accept_hdr_async_with_config(tcp, NoCallback, Some(ws_config)).await {
+            Ok(ws) => ws,
+            Err(e) => {
+                tracing::error!(error = %e, "WebSocket upgrade error");
+                return;
+            }
+        };
+
+        tracing::debug!("WebSocket upgrade complete");
+
+        // Step 2: Subduction handshake and connection setup
+        // Accepts either Audience::Known(peer_id) or discovery audience
+        let now = TimestampSeconds::now();
+        let result = handshake::respond::<Sendable, _, _, _, _>(
+            WebSocketHandshake::new(ws_stream),
+            move |ws_handshake, peer_id| {
+                start_accepted_connection(ws_handshake, peer_id, keepalive, &tasks, &cancel)
+            },
+            subduction.signer(),
+            subduction.nonce_cache(),
+            server_peer_id,
+            discovery_audience,
+            now,
+            handshake_max_drift,
+        )
+        .await;
+
+        let authenticated = match result {
+            Ok((auth, ())) => {
+                tracing::info!(peer = %auth.peer_id(), "handshake complete");
+                auth
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "handshake failed");
+                return;
+            }
+        };
+
+        // Step 3: Add connection to Subduction
+        let auth_mt = authenticated.map(MessageTransport::new);
+        if let Err(e) = subduction.add_connection(auth_mt).await {
+            tracing::error!(error = %e, "failed to add connection");
+        }
     }
 
     /// Create a new [`TokioWebSocketServer`] with storage and policy.
@@ -635,68 +617,21 @@ where
         let nonce = Nonce::random();
 
         let cancel_token = self.cancellation_token.clone();
-        let listen_tracker = self.tasks.clone();
-        let sender_tracker = self.tasks.clone();
-        let keepalive_tracker = self.tasks.clone();
-        let listen_uri_str = uri_str.clone();
-        let sender_uri_str = uri_str.clone();
-        let keepalive_uri_str = uri_str.clone();
+        let tasks = self.tasks.clone();
+        let task_uri_str = uri_str.clone();
         let keepalive = self.keepalive;
 
         let (authenticated, ()) = handshake::initiate::<Sendable, _, _, _, _>(
             WebSocketHandshake::new(ws_stream),
             move |ws_handshake, peer_id| {
-                let (ws, sender_fut, keepalive_task) = WebSocket::new_with_keepalive(
-                    ws_handshake.into_inner(),
+                start_dialed_connection(
+                    ws_handshake,
                     peer_id,
                     keepalive,
-                    TokioSleeper,
-                );
-                let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
-
-                let listen_ws = ws.clone();
-                let listener_cancel = cancel_token.clone();
-                listen_tracker.spawn(async move {
-                    tokio::select! {
-                        () = listener_cancel.cancelled() => {
-                            tracing::debug!(uri = %listen_uri_str, "shutting down listener");
-                        }
-                        result = listen_ws.listen() => {
-                            if let Err(e) = result {
-                                tracing::info!(uri = %listen_uri_str, error = %e, "WebSocket listener disconnected");
-                            }
-                        }
-                    }
-                });
-
-                let sender_cancel = cancel_token.clone();
-                sender_tracker.spawn(async move {
-                    tokio::select! {
-                        () = sender_cancel.cancelled() => {
-                            tracing::debug!(uri = %sender_uri_str, "shutting down sender");
-                        }
-                        result = sender_fut => {
-                            if let Err(e) = result {
-                                tracing::info!(uri = %sender_uri_str, error = %e, "WebSocket sender disconnected");
-                            }
-                        }
-                    }
-                });
-
-                let keepalive_cancel = cancel_token;
-                let keepalive_fut = keepalive_task.into_future();
-                keepalive_tracker.spawn(async move {
-                    tokio::select! {
-                        () = keepalive_cancel.cancelled() => {
-                            tracing::debug!(uri = %keepalive_uri_str, "shutting down keepalive");
-                        }
-                        outcome = keepalive_fut => {
-                            tracing::debug!(uri = %keepalive_uri_str, ?outcome, "keepalive task exited");
-                        }
-                    }
-                });
-
-                (ws_conn, ())
+                    &tasks,
+                    cancel_token,
+                    task_uri_str,
+                )
             },
             self.subduction.signer(),
             audience,
@@ -768,68 +703,21 @@ where
         let nonce = Nonce::random();
 
         let cancel_token = self.cancellation_token.clone();
-        let listen_tracker = self.tasks.clone();
-        let sender_tracker = self.tasks.clone();
-        let keepalive_tracker = self.tasks.clone();
-        let listen_uri_str = uri_str.clone();
-        let sender_uri_str = uri_str.clone();
-        let keepalive_uri_str = uri_str.clone();
+        let tasks = self.tasks.clone();
+        let task_uri_str = uri_str.clone();
         let keepalive = self.keepalive;
 
         let (authenticated, ()) = handshake::initiate::<Sendable, _, _, _, _>(
             WebSocketHandshake::new(ws_stream),
             move |ws_handshake, peer_id| {
-                let (ws, sender_fut, keepalive_task) = WebSocket::new_with_keepalive(
-                    ws_handshake.into_inner(),
+                start_dialed_connection(
+                    ws_handshake,
                     peer_id,
                     keepalive,
-                    TokioSleeper,
-                );
-                let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
-
-                let listen_ws = ws.clone();
-                let listener_cancel = cancel_token.clone();
-                listen_tracker.spawn(async move {
-                    tokio::select! {
-                        () = listener_cancel.cancelled() => {
-                            tracing::debug!(uri = %listen_uri_str, "shutting down listener");
-                        }
-                        result = listen_ws.listen() => {
-                            if let Err(e) = result {
-                                tracing::info!(uri = %listen_uri_str, error = %e, "WebSocket listener disconnected");
-                            }
-                        }
-                    }
-                });
-
-                let sender_cancel = cancel_token.clone();
-                sender_tracker.spawn(async move {
-                    tokio::select! {
-                        () = sender_cancel.cancelled() => {
-                            tracing::debug!(uri = %sender_uri_str, "shutting down sender");
-                        }
-                        result = sender_fut => {
-                            if let Err(e) = result {
-                                tracing::info!(uri = %sender_uri_str, error = %e, "WebSocket sender disconnected");
-                            }
-                        }
-                    }
-                });
-
-                let keepalive_cancel = cancel_token;
-                let keepalive_fut = keepalive_task.into_future();
-                keepalive_tracker.spawn(async move {
-                    tokio::select! {
-                        () = keepalive_cancel.cancelled() => {
-                            tracing::debug!(uri = %keepalive_uri_str, "shutting down keepalive");
-                        }
-                        outcome = keepalive_fut => {
-                            tracing::debug!(uri = %keepalive_uri_str, ?outcome, "keepalive task exited");
-                        }
-                    }
-                });
-
-                (ws_conn, ())
+                    &tasks,
+                    cancel_token,
+                    task_uri_str,
+                )
             },
             self.subduction.signer(),
             audience,
@@ -908,4 +796,128 @@ pub enum TryConnectError<E: core::error::Error> {
     /// Adding the connection failed.
     #[error("add connection error: {0}")]
     AddConnection(#[from] AddConnectionError<E>),
+}
+
+// The two `start_*_connection` helpers are the `build_connection` callbacks
+// for `handshake::respond` / `handshake::initiate`. They are named functions
+// rather than closure bodies on purpose: rust-analyzer infers a closure (and
+// every `async` block inside it) together with its enclosing function, and
+// inference cost grows superlinearly with that combined body. Inlined, these
+// spawned `select!` blocks made the accept loop take ~16s to analyze.
+
+/// Wrap an accepted stream and spawn its listener, sender, and keepalive tasks.
+fn start_accepted_connection(
+    ws_handshake: WebSocketHandshake<TokioAdapter<TcpStream>>,
+    peer_id: PeerId,
+    keepalive: KeepAlive,
+    tasks: &TaskTracker,
+    cancel: &CancellationToken,
+) -> (UnifiedWebSocket, ()) {
+    let (ws, sender_fut, keepalive_task) =
+        WebSocket::new_with_keepalive(ws_handshake.into_inner(), peer_id, keepalive, TokioSleeper);
+
+    let listen_ws = ws.clone();
+    let listen_cancel = cancel.clone();
+    tasks.spawn(async move {
+        tokio::select! {
+            () = listen_cancel.cancelled() => {
+                tracing::debug!("WebSocket listener cancelled");
+            }
+            result = listen_ws.listen() => {
+                if let Err(e) = result {
+                    tracing::info!(error = %e, "WebSocket listener disconnected");
+                }
+            }
+        }
+    });
+
+    let sender_cancel = cancel.clone();
+    tasks.spawn(async move {
+        tokio::select! {
+            () = sender_cancel.cancelled() => {
+                tracing::debug!("WebSocket sender cancelled");
+            }
+            result = sender_fut => {
+                if let Err(e) = result {
+                    tracing::info!(error = %e, "WebSocket sender disconnected");
+                }
+            }
+        }
+    });
+
+    let keepalive_cancel = cancel.clone();
+    let keepalive_fut = keepalive_task.into_future();
+    tasks.spawn(async move {
+        tokio::select! {
+            () = keepalive_cancel.cancelled() => {
+                tracing::debug!("WebSocket keepalive cancelled");
+            }
+            outcome = keepalive_fut => {
+                tracing::debug!(?outcome, "WebSocket keepalive exited");
+            }
+        }
+    });
+
+    (UnifiedWebSocket::Accepted(ws), ())
+}
+
+/// Wrap a dialed stream and spawn its listener, sender, and keepalive tasks.
+fn start_dialed_connection(
+    ws_handshake: WebSocketHandshake<ConnectStream>,
+    peer_id: PeerId,
+    keepalive: KeepAlive,
+    tasks: &TaskTracker,
+    cancel: CancellationToken,
+    uri_str: String,
+) -> (UnifiedWebSocket, ()) {
+    let (ws, sender_fut, keepalive_task) =
+        WebSocket::new_with_keepalive(ws_handshake.into_inner(), peer_id, keepalive, TokioSleeper);
+    let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
+
+    let listen_ws = ws.clone();
+    let listener_cancel = cancel.clone();
+    let listen_uri_str = uri_str.clone();
+    tasks.spawn(async move {
+        tokio::select! {
+            () = listener_cancel.cancelled() => {
+                tracing::debug!(uri = %listen_uri_str, "shutting down listener");
+            }
+            result = listen_ws.listen() => {
+                if let Err(e) = result {
+                    tracing::info!(uri = %listen_uri_str, error = %e, "WebSocket listener disconnected");
+                }
+            }
+        }
+    });
+
+    let sender_cancel = cancel.clone();
+    let sender_uri_str = uri_str.clone();
+    tasks.spawn(async move {
+        tokio::select! {
+            () = sender_cancel.cancelled() => {
+                tracing::debug!(uri = %sender_uri_str, "shutting down sender");
+            }
+            result = sender_fut => {
+                if let Err(e) = result {
+                    tracing::info!(uri = %sender_uri_str, error = %e, "WebSocket sender disconnected");
+                }
+            }
+        }
+    });
+
+    let keepalive_cancel = cancel;
+    let keepalive_uri_str = uri_str;
+    let keepalive_fut = keepalive_task.into_future();
+    tasks.spawn(async move {
+        tokio::select! {
+            () = keepalive_cancel.cancelled() => {
+                tracing::debug!(uri = %keepalive_uri_str, "shutting down keepalive");
+            }
+            outcome = keepalive_fut => {
+                tracing::debug!(uri = %keepalive_uri_str, ?outcome, "keepalive task exited");
+            }
+        }
+    });
+
+    (ws_conn, ())
 }
