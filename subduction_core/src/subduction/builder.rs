@@ -374,11 +374,11 @@ impl<Sign, Sp, Store, Metric, HeadsObserver, Trees>
 impl<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, Trees>
     SubductionBuilder<Sign, Sp, Store, Timer, Metric, OldHeadsObserver, Trees>
 {
-    /// Set the [`RemoteHeadsObserver`] invoked whenever a remote peer
-    /// reports its heads for a sedimentree — via a `HeadsUpdate` message,
-    /// `sender_heads` on subscription pushes, or `responder_heads` in a
-    /// sync response. Updates pass through a per-peer staleness filter
-    /// (monotonic counter) before reaching the observer.
+    /// Set the [`RemoteHeadsObserver`] invoked when a remote peer's heads for
+    /// a sedimentree change. Heads arrive on `HeadsUpdate`, `sender_heads`,
+    /// and `responder_heads`; the observer is called only when they differ
+    /// from the last report for that `(peer, sedimentree)`. See
+    /// [`RemoteHeadsObserver`] for the callback's obligations.
     ///
     /// Defaults to [`NoRemoteHeadsObserver`], which discards all
     /// notifications.
@@ -656,7 +656,7 @@ impl<Sign, Sp, Store, Policy, Timer, Metric: DepthMetric, HeadsObserver: RemoteH
             Conn,
             Metric,
             HeadsObserver,
-        >: Handler<Async, Conn, Message = SyncMessage>,
+        >: Handler<Async, Conn, Message = SyncMessage> + RemoteHeadsNotifier<Async>,
         <SyncHandler<
             Async,
             Config<Store, Policy, Sign, Timer, Sp, Trees>,
@@ -789,7 +789,7 @@ impl<Sign, Sp, Store, Policy, Timer, Metric: DepthMetric, Trees>
         Sp: Spawn<Async> + Clone + Send + Sync + 'static,
         Trees: MinimizedTreeStore<Async>,
         'a: 'static,
-        Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
+        Hdl: Handler<Async, Conn> + RemoteHeadsNotifier<Async>,
         Hdl::Message: From<SyncMessage>,
         Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
         ManagedConnection<Conn, Async, Timer>: ManagedCall<
@@ -901,7 +901,7 @@ impl<Sign, Sp, Store, Policy, Timer, Metric: DepthMetric, HeadsObserver: RemoteH
         Sp: Spawn<Async> + Clone + Send + Sync + 'static,
         Trees: MinimizedTreeStore<Async>,
         'a: 'static,
-        Hdl: Handler<Async, Conn> + RemoteHeadsNotifier,
+        Hdl: Handler<Async, Conn> + RemoteHeadsNotifier<Async>,
         Hdl::Message: From<SyncMessage>,
         Hdl::HandlerError: Into<ListenError<Async, Store, Conn, Hdl::Message>>,
         Metric: Clone,
@@ -911,7 +911,7 @@ impl<Sign, Sp, Store, Policy, Timer, Metric: DepthMetric, HeadsObserver: RemoteH
             Conn,
             Metric,
             HeadsObserver,
-        >: Handler<Async, Conn, Message = SyncMessage>,
+        >: Handler<Async, Conn, Message = SyncMessage> + RemoteHeadsNotifier<Async>,
         <SyncHandler<
             Async,
             Config<Store, Policy, Sign, Timer, Sp, Trees>,

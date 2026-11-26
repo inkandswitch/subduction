@@ -188,6 +188,8 @@ impl<
 > SyncHandler<Async, E, Conn, Metric, R>
 {
     /// Create a new `SyncHandler` with a custom remote heads observer.
+    ///
+    /// See [`RemoteHeadsObserver`] for the callback's obligations.
     #[allow(clippy::type_complexity)]
     pub fn with_remote_heads_observer(
         minimized_tree_store: E::MinimizedTreeStore,
@@ -312,11 +314,10 @@ impl<
         })
     }
 
-    fn on_peer_disconnect(&self, _peer: PeerId) -> Async::Future<'_, ()> {
-        // No-op: teardown already removed the peer's connection and
-        // subscriptions, and the send counter deliberately survives (see
-        // `PeerCounter`).
-        Async::from_future(async {})
+    fn on_peer_disconnect(&self, peer: PeerId) -> Async::Future<'_, ()> {
+        // The send counter survives (see `PeerCounter`); notifier entries are
+        // per-session.
+        Async::from_future(async move { self.heads_notifier.remove_peer(peer).await })
     }
 }
 
@@ -324,16 +325,44 @@ impl<
 // RemoteHeadsNotifier implementation
 // ---------------------------------------------------------------------------
 
+#[future_form(
+    Sendable where
+        E::MinimizedTreeStore: Send + Sync,
+        <E::MinimizedTreeStore as MinimizedTreeStore<Sendable>>::Error: Send,
+        <E::MinimizedTreeStore as MinimizedTreeStore<Sendable>>::Generation: Send + Sync,
+        E::Policy: Send + Sync,
+        E::Spawner: Send + Sync + 'static,
+        E::Storage: Send + Sync,
+        E::FetchDisallowed: Send + 'static,
+        E::PutDisallowed: Send + 'static,
+        E::StorageError: Send + 'static,
+        Conn: Connection<Sendable, SyncMessage> + PartialEq + Clone + Send + Sync + Debug + 'static,
+        Conn::SendError: Send + 'static,
+        Conn::RecvError: Send + 'static,
+        Conn::DisconnectionError: Send + 'static,
+        Metric: DepthMetric + Send + Sync,
+        R: RemoteHeadsObserver + Send + Sync,
+    Local where
+        E::Spawner: 'static,
+        Conn: Connection<Local, SyncMessage> + PartialEq + Clone + Debug + 'static,
+        Metric: DepthMetric,
+        R: RemoteHeadsObserver
+)]
 impl<
     Async: FutureForm,
     E: HasMinimizedTreeStore<Async> + HasStoragePolicy<Async> + HasSpawner<Async> + HasStorage<Async>,
     Conn: Connection<Async, SyncMessage> + PartialEq + Clone + 'static,
     Metric: DepthMetric,
     R: RemoteHeadsObserver,
-> RemoteHeadsNotifier for SyncHandler<Async, E, Conn, Metric, R>
+> RemoteHeadsNotifier<Async> for SyncHandler<Async, E, Conn, Metric, R>
 {
-    fn notify_remote_heads(&self, id: SedimentreeId, peer: PeerId, heads: RemoteHeads) {
-        self.heads_notifier.notify(id, peer, heads);
+    fn notify_remote_heads(
+        &self,
+        id: SedimentreeId,
+        peer: PeerId,
+        heads: RemoteHeads,
+    ) -> Async::Future<'_, ()> {
+        Async::from_future(async move { self.heads_notifier.notify(id, peer, heads).await })
     }
 }
 
@@ -463,7 +492,8 @@ impl<
         //    `Subduction::sync_with_all_peers` via `RemoteHeadsNotifier`.
         //
         // 2. `sender_heads` on subscription-push `LooseCommit`/`Fragment`
-        //    messages — handled here in dispatch.
+        //    messages — reported by `recv_commit` / `recv_fragment` after
+        //    verification, authorization, and storage.
         //
         // 3. `HeadsUpdate` messages (post-ingestion ack from the 1.5 RTT
         //    second half) — handled here in dispatch.
@@ -474,8 +504,8 @@ impl<
                 blob,
                 sender_heads,
             } => {
-                self.heads_notifier.notify(id, from, sender_heads);
-                self.recv_commit(&from, id, &commit, blob, conn).await?
+                self.recv_commit(&from, id, &commit, blob, sender_heads, conn)
+                    .await?
             }
             SyncMessage::Fragment {
                 id,
@@ -483,8 +513,8 @@ impl<
                 blob,
                 sender_heads,
             } => {
-                self.heads_notifier.notify(id, from, sender_heads);
-                self.recv_fragment(&from, id, &fragment, blob, conn).await?
+                self.recv_fragment(&from, id, &fragment, blob, sender_heads, conn)
+                    .await?
             }
             SyncMessage::BatchSyncRequest(BatchSyncRequest {
                 id,
@@ -535,7 +565,7 @@ impl<
             }
             SyncMessage::HeadsUpdate { id, heads } => {
                 tracing::debug!(peer = %from, tree = ?id, heads = heads.heads.len(), "peer reports heads");
-                self.heads_notifier.notify(id, from, heads);
+                self.heads_notifier.notify(id, from, heads).await;
                 None
             }
         };
@@ -553,6 +583,7 @@ impl<
         id: SedimentreeId,
         signed_commit: &Signed<LooseCommit>,
         blob: Blob,
+        sender_heads: RemoteHeads,
         conn: &Authenticated<Conn, Async>,
     ) -> Result<Option<FanOut<Conn, Async>>, IoError<Async, E::Storage, Conn, SyncMessage>> {
         let verified = match signed_commit.try_verify() {
@@ -614,6 +645,11 @@ impl<
             .insert_commit_locally(&putter, verified_meta)
             .await
             .map_err(IoError::from)?;
+
+        // Report heads only after the message is verified, authorized, and
+        // stored, so the observer never sees heads for data we rejected or do
+        // not yet hold.
+        self.heads_notifier.notify(id, *from, sender_heads).await;
 
         let fanout = if was_new {
             let heads = self.heads_for(id).await;
@@ -705,6 +741,7 @@ impl<
         id: SedimentreeId,
         signed_fragment: &Signed<Fragment>,
         blob: Blob,
+        sender_heads: RemoteHeads,
         conn: &Authenticated<Conn, Async>,
     ) -> Result<Option<FanOut<Conn, Async>>, IoError<Async, E::Storage, Conn, SyncMessage>> {
         let verified = match signed_fragment.try_verify() {
@@ -763,6 +800,9 @@ impl<
             .insert_fragment_locally(&putter, verified_meta)
             .await
             .map_err(IoError::from)?;
+
+        // Heads reported after verification and storage; see `recv_commit`.
+        self.heads_notifier.notify(id, *from, sender_heads).await;
 
         let fanout = if was_new {
             let heads = self.heads_for(id).await;

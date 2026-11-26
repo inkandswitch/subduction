@@ -184,6 +184,9 @@ impl Node {
             observer,
             spawner.clone(),
         )
+        // Wall-clock seeded so sequences resume above previous values across
+        // page reloads; a receiver that missed the old session's end would
+        // otherwise drop the new sequence as stale.
         .with_send_counter(PeerCounter::with_seed(date_now_micros_seed));
         let eph_policy = opts
             .ephemeral_policy()

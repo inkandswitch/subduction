@@ -25,11 +25,11 @@ sequenceDiagram
 
     B->>A: BatchSyncResponse { diff, requesting, responder_heads }
     Note left of A: Store received data
-    Note left of A: Notify heads observer (staleness-filtered)
+    Note left of A: Notify heads observer (only on change)
 
     A-->>B: LooseCommit / Fragment { sender_heads }
-    Note right of B: Store received data
-    Note right of B: Notify heads observer (staleness-filtered)
+    Note right of B: Verify, authorize, store
+    Note right of B: Notify heads observer (only on change)
 ```
 
 The requester learns what they're missing; the responder provides it (with its current heads) and also requests what _they're_ missing. The requester then sends the requested data as fire-and-forget messages, each stamped with a per-peer monotonic counter via `sender_heads`.
@@ -220,22 +220,23 @@ WebRTC, relay).
 The `responder_heads` on `BatchSyncResponse` and the `sender_heads` on fire-and-forget
 `LooseCommit`/`Fragment` messages both carry `RemoteHeads`. The application receives
 heads notifications via `RemoteHeadsObserver::on_remote_heads(id, peer, heads)`,
-filtered through a per-peer staleness check that drops updates where
-`counter <= last_seen`.
+filtered per `(peer, sedimentree)`: delivered only when the counter is newer
+*and* the heads differ from the last delivery.
 
 [`PeerCounter`]: ../../subduction_core/src/peer/counter.rs
 
 ## Properties
 
-| Property                  | Mechanism                                                 |
-|---------------------------|-----------------------------------------------------------|
-| **Consistency**           | Fingerprint-based diffing ensures convergence             |
-| **Efficiency**            | ~75% smaller requests; only missing data transferred      |
-| **Bidirectional**         | 1.5 RT completes sync in both directions                  |
-| **Correlation**           | `RequestId` links response to request                     |
-| **Self-confirming**       | Running sync twice confirms success                       |
-| **Precompute-resistance** | Random per-request seed prevents chosen-collision attacks  |
-| **Monotonic ordering**    | Per-peer counter prevents stale heads on non-TCP transports |
+| Property                  | Mechanism                                                                            |
+|---------------------------|--------------------------------------------------------------------------------------|
+| **Consistency**           | Fingerprint-based diffing ensures convergence                                        |
+| **Efficiency**            | ~75% smaller requests; only missing data transferred                                 |
+| **Bidirectional**         | 1.5 RT completes sync in both directions                                             |
+| **Correlation**           | `RequestId` links response to request                                                |
+| **Self-confirming**       | Running sync twice confirms success                                                  |
+| **Precompute-resistance** | Random per-request seed prevents chosen-collision attacks                            |
+| **Monotonic ordering**    | Per-`(peer, sedimentree)` high-water mark prevents stale heads on non-TCP transports |
+| **Quiescence**            | Heads notifications fire per `(peer, sedimentree)` only when the heads change        |
 
 ## Sequence Diagram (Success)
 
@@ -262,15 +263,15 @@ sequenceDiagram
     Note left of A: Store missing commits
     Note left of A: Store missing fragments
     Note left of A: Store blobs
-    Note left of A: Notify heads observer (staleness-filtered)
+    Note left of A: Notify heads observer (only on change)
 
     alt Responder requested data
         Note left of A: Build reverse-lookup table
         Note left of A: Resolve fingerprints → items
         A-->>B: LooseCommit { sender_heads } (fire-and-forget)
         A-->>B: Fragment { sender_heads } (fire-and-forget)
-        Note right of B: Store received data
-        Note right of B: Notify heads observer (staleness-filtered)
+        Note right of B: Verify, authorize, store
+        Note right of B: Notify heads observer (only on change)
     end
 
     Note over A,B: Sedimentrees Synchronized (1.5 RT)
