@@ -97,8 +97,12 @@ iroh = "1.0"
 hyper = { version = "1.6", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
 js-sys = { version = "=0.3.98", default-features = false }
-keyhive_core = "0.7.0"
-keyhive_crypto = "0.2.1"
+keyhive_codec = { version = "0.1.0", default-features = false }
+keyhive_content = { version = "0.4.0", default-features = false }
+keyhive_core = "0.12.3"
+keyhive_crypto = { version = "0.6.0", default-features = false }
+keyline = { version = "0.4.0", default-features = false }
+keyline_memory = { version = "0.4.0", default-features = false }
 metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
 metrics-process = "2.0"
@@ -112,9 +116,6 @@ rayon = "1.11"
 redb = "4.1"
 reqwest = { version = "0.13.4", default-features = false }
 serde = { version = "1.0", default-features = false }
-serde_bytes = { version = "0.11.10", default-features = false, features = [
-  "alloc",
-] }
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 sha1 = { version = "0.10", default-features = false }
 siphasher = { version = "1.0", default-features = false }

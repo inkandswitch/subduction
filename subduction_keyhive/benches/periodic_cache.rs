@@ -11,10 +11,11 @@
 //! bench measures how that build's time and the resulting cache size scale with
 //! the number of peers/docs, under two access shapes:
 //!
-//! - `public`: N peer agents are known to the server; each of N docs is shared
-//!   with the Public agent (mirrors the load test's `setPublicAccess`).
-//! - `members`: additionally, each doc lists K specific peers as Read members
-//!   (mirrors cross-subscription / non-public reachability).
+//! - `members`: N peer agents are known to the server; each of N docs lists K
+//!   specific peers as Read members (mirrors cross-subscription reachability).
+//! - `all_to_all`: each doc lists every other peer as a Read member.
+//!
+//! Keyline has no public agent, so there is no public-access shape.
 //!
 //! For each (shape, N) the size table is printed once to stderr: agents, total
 //! per-agent hash entries (Sigma |`agent_hashes`[a]|), distinct events. The criterion
@@ -33,13 +34,12 @@ use std::collections::BTreeSet;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use futures::executor::block_on;
-use keyhive_core::{
-    access::Access,
-    principal::{identifier::Identifier, public::Public},
-};
+use keyhive_crypto::identifier::Identifier;
+use keyline::power::Power;
 use nonempty::nonempty;
 use subduction_keyhive::{
     AllAgentEvents,
+    protocol::is_known_agent,
     test_utils::{
         SimpleKeyhive, TestProtocol, create_channel_pair, keyhive_peer_id, make_keyhive,
         make_protocol_with_shared_keyhive, sync_pair_rounds,
@@ -49,8 +49,6 @@ use subduction_keyhive::{
 /// Access shape for the generated docs.
 #[derive(Clone, Copy)]
 enum Shape {
-    /// Each doc shared with the Public agent only.
-    Public,
     /// Each doc additionally lists `K` specific peers as Read members.
     Members(usize),
     /// Each doc lists all other N - 1 peers as Read members.
@@ -109,17 +107,11 @@ async fn build(n: usize, shape: Shape) -> (TestProtocol, Sizes) {
             .generate_doc(vec![], nonempty![[fill; 32]])
             .await
             .expect("generate_doc");
-        match shape {
-            Shape::Public => {
-                server
-                    .add_member(Public.id(), doc_id, Access::Read, &[])
-                    .await
-                    .expect("add_member public");
-            }
-            Shape::Members(_) | Shape::AllOthers => {
+        {
+            {
                 let k = match shape {
                     Shape::Members(k) => k.min(n.saturating_sub(1)),
-                    _ => n.saturating_sub(1),
+                    Shape::AllOthers => n.saturating_sub(1),
                 };
                 for step in 1..=k {
                     let j = (i + step) % n;
@@ -127,9 +119,9 @@ async fn build(n: usize, shape: Shape) -> (TestProtocol, Sizes) {
                         continue;
                     }
                     let id: Identifier = peers[j].id().into();
-                    if server.get_agent(id).await.is_some() {
+                    if is_known_agent(&server, id).await.expect("membership query") {
                         server
-                            .add_member(id, doc_id, Access::Read, &[])
+                            .add_member(id, doc_id, Power::Read)
                             .await
                             .expect("add_member peer");
                     }
@@ -148,7 +140,7 @@ async fn build(n: usize, shape: Shape) -> (TestProtocol, Sizes) {
     (proto, sizes)
 }
 
-/// Each of N peers owns its own public doc, adds the server as a Relay member,
+/// Each of N peers owns its own doc, adds the server as a Read member,
 /// then syncs keyhive through the server. The server then ingests the graph
 /// (peer-owned docs + cross-propagated individual / prekey ops), unlike `build`
 /// where the server owns every doc. Returns the server's resulting cache snapshot.
@@ -173,19 +165,16 @@ async fn build_synced(n: usize) -> (TestProtocol, Sizes) {
             .await
             .expect("peer recv cc");
     }
-    // Each peer owns a doc, makes it public, and grants the server relay (Read).
+    // Each peer owns a doc and grants the server Read, so it holds the doc.
     for (i, p) in peer_khs.iter().enumerate() {
         let fill = ((i % 251) + 1) as u8;
         let doc_id = p
             .generate_doc(vec![], nonempty![[fill; 32]])
             .await
             .expect("generate_doc");
-        p.add_member(Public.id(), doc_id, Access::Read, &[])
+        p.add_member(server_identifier, doc_id, Power::Read)
             .await
-            .expect("add public");
-        p.add_member(server_identifier, doc_id, Access::Read, &[])
-            .await
-            .expect("add server relay");
+            .expect("add server");
     }
 
     let (server_proto, _server_shared, _) = make_protocol_with_shared_keyhive(server_kh).await;
@@ -242,7 +231,7 @@ fn bench_synced(c: &mut Criterion, sizes: &[usize]) {
     let mut group = c.benchmark_group("all_agent_events/synced");
     group.sample_size(10);
     eprintln!(
-        "\n=== synced (real peers own public docs + server relay, synced) : cache size scaling ==="
+        "\n=== synced (real peers own docs + server reader, synced) : cache size scaling ==="
     );
     eprintln!("    N | agents | agent_hash_entries | max/agent | events");
     for &n in sizes {
@@ -262,7 +251,6 @@ fn bench_synced(c: &mut Criterion, sizes: &[usize]) {
 
 fn bench_cache(c: &mut Criterion) {
     let sizes = [25usize, 50, 100, 200];
-    bench_shape(c, "public", Shape::Public, &sizes);
     bench_shape(c, "members_k5", Shape::Members(5), &sizes);
     // Dense graph: every agent reads every other doc.
     bench_shape(c, "all_to_all", Shape::AllOthers, &[10usize, 20, 40, 80]);

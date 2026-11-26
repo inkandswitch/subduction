@@ -4,29 +4,26 @@ use alloc::string::String;
 
 use thiserror::Error;
 
-#[cfg(feature = "std")]
 use crate::peer_id::KeyhivePeerId;
 
-/// Errors that can occur during message signing.
-#[cfg(feature = "std")]
+/// Errors that can occur during message signing. `E` is the keyhive's error.
 #[derive(Debug, Error)]
-pub enum SigningError {
-    /// Failed to serialize the message payload.
-    #[error("failed to serialize payload: {0}")]
-    Serialization(String),
-
+pub enum SigningError<E: core::error::Error + 'static> {
     /// The signing operation failed.
     #[error("signing failed")]
-    SigningFailed(#[source] keyhive_crypto::signed::SigningError),
+    SigningFailed(#[source] E),
 }
 
 /// Errors that can occur during message verification.
-#[cfg(feature = "std")]
 #[derive(Debug, Error)]
 pub enum VerificationError {
-    /// Failed to deserialize the signed message.
-    #[error("failed to deserialize signed message: {0}")]
-    Deserialization(String),
+    /// The signed frame is not a keyhive `Signed<Bytes>`.
+    #[error("undecodable signed frame")]
+    SignedFrame(#[source] keyhive_codec::error::DecodeError),
+
+    /// The signed payload is not a protocol message.
+    #[error("undecodable message")]
+    Payload(#[source] WireDecodeError),
 
     /// The signature is invalid.
     #[error("invalid signature")]
@@ -42,17 +39,20 @@ pub enum VerificationError {
     },
 }
 
-/// Errors that can occur during protocol operations.
-#[cfg(feature = "std")]
+/// Errors that can occur during protocol operations. `SendErr` is the
+/// connection's send error and `KeyhiveErr` the keyhive's error.
 #[derive(Debug, Error)]
-pub enum ProtocolError<SendErr: core::error::Error + 'static> {
+pub enum ProtocolError<
+    SendErr: core::error::Error + 'static,
+    KeyhiveErr: core::error::Error + 'static,
+> {
     /// Failed to send a message.
     #[error("send error")]
     Send(#[source] SendErr),
 
     /// Message signing failed.
     #[error("signing error")]
-    Signing(#[from] SigningError),
+    Signing(#[from] SigningError<KeyhiveErr>),
 
     /// Message verification failed.
     #[error("verification error")]
@@ -73,23 +73,46 @@ pub enum ProtocolError<SendErr: core::error::Error + 'static> {
 
     /// Failed to convert peer ID to identifier.
     #[error("failed to convert peer ID")]
-    InvalidIdentifier(#[source] ed25519_dalek::SignatureError),
+    InvalidIdentifier(#[source] keyhive_crypto::identifier::InvalidIdentifier),
+
+    /// A keyhive operation failed.
+    #[error("keyhive operation failed")]
+    Keyhive(#[source] KeyhiveErr),
 
     /// Failed to receive contact card.
     #[error("failed to receive contact card")]
-    ReceiveContactCard(#[source] keyhive_core::principal::individual::ReceivePrekeyOpError),
+    ReceiveContactCard(#[source] KeyhiveErr),
 
-    /// Serialization failed.
-    #[error("serialization error: {0}")]
-    Serialization(String),
+    /// Some received events do not decode. The others were ingested.
+    #[error("{undecodable} of {total} events do not decode")]
+    UndecodableEvents {
+        /// How many events do not decode.
+        undecodable: usize,
 
-    /// Deserialization failed.
-    #[error("deserialization error: {0}")]
-    Deserialization(String),
+        /// How many events were received.
+        total: usize,
+    },
 
     /// A storage operation failed.
     #[error("storage error")]
     Storage(#[from] StorageError),
+}
+
+/// Bytes that are not a keyhive protocol value: a [`Message`], a
+/// [`SignedMessage`], or a [`KeyhivePeerId`] within them.
+///
+/// [`Message`]: crate::Message
+/// [`SignedMessage`]: crate::SignedMessage
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum WireDecodeError {
+    /// The bytes break the canonical codec: too short, an unknown tag, a
+    /// length that overruns the buffer, or trailing bytes.
+    #[error(transparent)]
+    Codec(#[from] sedimentree_core::codec::error::DecodeError),
+
+    /// A peer ID's suffix is not UTF-8.
+    #[error("peer ID suffix is not UTF-8")]
+    Suffix(#[from] core::str::Utf8Error),
 }
 
 /// Errors that can occur during storage operations.
@@ -106,12 +129,4 @@ pub enum StorageError {
     /// Failed to delete data.
     #[error("failed to delete: {0}")]
     Delete(String),
-
-    /// Failed to serialize data.
-    #[error("serialization error: {0}")]
-    Serialization(String),
-
-    /// Failed to deserialize data.
-    #[error("deserialization error: {0}")]
-    Deserialization(String),
 }

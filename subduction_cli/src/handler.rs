@@ -2,18 +2,16 @@
 //!
 //! Dispatches [`CliWireMessage`] variants to the appropriate sub-handler:
 //!
-//! | Variant      | Handler                    |
-//! |--------------|----------------------------|
-//! | `Sync`       | [`SyncHandler`]            |
-//! | `Ephemeral`  | [`EphemeralHandler`]       |
-//! | `Keyhive`    | [`SendableKeyhiveHandler`] |
+//! | Variant      | Handler              |
+//! |--------------|----------------------|
+//! | `Sync`       | [`SyncHandler`]      |
+//! | `Ephemeral`  | [`EphemeralHandler`] |
+//! | `Keyhive`    | [`KeyhiveHandler`]   |
 
 use std::sync::Arc;
 
 use crate::{
-    keyhive::{CliConnKeyhiveAdapter, FsKeyhiveStorage},
-    policy::CliKeyhivePolicyHandle,
-    transport::UnifiedTransport,
+    keyhive::FsKeyhiveStorage, policy::CliKeyhivePolicyHandle, transport::UnifiedTransport,
     wire::CliWireMessage,
 };
 use future_form::Sendable;
@@ -34,7 +32,7 @@ use subduction_crypto::signer::memory::MemorySigner;
 use subduction_ephemeral::{
     clock::std_clock::StdClock, handler::EphemeralHandler, policy::OpenEphemeralPolicy,
 };
-use subduction_keyhive::handler::{SendableKeyhiveHandler, SendableRuntimeProtocol};
+use subduction_keyhive::{handler::KeyhiveHandler, runtime::SendableRuntimeKeyhive};
 use subduction_redb_storage::RedbStorage;
 use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::TokioSpawn};
 
@@ -46,16 +44,16 @@ pub(crate) type CliEphemeralHandler =
     EphemeralHandler<Sendable, CliConn, OpenEphemeralPolicy, StdClock, TokioSpawn>;
 
 /// The concrete keyhive protocol type for the CLI server.
-pub(crate) type CliKeyhiveProtocol =
-    Arc<SendableRuntimeProtocol<CliConnKeyhiveAdapter, FsKeyhiveStorage>>;
-
-/// The concrete keyhive handler type for the CLI server.
-pub(crate) type CliKeyhiveHandler = SendableKeyhiveHandler<
-    CliConnKeyhiveAdapter,
+pub(crate) type CliKeyhiveProtocol = subduction_keyhive::handler::HandlerProtocol<
+    SendableRuntimeKeyhive,
     FsKeyhiveStorage,
     CliConn,
-    fn(Authenticated<CliConn, Sendable>) -> CliConnKeyhiveAdapter,
+    Sendable,
 >;
+
+/// The concrete keyhive handler type for the CLI server.
+pub(crate) type CliKeyhiveHandler =
+    KeyhiveHandler<Sendable, SendableRuntimeKeyhive, FsKeyhiveStorage, CliConn>;
 
 /// Concrete `ListenError` for the CLI handler.
 type CliListenError = ListenError<Sendable, CliStorage, CliConn, CliWireMessage>;

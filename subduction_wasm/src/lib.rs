@@ -33,6 +33,7 @@ pub mod ephemeral;
 pub mod error;
 pub mod factories;
 pub(crate) mod handler;
+pub mod keyhive;
 pub mod memory_signer;
 pub mod policy;
 pub mod remote_heads;

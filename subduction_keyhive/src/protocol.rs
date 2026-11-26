@@ -29,8 +29,7 @@
 //! requesting and sending contact cards before initiating sync.
 
 use alloc::{
-    collections::{BTreeMap, BTreeSet, btree_map::Entry},
-    string::ToString,
+    collections::{BTreeMap, BTreeSet},
     sync::Arc,
     vec,
     vec::Vec,
@@ -38,24 +37,13 @@ use alloc::{
 
 use async_lock::Mutex;
 use dupe::Dupe;
-use keyhive_core::{
-    contact_card::ContactCard,
-    event::{Event, static_event::StaticEvent},
-    keyhive::Keyhive,
-    listener::membership::MembershipListener,
-    principal::{
-        group::membership_operation::MembershipOperation, identifier::Identifier,
-        individual::op::KeyOp, public::Public,
-    },
-    store::ciphertext::{CiphertextStore, CiphertextStoreExt},
-};
-use keyhive_crypto::{
-    content::reference::ContentRef, digest::Digest, signed::Signed,
-    signer::async_signer::AsyncSigner,
-};
-use std::collections::{HashMap, HashSet};
+use keyhive_crypto::identifier::Identifier;
+use sedimentree_core::codec::encode::Encode;
 
 use crate::{
+    access::KeyhiveAccess,
+    all_agent_events::AllAgentEvents,
+    awaiting_confirmation::AwaitingConfirmation,
     cache::PeriodicEventCache,
     collections::{Map, Set},
     connection::KeyhiveConnection,
@@ -65,13 +53,15 @@ use crate::{
     signed_message::SignedMessage,
     storage::{KeyhiveStorage, StorageHash},
     storage_ops,
-    storage_ops::{bincode_deserialize, bincode_serialize},
     syncpoints::SyncpointMap,
 };
 
-/// Shared keyhive instance behind a mutex.
-type SharedKeyhive<Async, Signer, CRef, Plaintext, CipherStore, Listener, Rng> =
-    Arc<Mutex<Keyhive<Async, Signer, CRef, Plaintext, CipherStore, Listener, Rng>>>;
+/// The [`ProtocolError`] of a [`KeyhiveProtocol`] over the keyhive `K` and the
+/// connection `Conn`.
+pub type KeyhiveProtocolError<K, Conn, Async> = ProtocolError<
+    <Conn as KeyhiveConnection<Async>>::SendError,
+    <K as KeyhiveAccess<Async>>::Error,
+>;
 
 /// XOR a set of 32-byte op hashes into a single 32-byte digest.
 ///
@@ -87,30 +77,50 @@ fn pair_set_digest<'a>(hashes: impl IntoIterator<Item = &'a EventHash>) -> Event
     out
 }
 
+/// How [`KeyhiveProtocol::sync_with_peer`] starts a round.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncMode {
+    /// A digest check if an earlier round with the peer left a syncpoint.
+    /// Otherwise, a full sync.
+    Check,
+
+    /// A full sync, comparing every event the two share.
+    Full,
+}
+
+/// The outcome of handling a message, for callers that act on sync progress.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MessageOutcome {
+    /// Sync ops in the message increased keyhive's op count. A contact card in
+    /// the message is not counted.
+    pub ingested: bool,
+
+    /// The sender showed it ingested events this side sent it, by confirming
+    /// a round or, as requester, by answering this side's `SyncResponse` with
+    /// `SyncOps`. Rounds in which this side sent no events are not reported
+    /// and neither is a sync check that determines the two sides are in sync.
+    pub confirmed: bool,
+}
+
 /// Keyhive sync protocol handler.
 ///
 /// Manages peer connections and implements the keyhive sync protocol for
-/// reconciling operations between peers. All keyhive access is serialized
-/// through an `Arc<Mutex<Keyhive>>`.
-pub struct KeyhiveProtocol<Signer, CRef, Plaintext, CipherStore, Listener, Rng, Conn, Store, Async>
+/// reconciling operations between peers. Keyhive is shared as an
+/// `Arc<Mutex<K>>`, but some calls clone `K` and run after the lock is
+/// released, so clones of `K` must share one keyhive's state.
+pub struct KeyhiveProtocol<K, Conn, Store, Async>
 where
-    Signer: AsyncSigner<Async> + Clone,
-    CRef: ContentRef,
-    Plaintext: for<'de> serde::Deserialize<'de>,
-    CipherStore: CiphertextStore<Async, CRef, Plaintext>
-        + CiphertextStoreExt<Async, CRef, Plaintext>
-        + Clone,
-    Listener: MembershipListener<Async, Signer, CRef>,
-    Rng: rand::CryptoRng + rand::RngCore,
+    K: KeyhiveAccess<Async>,
     Conn: KeyhiveConnection<Async>,
     Store: KeyhiveStorage<Async>,
     Async: future_form::FutureForm,
 {
-    keyhive: SharedKeyhive<Async, Signer, CRef, Plaintext, CipherStore, Listener, Rng>,
+    keyhive: Arc<Mutex<K>>,
     storage: Store,
     peer_id: KeyhivePeerId,
     peers: Mutex<Map<KeyhivePeerId, Conn>>,
-    contact_card: ContactCard,
+    /// The `KH` frame of the local peer's contact card.
+    contact_card: Vec<u8>,
     archive_config: Option<(usize, StorageHash)>,
     /// Whether to reload and re-ingest the store when events remain pending
     /// after ingestion.
@@ -118,21 +128,14 @@ where
     /// False by default. Enable it with [`Self::with_storage_recovery`].
     attempt_storage_recovery: bool,
     syncpoints: Mutex<SyncpointMap>,
+    awaiting_confirmation: Mutex<AwaitingConfirmation>,
     cache: Mutex<PeriodicEventCache>,
     _marker: core::marker::PhantomData<Async>,
 }
 
-impl<Signer, CRef, Plaintext, CipherStore, Listener, Rng, Conn, Store, Async> core::fmt::Debug
-    for KeyhiveProtocol<Signer, CRef, Plaintext, CipherStore, Listener, Rng, Conn, Store, Async>
+impl<K, Conn, Store, Async> core::fmt::Debug for KeyhiveProtocol<K, Conn, Store, Async>
 where
-    Signer: AsyncSigner<Async> + Clone,
-    CRef: ContentRef,
-    Plaintext: for<'de> serde::Deserialize<'de>,
-    CipherStore: CiphertextStore<Async, CRef, Plaintext>
-        + CiphertextStoreExt<Async, CRef, Plaintext>
-        + Clone,
-    Listener: MembershipListener<Async, Signer, CRef>,
-    Rng: rand::CryptoRng + rand::RngCore,
+    K: KeyhiveAccess<Async>,
     Conn: KeyhiveConnection<Async>,
     Store: KeyhiveStorage<Async>,
     Async: future_form::FutureForm,
@@ -144,30 +147,22 @@ where
     }
 }
 
-impl<Signer, CRef, Plaintext, CipherStore, Listener, Rng, Conn, Store, Async>
-    KeyhiveProtocol<Signer, CRef, Plaintext, CipherStore, Listener, Rng, Conn, Store, Async>
+impl<K, Conn, Store, Async> KeyhiveProtocol<K, Conn, Store, Async>
 where
-    Signer: AsyncSigner<Async> + Clone,
-    CRef: ContentRef + serde::de::DeserializeOwned,
-    Plaintext: for<'de> serde::Deserialize<'de>,
-    CipherStore: CiphertextStore<Async, CRef, Plaintext>
-        + CiphertextStoreExt<Async, CRef, Plaintext>
-        + Clone,
-    Listener: MembershipListener<Async, Signer, CRef>,
-    Rng: rand::CryptoRng + rand::RngCore,
+    K: KeyhiveAccess<Async> + Dupe,
     Conn: KeyhiveConnection<Async>,
     Conn::SendError: 'static,
-    Conn::DisconnectError: 'static,
     Store: KeyhiveStorage<Async>,
     Async: future_form::FutureForm,
-    Keyhive<Async, Signer, CRef, Plaintext, CipherStore, Listener, Rng>: Dupe,
 {
     /// Create a new protocol handler.
+    ///
+    /// `contact_card` is the `KH` frame of the local peer's contact card.
     pub fn new(
-        keyhive: SharedKeyhive<Async, Signer, CRef, Plaintext, CipherStore, Listener, Rng>,
+        keyhive: Arc<Mutex<K>>,
         storage: Store,
         peer_id: KeyhivePeerId,
-        contact_card: ContactCard,
+        contact_card: Vec<u8>,
     ) -> Self {
         Self {
             keyhive,
@@ -178,6 +173,7 @@ where
             archive_config: None,
             attempt_storage_recovery: false,
             syncpoints: Mutex::new(SyncpointMap::new()),
+            awaiting_confirmation: Mutex::new(AwaitingConfirmation::new()),
             cache: Mutex::new(PeriodicEventCache::new()),
             _marker: core::marker::PhantomData,
         }
@@ -207,9 +203,11 @@ where
         self.peers.lock().await.insert(peer_id, conn);
     }
 
-    /// Unregister a peer connection and drop its syncpoint.
+    /// Unregister a peer connection and drop its syncpoint and its rounds
+    /// awaiting confirmation.
     pub async fn remove_peer(&self, peer_id: &KeyhivePeerId) {
         self.syncpoints.lock().await.remove(peer_id);
+        self.awaiting_confirmation.lock().await.remove(peer_id);
         self.peers.lock().await.remove(peer_id);
     }
 
@@ -224,19 +222,29 @@ where
         self.peer_id.clone()
     }
 
+    /// The `KH` frame of the local peer's contact card.
+    #[must_use]
+    pub fn contact_card(&self) -> &[u8] {
+        &self.contact_card
+    }
+
     /// Whether the provided peer is registered.
     pub async fn has_peer(&self, peer_id: &KeyhivePeerId) -> bool {
         self.peers.lock().await.contains_key(peer_id)
     }
 
     /// Sum of all keyhive op counters.
-    pub async fn total_ops(&self) -> u64 {
-        let stats = self.keyhive.lock().await.stats().await;
-        stats.delegations
-            + stats.revocations
-            + stats.prekeys_expanded
-            + stats.prekey_rotations
-            + stats.cgka_operations
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::Keyhive`] if keyhive cannot count its ops.
+    pub async fn total_ops(&self) -> Result<u64, KeyhiveProtocolError<K, Conn, Async>> {
+        self.keyhive
+            .lock()
+            .await
+            .total_ops()
+            .await
+            .map_err(ProtocolError::Keyhive)
     }
 
     /// Serialized events reachable by `peer_id`.
@@ -244,23 +252,39 @@ where
     /// Values are [`Arc`]-shared.
     ///
     /// # Errors
-    /// Returns [`ProtocolError`] on serialization failure.
+    ///
+    /// Returns [`ProtocolError`] if `peer_id` is not a valid identifier or
+    /// if keyhive cannot look up the agent or list its events.
     pub async fn get_events_for_agent(
         &self,
         peer_id: &KeyhivePeerId,
-    ) -> Result<Option<AgentHashMap>, ProtocolError<Conn::SendError>> {
+    ) -> Result<Option<AgentHashMap>, KeyhiveProtocolError<K, Conn, Async>> {
         let id = peer_id
             .to_identifier()
             .map_err(ProtocolError::InvalidIdentifier)?;
         let events = {
             let keyhive = self.keyhive.lock().await;
-            if keyhive.get_agent(id).await.is_none() {
+            if !keyhive
+                .is_known_agent(id)
+                .await
+                .map_err(ProtocolError::Keyhive)?
+            {
                 return Ok(None);
             }
-            sync_events_for_agent(&keyhive, id).await
+            keyhive
+                .events_for_agent(id, None)
+                .await
+                .map_err(ProtocolError::Keyhive)?
         };
 
-        collect_serialized_events(events).map(Some)
+        // Shared, so the periodic cache and every served response reference one
+        // copy of each event's bytes.
+        Ok(Some(
+            events
+                .into_iter()
+                .map(|(h, bytes)| (h, Arc::from(bytes)))
+                .collect(),
+        ))
     }
 
     /// Bulk snapshot of every agent's reachable events, deduplicated.
@@ -270,128 +294,35 @@ where
     /// has them cached).
     ///
     /// # Errors
-    /// Returns [`ProtocolError`] on serialization failure.
+    /// Returns [`ProtocolError::Keyhive`] if keyhive cannot list its events.
     #[allow(clippy::too_many_lines)]
     pub async fn all_agent_events(
         &self,
         skip_serialization: &BTreeSet<EventHash>,
-    ) -> Result<crate::all_agent_events::AllAgentEvents, ProtocolError<Conn::SendError>> {
+    ) -> Result<AllAgentEvents, KeyhiveProtocolError<K, Conn, Async>> {
         let keyhive = { self.keyhive.lock().await.dupe() };
 
-        let (all_membership, all_prekey, all_cgka) = {
-            let all_membership = keyhive.membership_ops_for_all_agents().await;
-            let all_prekey = keyhive.reachable_prekey_ops_for_all_agents().await;
-            let all_cgka = keyhive.cgka_ops_for_all_agents().await;
-            (all_membership, all_prekey, all_cgka)
-        };
+        // Keyhive computes the per-agent event sets itself, including the
+        // explanations a revoked member is sent. It leaves out the events
+        // whose hashes the caller already has cached.
+        let all = keyhive
+            .all_agent_events(skip_serialization)
+            .await
+            .map_err(ProtocolError::Keyhive)?;
 
-        let mut event_data: BTreeMap<EventHash, Arc<[u8]>> = BTreeMap::new();
+        let event_data: BTreeMap<EventHash, Arc<[u8]>> = all
+            .events
+            .into_iter()
+            .map(|(h, bytes)| (h, Arc::from(bytes)))
+            .collect();
 
-        // Phase 1: serialize every distinct op once, skipping hashes
-        // the caller already has cached.
-        let mut membership_source_hashes: BTreeMap<Identifier, Vec<EventHash>> = BTreeMap::new();
-        let mut delegate_ids_per_source: BTreeMap<Identifier, Vec<Identifier>> = BTreeMap::new();
-        for (source_id, source_ops) in &all_membership.ops {
-            let mut hashes = Vec::with_capacity(source_ops.len());
-            let mut delegates = Vec::new();
-            for (digest, op) in source_ops {
-                let h = digest_to_bytes(digest);
-                hashes.push(h);
-                if let MembershipOperation::Delegation(dlg) = op {
-                    delegates.push(dlg.payload.delegate().id());
-                }
-                if !skip_serialization.contains(&h)
-                    && let Entry::Vacant(e) = event_data.entry(h)
-                {
-                    let event: Event<Async, Signer, CRef, Listener> = op.clone().into();
-                    let static_event = StaticEvent::from(event);
-                    e.insert(serialize_event(&static_event)?);
-                }
-            }
-            membership_source_hashes.insert(*source_id, hashes);
-            if !delegates.is_empty() {
-                delegate_ids_per_source.insert(*source_id, delegates);
-            }
-        }
+        let agent_hashes: BTreeMap<KeyhivePeerId, BTreeSet<EventHash>> = all
+            .agent_hashes
+            .into_iter()
+            .map(|(agent, hashes)| (KeyhivePeerId::from_bytes(agent), hashes))
+            .collect();
 
-        let mut prekey_source_hashes: BTreeMap<Identifier, Vec<EventHash>> = BTreeMap::new();
-        for (source_id, key_ops) in all_prekey.ops {
-            let events = key_ops
-                .iter()
-                .map(|op| -> Event<Async, Signer, CRef, Listener> {
-                    Event::from(op.as_ref().clone())
-                });
-            prekey_source_hashes.insert(
-                source_id,
-                hash_and_insert_events(&mut event_data, events, skip_serialization)?,
-            );
-        }
-
-        let mut cgka_source_hashes: BTreeMap<Identifier, Vec<EventHash>> = BTreeMap::new();
-        for (source_id, cgka_ops) in &all_cgka.ops {
-            let events = cgka_ops
-                .iter()
-                .map(|op| -> Event<Async, Signer, CRef, Listener> { Event::from(op.clone()) });
-            cgka_source_hashes.insert(
-                *source_id,
-                hash_and_insert_events(&mut event_data, events, skip_serialization)?,
-            );
-        }
-
-        // Phase 2: union of all agent IDs across the three indices.
-        let mut all_agent_ids: BTreeSet<Identifier> =
-            all_membership.index.keys().copied().collect();
-        all_agent_ids.extend(all_prekey.index.keys().copied());
-        all_agent_ids.extend(all_cgka.index.keys().copied());
-
-        // Phase 3: roll source-keyed hashes up to per-agent sets,
-        // including prekey ops for revoked delegates referenced by
-        // membership delegations.
-        let mut source_delegate_prekeys: BTreeMap<Identifier, BTreeSet<EventHash>> =
-            BTreeMap::new();
-        for (source_id, delegates) in &delegate_ids_per_source {
-            let mut combined = BTreeSet::new();
-            for delegate_id in delegates {
-                if let Some(ph) = prekey_source_hashes.get(delegate_id) {
-                    combined.extend(ph);
-                }
-            }
-            source_delegate_prekeys.insert(*source_id, combined);
-        }
-
-        let mut agent_hashes: BTreeMap<KeyhivePeerId, BTreeSet<EventHash>> = BTreeMap::new();
-        for agent_id in &all_agent_ids {
-            let mut hash_set: BTreeSet<EventHash> = BTreeSet::new();
-            extend_from_index(
-                &mut hash_set,
-                &all_membership.index,
-                &membership_source_hashes,
-                agent_id,
-            );
-            extend_from_index(
-                &mut hash_set,
-                &all_prekey.index,
-                &prekey_source_hashes,
-                agent_id,
-            );
-            extend_from_index(
-                &mut hash_set,
-                &all_cgka.index,
-                &cgka_source_hashes,
-                agent_id,
-            );
-            if let Some(sources) = all_membership.index.get(agent_id) {
-                for source in sources {
-                    if let Some(delegate_hashes) = source_delegate_prekeys.get(source) {
-                        hash_set.extend(delegate_hashes);
-                    }
-                }
-            }
-            let peer = KeyhivePeerId::from_identifier(agent_id);
-            agent_hashes.insert(peer, hash_set);
-        }
-
-        Ok(crate::all_agent_events::AllAgentEvents {
+        Ok(AllAgentEvents {
             agent_hashes,
             event_data,
         })
@@ -410,7 +341,7 @@ where
     pub async fn sync_keyhive(
         &self,
         target: Option<&KeyhivePeerId>,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
         let peer_ids = match target {
             Some(t) => vec![t.clone()],
             None => self.peer_ids().await,
@@ -489,7 +420,7 @@ where
         &self,
         target: &KeyhivePeerId,
         our_syncpoint_for_target: u64,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
         let (our_total, our_digest) = self.compute_total_and_digest_for_peer(target).await?;
         let msg = Message::SyncCheck {
             sender_id: self.peer_id.clone(),
@@ -508,7 +439,7 @@ where
         sender_syncpoint: u64,
         sender_digest: EventHash,
         local_syncpoint_for_sender: u64,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
         let (our_total, our_digest) = self.compute_total_and_digest_for_peer(peer).await?;
 
         let digests_match = sender_digest == our_digest;
@@ -548,14 +479,15 @@ where
     /// # Errors
     ///
     /// Returns [`ProtocolError`] if signature verification, contact card
-    /// ingestion, or message handling fails.
+    /// ingestion, or message handling fails. Events can already be ingested
+    /// when an error is returned, e.g., when the reply cannot be sent.
     #[tracing::instrument(name = "keyhive_handle_message", level = "debug", skip_all, fields(peer = %from))]
     pub async fn handle_message(
         &self,
         from: &KeyhivePeerId,
         signed_msg: SignedMessage,
         conn: Option<Conn>,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<MessageOutcome, KeyhiveProtocolError<K, Conn, Async>> {
         let cached_sender_pair = self.cached_events_for_pair_with_peer(from).await;
         let verified = signed_msg.verify(from)?;
 
@@ -563,8 +495,7 @@ where
             self.ingest_contact_card(contact_card).await?;
         }
 
-        let message: Message = cbor_deserialize(&verified.payload)
-            .map_err(|e| VerificationError::Deserialization(e.to_string()))?;
+        let message = Message::try_decode(&verified.payload).map_err(VerificationError::Payload)?;
 
         // Reject messages where the inner sender_id doesn't match the signer.
         if !message.sender_id().same_identity(&verified.sender_id) {
@@ -576,17 +507,23 @@ where
         }
 
         match &message {
-            Message::SyncRequest { .. } => {
-                self.handle_sync_request(message, cached_sender_pair.as_deref())
-                    .await
-            }
+            Message::SyncRequest { .. } => self
+                .handle_sync_request(message, cached_sender_pair.as_deref())
+                .await
+                .map(|()| MessageOutcome::default()),
             Message::SyncResponse { .. } => {
                 self.handle_sync_response(message, cached_sender_pair.as_deref())
                     .await
             }
             Message::SyncOps { .. } => self.handle_sync_ops(message).await,
-            Message::RequestContactCard { .. } => self.handle_request_contact_card(message).await,
-            Message::MissingContactCard { .. } => self.handle_missing_contact_card(message).await,
+            Message::RequestContactCard { .. } => self
+                .handle_request_contact_card(message)
+                .await
+                .map(|()| MessageOutcome::default()),
+            Message::MissingContactCard { .. } => self
+                .handle_missing_contact_card(message)
+                .await
+                .map(|()| MessageOutcome::default()),
             Message::SyncCheck {
                 sender_id,
                 sender_total,
@@ -609,6 +546,7 @@ where
                     local_syncpoint_for_sender,
                 )
                 .await
+                .map(|()| MessageOutcome::default())
             }
             Message::SyncConfirmation {
                 sender_id,
@@ -619,7 +557,11 @@ where
                     .lock()
                     .await
                     .set(sender_id.clone(), *confirmer_total);
-                Ok(())
+                let confirmed = self.awaiting_confirmation.lock().await.end_round(sender_id);
+                Ok(MessageOutcome {
+                    ingested: false,
+                    confirmed,
+                })
             }
         }
     }
@@ -629,7 +571,7 @@ where
         &self,
         message: Message,
         cached_sender_pair: Option<&AgentHashMap>,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
         let Message::SyncRequest {
             sender_id,
             found: peer_found,
@@ -700,6 +642,7 @@ where
             "sending sync response"
         );
 
+        let sends_events = !found_ops.is_empty();
         let response = Message::SyncResponse {
             sender_id: self.peer_id.clone(),
             target_id: sender_id.clone(),
@@ -709,11 +652,30 @@ where
             sync_requester_total,
         };
 
-        self.sign_and_send(&sender_id, response, false).await?;
-        Ok(())
+        if sends_events {
+            self.send_events(&sender_id, response).await
+        } else {
+            self.sign_and_send(&sender_id, response, false).await
+        }
     }
 
-    /// Handle a `SyncResponse`: ingest events we received and send any
+    async fn send_events(
+        &self,
+        peer: &KeyhivePeerId,
+        message: Message,
+    ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
+        self.awaiting_confirmation
+            .lock()
+            .await
+            .record_round(peer.clone());
+        let sent = self.sign_and_send(peer, message, false).await;
+        if sent.is_err() {
+            self.awaiting_confirmation.lock().await.end_round(peer);
+        }
+        sent
+    }
+
+    /// Handle a `SyncResponse`, ingest events we received, and send any
     /// requested ops back.
     ///
     /// If ops are sent back, the other side will confirm in `handle_sync_ops`.
@@ -722,7 +684,7 @@ where
         &self,
         message: Message,
         cached_sender_pair: Option<&AgentHashMap>,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<MessageOutcome, KeyhiveProtocolError<K, Conn, Async>> {
         let Message::SyncResponse {
             sender_id,
             requested: requested_hashes,
@@ -745,15 +707,11 @@ where
             "handling sync response"
         );
 
-        let total_before = self.total_ops().await;
-
-        let ingested = !found_events.is_empty();
-        if ingested {
-            self.ingest_events(&found_events).await?;
-        }
-
-        let total_after = self.total_ops().await;
-        let advanced = total_after != total_before;
+        let advanced = self.ingest_and_compare(&found_events).await?;
+        let outcome = MessageOutcome {
+            ingested: advanced,
+            confirmed: false,
+        };
 
         // Send requested ops.
         if !requested_hashes.is_empty() {
@@ -776,17 +734,17 @@ where
                     sync_requester_total,
                 };
 
-                self.sign_and_send(&sender_id, msg, false).await?;
+                self.send_events(&sender_id, msg).await?;
                 // The other side will send a confirmation after ingesting.
                 if advanced {
                     self.syncpoints.lock().await.invalidate_all();
                 }
-                return Ok(());
+                return Ok(outcome);
             }
         }
 
         // No ops to send back. Send confirmation and establish syncpoint.
-        // Our total is sync_requester_total (we are the requester).
+        // Our total is `sync_requester_total` (we are the requester).
         let confirmation = Message::SyncConfirmation {
             sender_id: self.peer_id.clone(),
             target_id: sender_id.clone(),
@@ -802,14 +760,17 @@ where
             map.set(sender_id, sync_responder_total);
         }
 
-        Ok(())
+        Ok(outcome)
     }
 
-    /// Handle `SyncOps`: ingest received operations and send confirmation.
+    /// Handle `SyncOps`, ingest received operations, and send confirmation.
+    ///
+    /// The requester sends `SyncOps` only after ingesting this side's
+    /// `SyncResponse`, so it also confirms that response's round.
     async fn handle_sync_ops(
         &self,
         message: Message,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<MessageOutcome, KeyhiveProtocolError<K, Conn, Async>> {
         let Message::SyncOps {
             sender_id,
             ops,
@@ -830,17 +791,19 @@ where
             "handling sync ops"
         );
 
-        let total_before = self.total_ops().await;
-
-        if !ops.is_empty() {
-            self.ingest_events(&ops).await?;
-        }
-
-        let total_after = self.total_ops().await;
-        let advanced = total_after != total_before;
+        let confirmed = self
+            .awaiting_confirmation
+            .lock()
+            .await
+            .end_round(&sender_id);
+        let advanced = self.ingest_and_compare(&ops).await?;
+        let outcome = MessageOutcome {
+            ingested: advanced,
+            confirmed,
+        };
 
         // Send confirmation after ingesting ops.
-        // Our total is sync_responder_total (we are the responder).
+        // Our total is `sync_responder_total` (we are the responder).
         let confirmation = Message::SyncConfirmation {
             sender_id: self.peer_id.clone(),
             target_id: sender_id.clone(),
@@ -856,15 +819,15 @@ where
             map.set(sender_id, sync_requester_total);
         }
 
-        Ok(())
+        Ok(outcome)
     }
 
-    /// Handle `RequestContactCard`: send our contact card to the requesting
+    /// Handle `RequestContactCard` and send our contact card to the requesting
     /// peer.
     async fn handle_request_contact_card(
         &self,
         message: Message,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
         let Message::RequestContactCard { sender_id, .. } = message else {
             return Err(ProtocolError::UnexpectedMessageType {
                 expected: "RequestContactCard",
@@ -886,12 +849,12 @@ where
         Ok(())
     }
 
-    /// Handle `MissingContactCard`: the contact card was already ingested in
+    /// Handle `MissingContactCard`. The contact card was already ingested in
     /// `handle_message`, so now we trigger a sync with the peer.
     async fn handle_missing_contact_card(
         &self,
         message: Message,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
         let Message::MissingContactCard { sender_id, .. } = message else {
             return Err(ProtocolError::UnexpectedMessageType {
                 expected: "MissingContactCard",
@@ -908,27 +871,21 @@ where
         Ok(())
     }
 
-    /// CBOR-serialize a message, sign it, and wrap it as a [`SignedMessage`].
+    /// Encode a message, sign it, and wrap it as a [`SignedMessage`].
     pub(crate) async fn build_signed_message(
         &self,
         message: Message,
         include_contact_card: bool,
-    ) -> Result<SignedMessage, ProtocolError<Conn::SendError>> {
-        let msg_bytes =
-            cbor_serialize(&message).map_err(|e| SigningError::Serialization(e.to_string()))?;
+    ) -> Result<SignedMessage, KeyhiveProtocolError<K, Conn, Async>> {
+        let msg_bytes = message.encode();
 
-        let signed: Signed<Vec<u8>> = {
+        let signed_bytes = {
             let keyhive = { self.keyhive.lock().await.dupe() };
             keyhive
-                .try_sign(msg_bytes)
+                .sign_bytes(msg_bytes)
                 .await
                 .map_err(SigningError::SigningFailed)?
         };
-
-        // Wire format: bincode `Signed<Vec<u8>>` (matches `Signed.toBytes()`
-        // from keyhive-wasm; see `keyhive_wasm/src/js/signed.rs`).
-        let signed_bytes =
-            bincode::serialize(&signed).map_err(|e| SigningError::Serialization(e.to_string()))?;
 
         Ok(if include_contact_card {
             SignedMessage::with_contact_card(signed_bytes, self.contact_card.clone())
@@ -943,7 +900,7 @@ where
         target_peer_id: &KeyhivePeerId,
         message: Message,
         include_contact_card: bool,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+    ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
         let signed_message = self
             .build_signed_message(message, include_contact_card)
             .await?;
@@ -965,7 +922,7 @@ where
     async fn get_events_for_peer_pair(
         &self,
         peer_id: &KeyhivePeerId,
-    ) -> Result<Option<AgentHashMap>, ProtocolError<Conn::SendError>> {
+    ) -> Result<Option<AgentHashMap>, KeyhiveProtocolError<K, Conn, Async>> {
         let our_id = self
             .peer_id
             .to_identifier()
@@ -974,44 +931,39 @@ where
             .to_identifier()
             .map_err(ProtocolError::InvalidIdentifier)?;
 
-        let (our_events, their_events, public_events) = {
+        let shared = {
             let keyhive = { self.keyhive.lock().await.dupe() };
 
-            if keyhive.get_agent(our_id).await.is_none()
-                || keyhive.get_agent(their_id).await.is_none()
+            if !keyhive
+                .is_known_agent(our_id)
+                .await
+                .map_err(ProtocolError::Keyhive)?
+                || !keyhive
+                    .is_known_agent(their_id)
+                    .await
+                    .map_err(ProtocolError::Keyhive)?
             {
                 return Ok(None);
             }
 
-            let our_events = sync_events_for_agent(&keyhive, our_id).await;
-            let their_events = sync_events_for_agent(&keyhive, their_id).await;
-            let public_events: Map<Digest<StaticEvent<CRef>>, StaticEvent<CRef>> =
-                if keyhive.get_agent(Public.id()).await.is_some() {
-                    sync_events_for_agent(&keyhive, Public.id()).await
-                } else {
-                    Map::new()
-                };
-            (our_events, their_events, public_events)
+            // Only the events both are sent are returned, so an implementation
+            // need not encode or copy the rest.
+            let their_hashes = keyhive
+                .event_hashes_for_agent(their_id)
+                .await
+                .map_err(ProtocolError::Keyhive)?;
+            keyhive
+                .events_for_agent(our_id, Some(&their_hashes))
+                .await
+                .map_err(ProtocolError::Keyhive)?
         };
 
-        let mut result = AgentHashMap::new();
-        for (digest, event) in public_events {
-            let h = digest_to_bytes(&digest);
-            let pair = serialize_event(&event)?;
-            result.insert(h, pair);
-        }
-
-        for (digest, event) in our_events {
-            if their_events.contains_key(&digest) {
-                let h = digest_to_bytes(&digest);
-                if let Entry::Vacant(entry) = result.entry(h) {
-                    let pair = serialize_event(&event)?;
-                    entry.insert(pair);
-                }
-            }
-        }
-
-        Ok(Some(result))
+        Ok(Some(
+            shared
+                .into_iter()
+                .map(|(h, bytes)| (h, Arc::from(bytes)))
+                .collect(),
+        ))
     }
 
     /// Get pending event hashes as `Vec<EventHash>`.
@@ -1021,10 +973,12 @@ where
     /// Returns [`ProtocolError`] if the keyhive lock or hash computation fails.
     pub async fn get_pending_hashes(
         &self,
-    ) -> Result<Vec<EventHash>, ProtocolError<Conn::SendError>> {
+    ) -> Result<Vec<EventHash>, KeyhiveProtocolError<K, Conn, Async>> {
         let keyhive = self.keyhive.lock().await;
-        let digests = keyhive.pending_event_hashes().await;
-        Ok(digests.into_iter().map(|d| digest_to_bytes(&d)).collect())
+        keyhive
+            .pending_event_hashes()
+            .await
+            .map_err(ProtocolError::Keyhive)
     }
 
     /// Fetch serialized event bytes for the given hashes.
@@ -1033,7 +987,7 @@ where
         sender_id: &KeyhivePeerId,
         requested: &[EventHash],
         cached_pair: Option<&AgentHashMap>,
-    ) -> Result<Vec<Arc<[u8]>>, ProtocolError<Conn::SendError>> {
+    ) -> Result<Vec<Arc<[u8]>>, KeyhiveProtocolError<K, Conn, Async>> {
         let computed;
         let pair = if let Some(c) = cached_pair {
             c
@@ -1054,44 +1008,63 @@ where
         Ok(result)
     }
 
+    /// Ingest `events`, returning whether keyhive's op count changed.
+    async fn ingest_and_compare<B: AsRef<[u8]>>(
+        &self,
+        events: &[B],
+    ) -> Result<bool, KeyhiveProtocolError<K, Conn, Async>> {
+        if events.is_empty() {
+            return Ok(false);
+        }
+        let total_before = self.total_ops().await?;
+        self.ingest_events(events).await?;
+        Ok(self.total_ops().await? != total_before)
+    }
+
     /// Ingest received event bytes into keyhive and persist them to storage.
     ///
     /// If some events remain pending (missing dependencies), attempts recovery
-    /// by loading from storage and retrying.
+    /// by loading from storage and retrying. If an event does not decode, the
+    /// call fails. When keyhive reports such an event instead of failing on
+    /// it, the other events are ingested and persisted before the call fails.
     async fn ingest_events<B: AsRef<[u8]>>(
         &self,
         event_bytes_list: &[B],
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
-        let mut events: Vec<StaticEvent<CRef>> = Vec::with_capacity(event_bytes_list.len());
-        for (idx, item) in event_bytes_list.iter().enumerate() {
-            let bytes = item.as_ref();
-            match bincode_deserialize::<StaticEvent<CRef>>(bytes) {
-                Ok(ev) => events.push(ev),
-                Err(e) => {
-                    let head_len = core::cmp::min(bytes.len(), 96);
-                    let mut head_hex = alloc::string::String::with_capacity(head_len * 2);
-                    for b in bytes.get(..head_len).unwrap_or(bytes) {
-                        use core::fmt::Write;
-                        let _ = write!(head_hex, "{b:02x}");
-                    }
-                    tracing::warn!(
-                        index = idx,
-                        total = event_bytes_list.len(),
-                        len = bytes.len(),
-                        head = %head_hex,
-                        error = ?e,
-                        "failed to deserialize incoming event"
-                    );
-                    return Err(ProtocolError::Deserialization(e.to_string()));
-                }
-            }
-        }
-
-        let pending = {
+    ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
+        let not_ingested = {
             let keyhive = self.keyhive.lock().await;
-            keyhive.ingest_unsorted_static_events(events).await
+            keyhive
+                .ingest_events(
+                    event_bytes_list
+                        .iter()
+                        .map(|b| b.as_ref().to_vec())
+                        .collect(),
+                )
+                .await
+                .map_err(ProtocolError::Keyhive)?
         };
+        for bytes in &not_ingested.undecodable {
+            let head_len = core::cmp::min(bytes.len(), 96);
+            let mut head_hex = alloc::string::String::with_capacity(head_len * 2);
+            for b in bytes.get(..head_len).unwrap_or(bytes) {
+                use core::fmt::Write;
+                let _ = write!(head_hex, "{b:02x}");
+            }
+            tracing::warn!(
+                total = event_bytes_list.len(),
+                len = bytes.len(),
+                head = %head_hex,
+                "failed to deserialize incoming event"
+            );
+        }
+        let undecodable: Set<&[u8]> = not_ingested.undecodable.iter().map(Vec::as_slice).collect();
+        let decoded: Vec<&[u8]> = event_bytes_list
+            .iter()
+            .map(AsRef::as_ref)
+            .filter(|bytes| !undecodable.contains(bytes))
+            .collect();
 
+        let pending = not_ingested.pending;
         if !pending.is_empty() {
             if self.attempt_storage_recovery {
                 tracing::warn!(
@@ -1099,7 +1072,7 @@ where
                     "events pending after ingestion, attempting storage recovery"
                 );
 
-                if let Err(e) = self.try_storage_recovery(event_bytes_list).await {
+                if let Err(e) = self.try_storage_recovery(&decoded).await {
                     tracing::warn!(
                         error = %e,
                         "storage recovery failed"
@@ -1115,52 +1088,77 @@ where
 
         let use_archive = self
             .archive_config
-            .filter(|(threshold, _)| event_bytes_list.len() > *threshold);
+            .filter(|(threshold, _)| decoded.len() > *threshold);
 
-        if let Some((_, storage_id)) = use_archive {
-            let archive = {
-                let keyhive = self.keyhive.lock().await;
-                keyhive.into_archive().await
-            };
-            storage_ops::save_keyhive_archive(&self.storage, storage_id, &archive).await?;
-        } else {
-            for event_bytes in event_bytes_list {
+        // The events are already applied in memory, so persist them one way or
+        // another: an archive when the batch is large, otherwise (or if the
+        // archive cannot be exported or saved) each event's bytes.
+        let archived = match use_archive {
+            Some((_, storage_id)) => self.save_archive(storage_id).await,
+            None => false,
+        };
+
+        if !archived {
+            for event_bytes in &decoded {
                 if let Err(e) =
-                    storage_ops::save_event_bytes(&self.storage, event_bytes.as_ref().to_vec())
-                        .await
+                    storage_ops::save_event_bytes(&self.storage, event_bytes.to_vec()).await
                 {
                     tracing::warn!(error = %e, "failed to persist event to storage");
                 }
             }
         }
 
-        Ok(())
+        if undecodable.is_empty() {
+            Ok(())
+        } else {
+            Err(ProtocolError::UndecodableEvents {
+                undecodable: not_ingested.undecodable.len(),
+                total: event_bytes_list.len(),
+            })
+        }
+    }
+
+    /// Export the Keyhive as an archive and save it at `storage_id`.
+    ///
+    /// Returns whether it was saved. A failure is logged rather than
+    /// returned, so the caller can persist the events another way.
+    ///
+    /// The Keyhive stays locked until the save finishes, as in
+    /// [`Self::compact`], so archives are saved in the order they were
+    /// exported. Otherwise an older export could be saved over a newer one,
+    /// and the events only the newer one holds (or that compaction deleted
+    /// after folding them into it) would be lost.
+    async fn save_archive(&self, storage_id: StorageHash) -> bool {
+        let keyhive = self.keyhive.lock().await;
+        let archive = match keyhive.to_archive().await {
+            Ok(archive) => archive,
+            Err(error) => {
+                tracing::warn!(%error, "failed to export keyhive archive; saving events individually");
+                return false;
+            }
+        };
+        match storage_ops::replace_keyhive_archive(&*keyhive, &self.storage, storage_id, archive)
+            .await
+        {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(%error, "failed to save keyhive archive; saving events individually");
+                false
+            }
+        }
     }
 
     /// Attempt to recover by ingesting from storage and retrying.
-    async fn try_storage_recovery<B: AsRef<[u8]>>(
-        &self,
-        event_bytes_list: &[B],
-    ) -> Result<(), StorageError> {
-        {
-            let keyhive = self.keyhive.lock().await;
-            storage_ops::ingest_from_storage(&keyhive, &self.storage).await?;
-        }
+    async fn try_storage_recovery(&self, event_bytes_list: &[&[u8]]) -> Result<(), StorageError> {
+        let keyhive = self.keyhive.lock().await;
+        storage_ops::ingest_from_storage(&*keyhive, &self.storage).await?;
 
-        let events: Vec<StaticEvent<CRef>> = event_bytes_list
-            .iter()
-            .filter_map(|bytes| match bincode_deserialize(bytes.as_ref()) {
-                Ok(ev) => Some(ev),
-                Err(e) => {
-                    tracing::warn!(error = %e, "storage recovery: failed to deserialize event");
-                    None
-                }
-            })
-            .collect();
-
-        if !events.is_empty() {
-            let keyhive = self.keyhive.lock().await;
-            let retry_pending = keyhive.ingest_unsorted_static_events(events).await;
+        if !event_bytes_list.is_empty() {
+            let retry_pending = keyhive
+                .ingest_events(event_bytes_list.iter().map(|b| b.to_vec()).collect())
+                .await
+                .map_err(storage_ops::event_ingestion_error)?
+                .pending;
             if retry_pending.is_empty() {
                 tracing::debug!("all events ingested after storage recovery");
             } else {
@@ -1174,26 +1172,22 @@ where
         Ok(())
     }
 
-    /// Ingest a contact card into keyhive and persist its prekey op to
-    /// storage.
+    /// Ingest a contact card's `KH` frame into keyhive and persist its
+    /// prekey op to storage.
     async fn ingest_contact_card(
         &self,
-        contact_card: &ContactCard,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
+        contact_card: &[u8],
+    ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
         // Validate first: only persist after keyhive accepts the card.
-        {
+        let event = {
             let keyhive = self.keyhive.lock().await;
             keyhive
                 .receive_contact_card(contact_card)
                 .await
-                .map_err(ProtocolError::ReceiveContactCard)?;
-        }
-
-        let event: StaticEvent<CRef> = match contact_card.op() {
-            KeyOp::Add(add) => StaticEvent::PrekeysExpanded(Box::new(add.as_ref().clone())),
-            KeyOp::Rotate(rot) => StaticEvent::PrekeyRotated(Box::new(rot.as_ref().clone())),
+                .map_err(ProtocolError::ReceiveContactCard)?
         };
-        if let Err(e) = storage_ops::save_event(&self.storage, &event).await {
+
+        if let Err(e) = storage_ops::save_event_bytes(&self.storage, event).await {
             tracing::error!(error = %e, "failed to save contact card op to storage. Card will be lost on restart");
         }
 
@@ -1208,11 +1202,11 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`StorageError`] if any storage operation, serialization, or
-    /// deserialization fails.
+    /// Returns [`StorageError`] if a storage operation, ingestion, or the
+    /// archive export fails.
     pub async fn compact(&self, storage_id: StorageHash) -> Result<(), StorageError> {
         let keyhive = self.keyhive.lock().await;
-        storage_ops::compact(&keyhive, &self.storage, storage_id).await
+        storage_ops::compact(&*keyhive, &self.storage, storage_id).await
     }
 
     /// Load and ingest all stored archives and events.
@@ -1222,7 +1216,7 @@ where
     /// Returns [`StorageError`] if loading or ingestion fails.
     pub async fn ingest_from_storage(&self) -> Result<(), StorageError> {
         let keyhive = self.keyhive.lock().await;
-        storage_ops::ingest_from_storage(&keyhive, &self.storage).await?;
+        storage_ops::ingest_from_storage(&*keyhive, &self.storage).await?;
         Ok(())
     }
 
@@ -1249,7 +1243,7 @@ where
     async fn compute_total_and_digest_for_peer(
         &self,
         peer: &KeyhivePeerId,
-    ) -> Result<(u64, EventHash), ProtocolError<Conn::SendError>> {
+    ) -> Result<(u64, EventHash), KeyhiveProtocolError<K, Conn, Async>> {
         let (hash_count, digest) =
             if let Some(cached) = self.cached_events_for_pair_with_peer(peer).await {
                 (cached.len(), pair_set_digest(cached.keys()))
@@ -1262,21 +1256,21 @@ where
         Ok(((hash_count + pending_count) as u64, digest))
     }
 
-    /// Sync with a peer using the best available strategy.
-    ///
-    /// Sends a lightweight sync check when a syncpoint exists for the
-    /// peer; otherwise falls back to a full sync.
+    /// Start a round with `peer`, as `mode` says.
     ///
     /// # Errors
     ///
     /// Returns [`ProtocolError`] if the protocol call fails.
-    #[tracing::instrument(name = "keyhive_initiate_sync", level = "debug", skip_all, fields(peer = %peer))]
-    pub async fn initiate_sync_with_peer(
+    #[tracing::instrument(name = "keyhive_sync_with_peer", level = "debug", skip_all, fields(peer = %peer))]
+    pub async fn sync_with_peer(
         &self,
         peer: &KeyhivePeerId,
-    ) -> Result<(), ProtocolError<Conn::SendError>> {
-        let syncpoint = self.syncpoints.lock().await.get(peer);
-
+        mode: SyncMode,
+    ) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
+        let syncpoint = match mode {
+            SyncMode::Check => self.syncpoints.lock().await.get(peer),
+            SyncMode::Full => None,
+        };
         match syncpoint {
             Some(sp) => self.sync_check_keyhive(peer, sp).await,
             None => self.sync_keyhive(Some(peer)).await,
@@ -1288,124 +1282,26 @@ where
     /// # Errors
     ///
     /// Returns [`ProtocolError`] if any per-agent walk fails.
-    pub async fn refresh_cache(&self) -> Result<(), ProtocolError<Conn::SendError>> {
+    pub async fn refresh_cache(&self) -> Result<(), KeyhiveProtocolError<K, Conn, Async>> {
         let mut cache = self.cache.lock().await;
         cache.refresh(self).await.map(|_| ())
     }
 }
 
-/// Get sync-relevant events for an agent: membership, prekey, and CGKA operations.
-async fn sync_events_for_agent<Async, Signer, CRef, Plaintext, CipherStore, Listener, Rng>(
-    keyhive: &Keyhive<Async, Signer, CRef, Plaintext, CipherStore, Listener, Rng>,
-    who: Identifier,
-) -> Map<Digest<StaticEvent<CRef>>, StaticEvent<CRef>>
-where
-    Async: future_form::FutureForm,
-    Signer: AsyncSigner<Async> + Clone,
-    CRef: ContentRef,
-    Plaintext: for<'de> serde::Deserialize<'de>,
-    CipherStore: CiphertextStore<Async, CRef, Plaintext>
-        + CiphertextStoreExt<Async, CRef, Plaintext>
-        + Clone,
-    Listener: MembershipListener<Async, Signer, CRef>,
-    Rng: rand::CryptoRng + rand::RngCore,
-{
-    keyhive
-        .static_events_for_agent(who)
-        .await
-        .into_iter()
-        .collect()
-}
-
-/// Hash, serialize, and deduplicate events into `event_data`, returning hashes.
+/// Whether `keyhive` knows `id`, as [`KeyhiveAccess::is_known_agent`] says.
 ///
-/// Hashes present in `skip_serialization` are recorded but not serialized.
-fn hash_and_insert_events<Async, Signer, CRef, Listener, E>(
-    event_data: &mut BTreeMap<EventHash, Arc<[u8]>>,
-    events: impl Iterator<Item = Event<Async, Signer, CRef, Listener>>,
-    skip_serialization: &BTreeSet<EventHash>,
-) -> Result<Vec<EventHash>, ProtocolError<E>>
-where
-    Async: future_form::FutureForm,
-    Signer: AsyncSigner<Async> + Clone,
-    CRef: ContentRef,
-    Listener: MembershipListener<Async, Signer, CRef>,
-    E: core::error::Error + 'static,
-{
-    let mut hashes = Vec::new();
-    for event in events {
-        let digest = Digest::hash(&event);
-        let h = digest_to_bytes(&digest);
-        hashes.push(h);
-        if !skip_serialization.contains(&h)
-            && let Entry::Vacant(e) = event_data.entry(h)
-        {
-            let static_event = StaticEvent::from(event);
-            e.insert(serialize_event(&static_event)?);
-        }
-    }
-    Ok(hashes)
-}
-
-/// Serialize a map of digested events into a hash-keyed byte map.
-fn collect_serialized_events<CRef: ContentRef, E: core::error::Error + 'static>(
-    events: Map<Digest<StaticEvent<CRef>>, StaticEvent<CRef>>,
-) -> Result<AgentHashMap, ProtocolError<E>> {
-    let mut out = AgentHashMap::new();
-    for (digest, event) in events {
-        let h = digest_to_bytes(&digest);
-        out.insert(h, serialize_event(&event)?);
-    }
-    Ok(out)
-}
-
-/// Serialize a `StaticEvent` to bincode bytes, `Arc`-shared.
+/// # Errors
 ///
-/// The bytes are `Arc`-shared so the periodic cache and every served response
-/// reference one copy instead of each deep-copying the bytes.
-fn serialize_event<CRef: ContentRef, E: core::error::Error + 'static>(
-    event: &StaticEvent<CRef>,
-) -> Result<Arc<[u8]>, ProtocolError<E>> {
-    let bytes =
-        bincode_serialize(event).map_err(|e| ProtocolError::Serialization(e.to_string()))?;
-    Ok(Arc::from(bytes))
+/// Returns the keyhive's error if the lookup fails.
+pub async fn is_known_agent<F, K>(keyhive: &K, id: Identifier) -> Result<bool, K::Error>
+where
+    F: future_form::FutureForm,
+    K: KeyhiveAccess<F>,
+{
+    keyhive.is_known_agent(id).await
 }
 
-/// Collect hashes reachable from `agent_id` through `index` into `hash_set`.
-fn extend_from_index(
-    hash_set: &mut BTreeSet<EventHash>,
-    index: &HashMap<Identifier, HashSet<Identifier>>,
-    source_hashes: &BTreeMap<Identifier, Vec<EventHash>>,
-    agent_id: &Identifier,
-) {
-    if let Some(sources) = index.get(agent_id) {
-        for s in sources {
-            if let Some(hs) = source_hashes.get(s) {
-                hash_set.extend(hs);
-            }
-        }
-    }
-}
-
-/// Serialize a value to CBOR bytes.
-fn cbor_serialize<V: serde::Serialize>(value: &V) -> Result<Vec<u8>, StorageError> {
-    let mut buf = Vec::new();
-    ciborium::into_writer(value, &mut buf)
-        .map_err(|e| StorageError::Serialization(e.to_string()))?;
-    Ok(buf)
-}
-
-/// Deserialize a value from CBOR bytes.
-fn cbor_deserialize<V: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<V, StorageError> {
-    ciborium::from_reader(bytes).map_err(|e| StorageError::Deserialization(e.to_string()))
-}
-
-/// Convert a `Digest` to a 32-byte array.
-const fn digest_to_bytes<U: serde::Serialize>(digest: &Digest<U>) -> [u8; 32] {
-    *digest.raw.as_bytes()
-}
-
-#[cfg(test)]
+#[cfg(all(test, feature = "test-utils"))]
 #[allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -1416,6 +1312,10 @@ const fn digest_to_bytes<U: serde::Serialize>(digest: &Digest<U>) -> [u8; 32] {
 )]
 mod tests {
     use super::*;
+    use keyhive_codec::traits::{Decode, Encode};
+    use keyhive_core::event::static_event::StaticEvent;
+    use sedimentree_core::codec::encode::Encode as _;
+
     use crate::{
         message::EventBytes,
         storage::MemoryKeyhiveStorage,
@@ -1427,8 +1327,10 @@ mod tests {
         },
     };
     use future_form::Local;
-    use keyhive_core::{access::Access, principal::membered::Membered};
+    use keyhive_core::principal::document::id::DocumentId;
+    use keyline::power::Power;
     use nonempty::nonempty;
+    use testresult::TestResult;
 
     /// Helper to create a test protocol instance.
     async fn make_protocol() -> (TestProtocol, SimpleKeyhive) {
@@ -1437,7 +1339,7 @@ mod tests {
         let cc = keyhive.generate_contact_card().await.unwrap();
         let storage = MemoryKeyhiveStorage::new();
         let shared = Arc::new(Mutex::new(keyhive.clone()));
-        let protocol = TestProtocol::new(shared, storage, peer_id, cc);
+        let protocol = TestProtocol::new(shared, storage, peer_id, cc.to_bytes());
         (protocol, keyhive)
     }
 
@@ -1468,7 +1370,7 @@ mod tests {
 
         // Verify and decode
         let verified = signed_msg.verify(&peer_id).unwrap();
-        let decoded_msg: Message = cbor_deserialize(&verified.payload).unwrap();
+        let decoded_msg = Message::try_decode(&verified.payload).unwrap();
 
         // The decoded message should match
         assert!(matches!(decoded_msg, Message::RequestContactCard { .. }));
@@ -1533,12 +1435,12 @@ mod tests {
             sender_id: bob_id.clone(),
             target_id: alice_id.clone(),
         };
-        let payload = cbor_serialize(&forged).expect("forged payload should serialize");
-        let signed: keyhive_crypto::signed::Signed<Vec<u8>> = {
-            let kh = alice.keyhive.lock().await;
-            kh.try_sign(payload).await.expect("alice signs")
+        let payload = forged.encode();
+        let signed = {
+            let kh = alice.keyhive.lock().await.dupe();
+            kh.sign_bytes(payload).await.expect("alice signs")
         };
-        let signed_bytes = bincode::serialize(&signed).expect("bincode encode");
+        let signed_bytes = signed.signed().as_ref().encode().into_bytes();
         let signed_msg = SignedMessage::new(signed_bytes);
 
         let err = alice
@@ -1551,6 +1453,36 @@ mod tests {
                 ProtocolError::Verification(VerificationError::SenderMismatch { .. })
             ),
             "expected SenderMismatch, got: {err:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handle_message_rejects_malformed_contact_card() {
+        let (alice, _alice_kh) = make_protocol().await;
+        let (bob, _bob_kh) = make_protocol().await;
+        let alice_id = alice.peer_id.clone();
+
+        let request = Message::RequestContactCard {
+            sender_id: alice_id.clone(),
+            target_id: bob.peer_id.clone(),
+        };
+        let payload = request.encode();
+        let signed = {
+            let kh = alice.keyhive.lock().await.dupe();
+            kh.sign_bytes(payload).await.expect("alice signs")
+        };
+        let signed_msg = SignedMessage::with_contact_card(
+            signed.signed().as_ref().encode().into_bytes(),
+            b"not a contact card".to_vec(),
+        );
+
+        let err = bob
+            .handle_message(&alice_id, signed_msg, None)
+            .await
+            .expect_err("should reject a malformed contact card");
+        assert!(
+            matches!(err, ProtocolError::ReceiveContactCard(_)),
+            "expected ReceiveContactCard, got: {err:?}"
         );
     }
 
@@ -1626,7 +1558,7 @@ mod tests {
         // Verify we got a RequestContactCard
         let signed_msg = conn_to_us.inbound_rx.recv().await.unwrap();
         let verified = signed_msg.verify(&peer_id).unwrap();
-        let decoded: Message = cbor_deserialize(&verified.payload).unwrap();
+        let decoded = Message::try_decode(&verified.payload).unwrap();
 
         assert!(matches!(decoded, Message::RequestContactCard { .. }));
         // Should include our contact card so the peer can learn about us
@@ -1656,7 +1588,7 @@ mod tests {
         let signed_msg1 = bob_conn.inbound_rx.recv().await.unwrap();
 
         let verified1 = signed_msg1.clone().verify(&alice_id).unwrap();
-        let decoded1: Message = cbor_deserialize(&verified1.payload).unwrap();
+        let decoded1 = Message::try_decode(&verified1.payload).unwrap();
         assert!(
             matches!(decoded1, Message::RequestContactCard { .. }),
             "alice should request bob's contact card"
@@ -1672,7 +1604,7 @@ mod tests {
         let signed_msg2 = alice_conn.inbound_rx.recv().await.unwrap();
 
         let verified2 = signed_msg2.clone().verify(&bob_id).unwrap();
-        let decoded2: Message = cbor_deserialize(&verified2.payload).unwrap();
+        let decoded2 = Message::try_decode(&verified2.payload).unwrap();
         assert!(
             matches!(decoded2, Message::MissingContactCard { .. }),
             "bob should respond with MissingContactCard"
@@ -1694,7 +1626,7 @@ mod tests {
         // to Bob (depending on whether she successfully ingested Bob's CC)
         let signed_msg3 = bob_conn.inbound_rx.recv().await.unwrap();
         let verified3 = signed_msg3.verify(&alice_id).unwrap();
-        let decoded3: Message = cbor_deserialize(&verified3.payload).unwrap();
+        let decoded3 = Message::try_decode(&verified3.payload).unwrap();
 
         // After ingesting Bob's contact card, Alice should send a SyncRequest
         assert!(
@@ -1731,7 +1663,7 @@ mod tests {
         // Read Alice's SyncRequest from the channel
         let signed_msg1 = bob_conn.inbound_rx.recv().await.unwrap();
         let verified1 = signed_msg1.clone().verify(&alice_id).unwrap();
-        let decoded1: Message = cbor_deserialize(&verified1.payload).unwrap();
+        let decoded1 = Message::try_decode(&verified1.payload).unwrap();
 
         assert!(
             matches!(decoded1, Message::SyncRequest { .. }),
@@ -1747,7 +1679,7 @@ mod tests {
         // Bob should respond with SyncResponse
         let signed_msg2 = alice_conn.inbound_rx.recv().await.unwrap();
         let verified2 = signed_msg2.clone().verify(&bob_id).unwrap();
-        let decoded2: Message = cbor_deserialize(&verified2.payload).unwrap();
+        let decoded2 = Message::try_decode(&verified2.payload).unwrap();
 
         assert!(
             matches!(decoded2, Message::SyncResponse { .. }),
@@ -1791,13 +1723,13 @@ mod tests {
             alice_shared.clone(),
             alice_storage.clone(),
             alice_id.clone(),
-            alice_cc.clone(),
+            alice_cc.to_bytes(),
         );
         let bob_proto = TestProtocol::new(
             bob_shared.clone(),
             bob_storage.clone(),
             bob_id.clone(),
-            bob_cc.clone(),
+            bob_cc.to_bytes(),
         );
 
         alice_proto
@@ -1934,11 +1866,20 @@ mod tests {
         alice_kh.receive_contact_card(&bob_cc).await.unwrap();
         bob_kh.receive_contact_card(&alice_cc).await.unwrap();
 
+        // Contact cards alone share nothing under Keyline; a shared group
+        // gives Bob's agent delegations and both peers' prekey ops.
+        create_group_with_read_members(&alice_kh, &[&bob_id]).await;
+
         let storage = MemoryKeyhiveStorage::new();
         let storage_id = crate::storage::StorageHash::new([42u8; 32]);
         let shared = Arc::new(Mutex::new(alice_kh.clone()));
-        let protocol = TestProtocol::new(shared, storage.clone(), alice_id.clone(), alice_cc)
-            .with_archive_threshold(2, storage_id);
+        let protocol = TestProtocol::new(
+            shared,
+            storage.clone(),
+            alice_id.clone(),
+            alice_cc.to_bytes(),
+        )
+        .with_archive_threshold(2, storage_id);
 
         // Pull real event bytes off Bob's agent (these are the kind of
         // events that arrive over the wire from a real peer).
@@ -1956,10 +1897,10 @@ mod tests {
 
         protocol.ingest_events(&event_bytes).await.unwrap();
 
-        let archives = crate::storage_ops::load_archives::<[u8; 32], _, Local>(&storage)
+        let archives = crate::storage_ops::load_archives::<_, Local>(&storage)
             .await
             .unwrap();
-        let events = crate::storage_ops::load_events::<[u8; 32], _, Local>(&storage)
+        let events = crate::storage_ops::load_event_bytes::<_, Local>(&storage)
             .await
             .unwrap();
         assert_eq!(archives.len(), 1, "expected one archive write");
@@ -1969,6 +1910,279 @@ mod tests {
             "expected no individual event files when threshold path fires (got {})",
             events.len()
         );
+    }
+
+    /// How `ingest_events` persists what it applied when a batch is large
+    /// enough for the archive path.
+    mod archive_saves {
+        use alloc::{sync::Arc, vec, vec::Vec};
+        use core::{
+            convert::Infallible,
+            sync::atomic::{AtomicBool, Ordering},
+        };
+
+        use async_lock::Mutex;
+        use dupe::Dupe;
+        use future_form::Local;
+        use futures::{FutureExt, future::LocalBoxFuture};
+        use testresult::TestResult;
+
+        use crate::{
+            protocol::KeyhiveProtocol,
+            storage::{KeyhiveStorage, MemoryKeyhiveStorage, StorageHash},
+            storage_ops,
+            test_utils::{
+                ChannelConnection, SimpleKeyhive, create_group_with_read_members, keyhive_peer_id,
+                make_keyhive,
+            },
+        };
+
+        #[derive(Debug, thiserror::Error)]
+        #[error("archives refused")]
+        struct ArchivesRefused;
+
+        /// What [`ArchiveTestStorage`] does when asked to save an archive.
+        #[derive(Debug, Clone)]
+        enum OnSaveArchive {
+            /// Refuse every archive.
+            Refuse,
+
+            /// Signal `entered` and wait for `release` before saving the
+            /// first archive; save the rest at once.
+            HoldFirst {
+                entered: async_channel::Sender<()>,
+                release: async_channel::Receiver<()>,
+                held: Arc<AtomicBool>,
+            },
+        }
+
+        /// Storage that keeps everything, except as [`OnSaveArchive`] says.
+        #[derive(Debug, Clone)]
+        struct ArchiveTestStorage {
+            inner: MemoryKeyhiveStorage,
+            on_save_archive: OnSaveArchive,
+        }
+
+        impl ArchiveTestStorage {
+            fn new(on_save_archive: OnSaveArchive) -> Self {
+                Self {
+                    inner: MemoryKeyhiveStorage::new(),
+                    on_save_archive,
+                }
+            }
+        }
+
+        const fn never<T>(never: Infallible) -> T {
+            match never {}
+        }
+
+        impl KeyhiveStorage<Local> for ArchiveTestStorage {
+            type Error = ArchivesRefused;
+
+            fn save_archive(
+                &self,
+                hash: StorageHash,
+                data: Vec<u8>,
+            ) -> LocalBoxFuture<'_, Result<(), ArchivesRefused>> {
+                async move {
+                    match &self.on_save_archive {
+                        OnSaveArchive::Refuse => return Err(ArchivesRefused),
+                        OnSaveArchive::HoldFirst {
+                            entered,
+                            release,
+                            held,
+                        } => {
+                            if !held.swap(true, Ordering::SeqCst) {
+                                entered.send(()).await.expect("the test waits for it");
+                                release.recv().await.expect("the test releases it");
+                            }
+                        }
+                    }
+                    KeyhiveStorage::<Local>::save_archive(&self.inner, hash, data)
+                        .await
+                        .unwrap_or_else(never);
+                    Ok(())
+                }
+                .boxed_local()
+            }
+
+            fn load_archives(
+                &self,
+            ) -> LocalBoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, ArchivesRefused>>
+            {
+                async move {
+                    Ok(KeyhiveStorage::<Local>::load_archives(&self.inner)
+                        .await
+                        .unwrap_or_else(never))
+                }
+                .boxed_local()
+            }
+
+            fn delete_archive(
+                &self,
+                hash: StorageHash,
+            ) -> LocalBoxFuture<'_, Result<(), ArchivesRefused>> {
+                async move {
+                    KeyhiveStorage::<Local>::delete_archive(&self.inner, hash)
+                        .await
+                        .unwrap_or_else(never);
+                    Ok(())
+                }
+                .boxed_local()
+            }
+
+            fn save_event(
+                &self,
+                hash: StorageHash,
+                data: Vec<u8>,
+            ) -> LocalBoxFuture<'_, Result<(), ArchivesRefused>> {
+                async move {
+                    KeyhiveStorage::<Local>::save_event(&self.inner, hash, data)
+                        .await
+                        .unwrap_or_else(never);
+                    Ok(())
+                }
+                .boxed_local()
+            }
+
+            fn load_events(
+                &self,
+            ) -> LocalBoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, ArchivesRefused>>
+            {
+                async move {
+                    Ok(KeyhiveStorage::<Local>::load_events(&self.inner)
+                        .await
+                        .unwrap_or_else(never))
+                }
+                .boxed_local()
+            }
+
+            fn delete_event(
+                &self,
+                hash: StorageHash,
+            ) -> LocalBoxFuture<'_, Result<(), ArchivesRefused>> {
+                async move {
+                    KeyhiveStorage::<Local>::delete_event(&self.inner, hash)
+                        .await
+                        .unwrap_or_else(never);
+                    Ok(())
+                }
+                .boxed_local()
+            }
+        }
+
+        type TestProtocol =
+            KeyhiveProtocol<SimpleKeyhive, ChannelConnection, ArchiveTestStorage, Local>;
+
+        /// Alice, with a group shared with Bob, and the events Bob's agent
+        /// is sent: a batch over a threshold of 2.
+        async fn alice_and_a_batch()
+        -> TestResult<(SimpleKeyhive, TestProtocolParts, Vec<Arc<[u8]>>)> {
+            let alice_kh = make_keyhive().await;
+            let bob_kh = make_keyhive().await;
+            let alice_id = keyhive_peer_id(&alice_kh);
+            let bob_id = keyhive_peer_id(&bob_kh);
+            let alice_cc = alice_kh.generate_contact_card().await?;
+            let bob_cc = bob_kh.generate_contact_card().await?;
+            alice_kh.receive_contact_card(&bob_cc).await?;
+            bob_kh.receive_contact_card(&alice_cc).await?;
+            create_group_with_read_members(&alice_kh, &[&bob_id]).await;
+
+            let probe = TestProtocol::new(
+                Arc::new(Mutex::new(alice_kh.clone())),
+                ArchiveTestStorage::new(OnSaveArchive::Refuse),
+                alice_id.clone(),
+                alice_cc.to_bytes(),
+            );
+            let batch: Vec<Arc<[u8]>> = probe
+                .get_events_for_agent(&bob_id)
+                .await?
+                .ok_or("bob should resolve to an agent")?
+                .values()
+                .map(Dupe::dupe)
+                .collect();
+            assert!(batch.len() > 2, "need a batch over the threshold");
+            Ok((alice_kh, (alice_id, alice_cc.to_bytes()), batch))
+        }
+
+        type TestProtocolParts = (crate::peer_id::KeyhivePeerId, Vec<u8>);
+
+        const STORAGE_ID: StorageHash = StorageHash::new([42u8; 32]);
+
+        fn protocol(
+            alice_kh: &SimpleKeyhive,
+            (alice_id, alice_cc): TestProtocolParts,
+            storage: ArchiveTestStorage,
+        ) -> TestProtocol {
+            TestProtocol::new(
+                Arc::new(Mutex::new(alice_kh.clone())),
+                storage,
+                alice_id,
+                alice_cc,
+            )
+            .with_archive_threshold(2, STORAGE_ID)
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn a_refused_archive_falls_back_to_saving_each_event() -> TestResult {
+            let (alice_kh, parts, batch) = alice_and_a_batch().await?;
+            let storage = ArchiveTestStorage::new(OnSaveArchive::Refuse);
+            let protocol = protocol(&alice_kh, parts, storage.clone());
+
+            protocol.ingest_events(&batch).await?;
+
+            let saved = storage_ops::load_event_bytes::<_, Local>(&storage.inner).await?;
+            assert_eq!(
+                saved.len(),
+                batch.len(),
+                "every applied event is saved when the archive is refused"
+            );
+            Ok(())
+        }
+
+        /// Two large batches ingested at once save their archives in the
+        /// order they were exported, so the newest is what storage keeps.
+        #[tokio::test(flavor = "current_thread")]
+        async fn concurrent_batches_keep_the_newest_archive() -> TestResult {
+            let (alice_kh, parts, batch) = alice_and_a_batch().await?;
+            let (entered_tx, entered) = async_channel::bounded(1);
+            let (release, release_rx) = async_channel::bounded(1);
+            let storage = ArchiveTestStorage::new(OnSaveArchive::HoldFirst {
+                entered: entered_tx,
+                release: release_rx,
+                held: Arc::new(AtomicBool::new(false)),
+            });
+            let protocol = protocol(&alice_kh, parts, storage.clone());
+
+            let first = protocol.ingest_events(&batch);
+            let second = async {
+                entered.recv().await?;
+                // The Keyhive changes while the first archive is being saved,
+                // so the second batch exports a newer one.
+                alice_kh.generate_group(vec![]).await?;
+                let release_later = async {
+                    for _ in 0..100 {
+                        tokio::task::yield_now().await;
+                    }
+                    release.send(()).await
+                };
+                let (ingested, released) =
+                    futures::join!(protocol.ingest_events(&batch), release_later);
+                released?;
+                ingested?;
+                TestResult::Ok(())
+            };
+            let (first, second) = futures::join!(first, second);
+            first?;
+            second?;
+
+            let newest = alice_kh.into_archive().await?.encode_zeroizing().to_vec();
+            let stored = KeyhiveStorage::<Local>::load_archives(&storage.inner)
+                .await
+                .unwrap_or_else(never);
+            assert_eq!(stored, vec![(STORAGE_ID, newest)]);
+            Ok(())
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1989,8 +2203,13 @@ mod tests {
         let storage = MemoryKeyhiveStorage::new();
         let storage_id = crate::storage::StorageHash::new([42u8; 32]);
         let shared = Arc::new(Mutex::new(alice_kh.clone()));
-        let protocol = TestProtocol::new(shared, storage.clone(), alice_id.clone(), alice_cc)
-            .with_archive_threshold(10_000, storage_id);
+        let protocol = TestProtocol::new(
+            shared,
+            storage.clone(),
+            alice_id.clone(),
+            alice_cc.to_bytes(),
+        )
+        .with_archive_threshold(10_000, storage_id);
 
         let pair = protocol
             .get_events_for_agent(&bob_id)
@@ -2002,10 +2221,10 @@ mod tests {
 
         protocol.ingest_events(&event_bytes).await.unwrap();
 
-        let archives = crate::storage_ops::load_archives::<[u8; 32], _, Local>(&storage)
+        let archives = crate::storage_ops::load_archives::<_, Local>(&storage)
             .await
             .unwrap();
-        let events = crate::storage_ops::load_events::<[u8; 32], _, Local>(&storage)
+        let events = crate::storage_ops::load_event_bytes::<_, Local>(&storage)
             .await
             .unwrap();
         assert!(archives.is_empty(), "no archive expected below threshold");
@@ -2017,106 +2236,148 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn ingest_events_triggers_recovery_only_when_enabled() {
-        // `other` creates a group, then adds a member. The add-member
-        // delegation depends on the group-creation delegation, so feeding
-        // only the former to a fresh keyhive leaves it pending.
-        //
-        // Storage holds `other`'s full archive. A pending event should
-        // trigger a reload from storage only when recovery is enabled, so
-        // the destination keyhive gains delegations only in that case. The
-        // new events also carry the member's prekey op, which ingests
-        // without a reload, so the total op count cannot tell the two
-        // cases apart. This pins both the `with_storage_recovery` wiring
-        // and the pending guard in `ingest_events`.
-        let other = make_keyhive().await;
-        let member = make_keyhive().await;
-        let member_id = keyhive_peer_id(&member);
-        let member_cc = member.generate_contact_card().await.unwrap();
-        other.receive_contact_card(&member_cc).await.unwrap();
-
-        let other_id = keyhive_peer_id(&other);
-        let other_cc = other.generate_contact_card().await.unwrap();
-        let other_proto = TestProtocol::new(
-            Arc::new(Mutex::new(other.clone())),
-            MemoryKeyhiveStorage::new(),
-            other_id.clone(),
-            other_cc,
-        );
-
-        // Group-creation delegation.
-        let group_id = other.generate_group(vec![]).await.unwrap();
-        let before_add: Vec<EventHash> = other_proto
-            .get_events_for_agent(&other_id)
-            .await
-            .unwrap()
-            .expect("other resolves to an agent")
-            .into_keys()
-            .collect();
-        assert!(
-            !before_add.is_empty(),
-            "group creation should produce a delegation"
-        );
-
-        // Add-member delegation, which depends on the group-creation one.
-        let member_identifier = member_id.to_identifier().unwrap();
-        other
-            .add_member(member_identifier, group_id, Access::Read, &[])
+    async fn ingest_events_fails_on_an_undecodable_event_and_stores_only_the_others() {
+        let alice_kh = make_keyhive().await;
+        let bob_kh = make_keyhive().await;
+        let alice_id = keyhive_peer_id(&alice_kh);
+        let bob_id = keyhive_peer_id(&bob_kh);
+        let alice_cc = alice_kh.generate_contact_card().await.unwrap();
+        alice_kh
+            .receive_contact_card(&bob_kh.generate_contact_card().await.unwrap())
             .await
             .unwrap();
-        let dependent: Vec<Arc<[u8]>> = other_proto
-            .get_events_for_agent(&other_id)
+
+        let storage = MemoryKeyhiveStorage::new();
+        let protocol = TestProtocol::new(
+            Arc::new(Mutex::new(alice_kh)),
+            storage.clone(),
+            alice_id,
+            alice_cc.to_bytes(),
+        );
+        let mut event_bytes: Vec<Arc<[u8]>> = protocol
+            .get_events_for_agent(&bob_id)
             .await
             .unwrap()
-            .expect("other resolves to an agent")
+            .unwrap()
+            .into_values()
+            .collect();
+        let readable: Set<Vec<u8>> = event_bytes.iter().map(|b| b.to_vec()).collect();
+        assert!(!readable.is_empty());
+        event_bytes.push(Arc::from(&b"not an event"[..]));
+
+        assert!(matches!(
+            protocol.ingest_events(&event_bytes).await,
+            Err(ProtocolError::UndecodableEvents { .. })
+        ));
+
+        let stored: Set<Vec<u8>> = crate::storage_ops::load_event_bytes::<_, Local>(&storage)
+            .await
+            .unwrap()
             .into_iter()
-            .filter(|(hash, _)| !before_add.contains(hash))
             .map(|(_, bytes)| bytes)
             .collect();
-        assert!(
-            !dependent.is_empty(),
-            "add_member should introduce a dependent delegation"
-        );
+        assert_eq!(stored, readable);
+    }
 
-        // Store `other`'s full archive so recovery has deps to reload.
-        let storage = MemoryKeyhiveStorage::new();
-        let storage_id = crate::storage::StorageHash::new([9u8; 32]);
-        let archive = other.into_archive().await;
-        crate::storage_ops::save_keyhive_archive::<_, _, Local>(&storage, storage_id, &archive)
-            .await
-            .unwrap();
+    /// Pending events reload storage only when recovery is enabled.
+    ///
+    /// `other` creates a document and adds the destination as a reader. The
+    /// destination's storage already holds the document's certificates, but
+    /// its in-memory Keyhive does not (say, after they were persisted and the
+    /// process restarted). The document's CGKA ops then arrive on their own.
+    /// They depend on those certificates, so they pend, and only a reload of
+    /// storage resolves them. This pins both the `with_storage_recovery`
+    /// wiring and the pending guard in `ingest_events`.
+    #[tokio::test(flavor = "current_thread")]
+    async fn ingest_events_triggers_recovery_only_when_enabled() -> TestResult {
+        /// Whether `bytes` is a CGKA op.
+        fn is_cgka_op(bytes: &[u8]) -> bool {
+            matches!(
+                StaticEvent::<[u8; 32]>::decode(bytes),
+                Ok(StaticEvent::CgkaOperation(_))
+            )
+        }
 
-        // Recovery disabled: the delegation stays pending and no reload
-        // happens, so there are still no delegations.
+        /// A destination that is a reader of a fresh document of `other`,
+        /// with the document's certificates in storage only, returning the
+        /// CGKA ops still to arrive.
+        async fn reader_with_stored_certificates(
+            other: &SimpleKeyhive,
+            dst: &SimpleKeyhive,
+            storage: &MemoryKeyhiveStorage,
+        ) -> TestResult<(DocumentId, Vec<Arc<[u8]>>)> {
+            exchange_all_contact_cards(&[other, dst]).await;
+            let doc = other.generate_doc(vec![], nonempty![[7u8; 32]]).await?;
+            let reader: Identifier = dst.id().into();
+            other.add_member(reader, doc, Power::Read).await?;
+
+            let other_id = keyhive_peer_id(other);
+            let other_proto = TestProtocol::new(
+                Arc::new(Mutex::new(other.clone())),
+                MemoryKeyhiveStorage::new(),
+                other_id.clone(),
+                other.generate_contact_card().await?.to_bytes(),
+            );
+            let (cgka_ops, certificates): (Vec<_>, Vec<_>) = other_proto
+                .get_events_for_agent(&keyhive_peer_id(dst))
+                .await?
+                .ok_or("the reader resolves to an agent")?
+                .into_values()
+                .partition(|bytes| is_cgka_op(bytes));
+            for bytes in certificates {
+                crate::storage_ops::save_event_bytes::<_, Local>(storage, bytes.to_vec()).await?;
+            }
+            Ok((doc, cgka_ops))
+        }
+
+        let other = make_keyhive().await;
+
+        // Recovery disabled: the ops stay pending and the document stays
+        // unknown.
         let dst_off = make_keyhive().await;
+        let storage_off = MemoryKeyhiveStorage::new();
+        let (doc_off, ops_off) =
+            reader_with_stored_certificates(&other, &dst_off, &storage_off).await?;
+        assert!(!ops_off.is_empty(), "a new reader should get CGKA ops");
         let proto_off = TestProtocol::new(
             Arc::new(Mutex::new(dst_off.clone())),
-            storage.clone(),
+            storage_off,
             keyhive_peer_id(&dst_off),
-            dst_off.generate_contact_card().await.unwrap(),
+            dst_off.generate_contact_card().await?.to_bytes(),
         );
-        proto_off.ingest_events(&dependent).await.unwrap();
-        assert_eq!(
-            proto_off.keyhive.lock().await.stats().await.delegations,
-            0,
-            "with recovery off, a pending event must not reload any delegations"
+        proto_off.ingest_events(&ops_off).await?;
+        assert!(
+            !dst_off.pending_event_hashes().await.is_empty(),
+            "CGKA ops without their certificates should pend"
+        );
+        assert!(
+            !dst_off.has_document(doc_off).await,
+            "with recovery off, a pending event must not reload storage"
         );
 
-        // Recovery enabled: the pending event triggers a reload of the
-        // archive, which brings in `other`'s delegations.
+        // Recovery enabled: the pending ops trigger a reload, which brings in
+        // the certificates and resolves them.
         let dst_on = make_keyhive().await;
+        let storage_on = MemoryKeyhiveStorage::new();
+        let (doc_on, ops_on) =
+            reader_with_stored_certificates(&other, &dst_on, &storage_on).await?;
         let proto_on = TestProtocol::new(
             Arc::new(Mutex::new(dst_on.clone())),
-            storage.clone(),
+            storage_on,
             keyhive_peer_id(&dst_on),
-            dst_on.generate_contact_card().await.unwrap(),
+            dst_on.generate_contact_card().await?.to_bytes(),
         )
         .with_storage_recovery();
-        proto_on.ingest_events(&dependent).await.unwrap();
+        proto_on.ingest_events(&ops_on).await?;
         assert!(
-            proto_on.keyhive.lock().await.stats().await.delegations > 0,
-            "with recovery on, a pending event must reload the archive's delegations"
+            dst_on.has_document(doc_on).await,
+            "with recovery on, a pending event must reload the certificates"
         );
+        assert!(
+            dst_on.pending_event_hashes().await.is_empty(),
+            "the reload should resolve the pending ops"
+        );
+        Ok(())
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -2183,7 +2444,7 @@ mod tests {
             .verify(&alice_id)
             .expect("alice's signature verifies");
         let outbound: Message =
-            cbor_deserialize(&verified.payload).expect("decode alice's outbound payload");
+            Message::try_decode(&verified.payload).expect("decode alice's outbound payload");
 
         let Message::SyncOps { ops, .. } = outbound else {
             panic!(
@@ -2229,26 +2490,6 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn compact_via_protocol() {
-        let (protocol, keyhive) = make_protocol().await;
-        let storage_id = crate::storage::StorageHash::new([1u8; 32]);
-
-        // Save an archive to storage via storage_ops
-        let archive = keyhive.into_archive().await;
-        crate::storage_ops::save_keyhive_archive::<_, _, Local>(
-            &MemoryKeyhiveStorage::new(),
-            storage_id,
-            &archive,
-        )
-        .await
-        .unwrap();
-
-        // Compact via protocol should work
-        let result = protocol.compact(storage_id).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test(flavor = "current_thread")]
     async fn ingest_from_storage_via_protocol() {
         let keyhive = make_keyhive().await;
         let peer_id = keyhive_peer_id(&keyhive);
@@ -2257,14 +2498,14 @@ mod tests {
         let storage = MemoryKeyhiveStorage::new();
 
         // Save an archive
-        let archive = keyhive.into_archive().await;
+        let archive = KeyhiveAccess::<Local>::to_archive(&keyhive).await.unwrap();
         let storage_id = crate::storage::StorageHash::new([1u8; 32]);
-        crate::storage_ops::save_keyhive_archive::<_, _, Local>(&storage, storage_id, &archive)
+        crate::storage_ops::save_keyhive_archive::<_, Local>(&storage, storage_id, archive)
             .await
             .unwrap();
 
         let shared = Arc::new(Mutex::new(keyhive));
-        let protocol = TestProtocol::new(shared, storage, peer_id, cc);
+        let protocol = TestProtocol::new(shared, storage, peer_id, cc.to_bytes());
 
         // Ingest from storage should work
         let result = protocol.ingest_from_storage().await;
@@ -2294,7 +2535,7 @@ mod tests {
             let group_id = kh.generate_group(vec![]).await.unwrap();
 
             let bob_identifier = bob_id.to_identifier().unwrap();
-            kh.add_member(bob_identifier, group_id, Access::Read, &[])
+            kh.add_member(bob_identifier, group_id, Power::Read)
                 .await
                 .unwrap();
 
@@ -2305,7 +2546,7 @@ mod tests {
         {
             let kh = bob_kh.lock().await;
             assert!(
-                !kh.has_group(group_id).await,
+                !kh.has_group(group_id).await.unwrap(),
                 "Bob should not have the group before sync"
             );
         }
@@ -2325,11 +2566,11 @@ mod tests {
         {
             let kh = bob_kh.lock().await;
             assert!(
-                kh.has_group(group_id).await,
+                kh.has_group(group_id).await.unwrap(),
                 "Bob should have the group after sync"
             );
 
-            let members = kh.reachable_members(group_id).await;
+            let members = kh.reachable_members(group_id).await.unwrap();
             assert!(
                 members.contains_key(&bob_individual_id),
                 "Bob should be a member of the group"
@@ -2356,7 +2597,7 @@ mod tests {
             let group_id = kh.generate_group(vec![]).await.unwrap();
 
             let bob_identifier = bob_id.to_identifier().unwrap();
-            kh.add_member(bob_identifier, group_id, Access::Read, &[])
+            kh.add_member(bob_identifier, group_id, Power::Read)
                 .await
                 .unwrap();
 
@@ -2393,7 +2634,7 @@ mod tests {
                 "Bob should have the document after sync"
             );
 
-            let reachable = kh.reachable_docs().await;
+            let reachable = kh.reachable_docs().await.unwrap();
             assert!(
                 reachable.contains_key(&doc_id),
                 "Bob's reachable docs should include the synced document"
@@ -2429,17 +2670,17 @@ mod tests {
         // Before sync: each peer only has their own group
         {
             let alice = alice_kh.lock().await;
-            assert!(alice.has_group(alice_group_id).await);
+            assert!(alice.has_group(alice_group_id).await.unwrap());
             assert!(
-                !alice.has_group(bob_group_id).await,
+                !alice.has_group(bob_group_id).await.unwrap(),
                 "Alice should not have Bob's group before sync"
             );
         }
         {
             let bob = bob_kh.lock().await;
-            assert!(bob.has_group(bob_group_id).await);
+            assert!(bob.has_group(bob_group_id).await.unwrap());
             assert!(
-                !bob.has_group(alice_group_id).await,
+                !bob.has_group(alice_group_id).await.unwrap(),
                 "Bob should not have Alice's group before sync"
             );
         }
@@ -2467,13 +2708,13 @@ mod tests {
         // Verify both keyhives have both groups
         {
             let alice = alice_kh.lock().await;
-            assert!(alice.has_group(alice_group_id).await);
-            assert!(alice.has_group(bob_group_id).await);
+            assert!(alice.has_group(alice_group_id).await.unwrap());
+            assert!(alice.has_group(bob_group_id).await.unwrap());
         }
         {
             let bob = bob_kh.lock().await;
-            assert!(bob.has_group(alice_group_id).await);
-            assert!(bob.has_group(bob_group_id).await);
+            assert!(bob.has_group(alice_group_id).await.unwrap());
+            assert!(bob.has_group(bob_group_id).await.unwrap());
         }
 
         // Verify membership op counts match
@@ -2484,8 +2725,8 @@ mod tests {
             let alice_self = alice_id.to_identifier().unwrap();
             let bob_self = bob_id.to_identifier().unwrap();
 
-            let alice_ops = alice.membership_ops_for_agent(alice_self).await;
-            let bob_ops = bob.membership_ops_for_agent(bob_self).await;
+            let alice_ops = alice.certificates_for_agent(alice_self).await.unwrap();
+            let bob_ops = bob.certificates_for_agent(bob_self).await.unwrap();
             assert!(
                 !alice_ops.is_empty(),
                 "alice should reach membership ops for both groups after sync"
@@ -2525,7 +2766,7 @@ mod tests {
             let group_id = kh.generate_group(vec![]).await.unwrap();
 
             let bob_identifier = bob_id.to_identifier().unwrap();
-            kh.add_member(bob_identifier, group_id, Access::Read, &[])
+            kh.add_member(bob_identifier, group_id, Power::Read)
                 .await
                 .unwrap();
 
@@ -2536,7 +2777,7 @@ mod tests {
         {
             let kh = bob_kh.lock().await;
             assert!(
-                !kh.has_group(group_id).await,
+                !kh.has_group(group_id).await.unwrap(),
                 "Bob should not have the group before sync"
             );
         }
@@ -2556,19 +2797,15 @@ mod tests {
         {
             let kh = bob_kh.lock().await;
             assert!(
-                kh.has_group(group_id).await,
+                kh.has_group(group_id).await.unwrap(),
                 "Bob should have the group after first sync"
             );
 
             let bob_identifier = bob_id.to_identifier().unwrap();
-            let bob_agent = kh.get_agent(bob_identifier).await.unwrap();
-            let group = kh.get_group(group_id).await.unwrap();
-            let revocations = Membered::Group(group_id, group)
-                .get_agent_revocations(&bob_agent)
-                .await;
+            let revoked = kh.revoked_members(group_id).await.unwrap();
             assert!(
-                revocations.is_empty(),
-                "Bob should have no revocations before Alice revokes"
+                !revoked.contains_key(&bob_identifier),
+                "Bob should not be revoked before Alice revokes"
             );
         }
 
@@ -2597,15 +2834,10 @@ mod tests {
         {
             let bob = bob_kh.lock().await;
             let bob_identifier = bob_id.to_identifier().unwrap();
-            let bob_agent = bob.get_agent(bob_identifier).await.unwrap();
-
-            let group = bob.get_group(group_id).await.unwrap();
-            let revocations = Membered::Group(group_id, group)
-                .get_agent_revocations(&bob_agent)
-                .await;
+            let revoked = bob.revoked_members(group_id).await.unwrap();
 
             assert!(
-                !revocations.is_empty(),
+                revoked.contains_key(&bob_identifier),
                 "Bob should have received the revocation"
             );
         }
@@ -2653,14 +2885,14 @@ mod tests {
         {
             let kh = bob_kh.lock().await;
             assert!(
-                !kh.has_group(group_id).await,
+                !kh.has_group(group_id).await.unwrap(),
                 "Bob should not have the group before sync"
             );
         }
         {
             let kh = carol_kh.lock().await;
             assert!(
-                !kh.has_group(group_id).await,
+                !kh.has_group(group_id).await.unwrap(),
                 "Carol should not have the group before sync"
             );
         }
@@ -2679,7 +2911,7 @@ mod tests {
         {
             let kh = bob_kh.lock().await;
             assert!(
-                kh.has_group(group_id).await,
+                kh.has_group(group_id).await.unwrap(),
                 "Bob should have the group after Alice→Bob sync"
             );
         }
@@ -2687,7 +2919,7 @@ mod tests {
         {
             let kh = carol_kh.lock().await;
             assert!(
-                !kh.has_group(group_id).await,
+                !kh.has_group(group_id).await.unwrap(),
                 "Carol should not have the group before Bob→Carol sync"
             );
         }
@@ -2707,12 +2939,12 @@ mod tests {
         {
             let kh = carol_kh.lock().await;
             assert!(
-                kh.has_group(group_id).await,
+                kh.has_group(group_id).await.unwrap(),
                 "Carol should have the group after transitive sync"
             );
 
             let carol_identifier = carol_id.to_identifier().unwrap();
-            let members = kh.reachable_members(group_id).await;
+            let members = kh.reachable_members(group_id).await.unwrap();
             assert!(
                 members.contains_key(&carol_identifier),
                 "Carol should be a member of the group"
@@ -2749,13 +2981,17 @@ mod tests {
         )
         .await;
 
-        // Both sides should have established syncpoints with non-zero totals
-        // (there are ops from the group creation).
+        // Both sides should have established syncpoints recording the
+        // other's total from the start of the round. Alice's is non-zero
+        // (the group's ops). Bob's is zero: he shared no events with Alice
+        // before learning of the group, since contact cards alone share
+        // nothing under Keyline.
         let alice_sp = alice_proto.syncpoints.lock().await.get(&bob_id);
         let bob_sp = bob_proto.syncpoints.lock().await.get(&alice_id);
-        assert!(
-            alice_sp.is_some_and(|v| v > 0),
-            "alice should have a non-zero syncpoint for bob, got: {alice_sp:?}"
+        assert_eq!(
+            alice_sp,
+            Some(0),
+            "alice's syncpoint for bob should be his total before the round"
         );
         assert!(
             bob_sp.is_some_and(|v| v > 0),
@@ -2817,9 +3053,12 @@ mod tests {
         )
         .await;
 
-        // Both sides should have established syncpoints with non-zero totals.
         // The empty-requested path (Alice has nothing to send back) should
-        // close via direct SyncConfirmation, establishing syncpoints.
+        // close via direct SyncConfirmation, establishing syncpoints on both
+        // sides. Each records the other's total from the start of the round:
+        // Bob's is non-zero, and Alice's is zero, because peers that have
+        // only exchanged contact cards share no events under Keyline (there
+        // is no public agent whose prekeys everyone sees).
         let alice_sp = alice_proto.syncpoints.lock().await.get(&bob_id);
         let bob_sp = bob_proto.syncpoints.lock().await.get(&alice_id);
         assert!(
@@ -2827,14 +3066,52 @@ mod tests {
             "alice should have a non-zero syncpoint for bob after the \
              empty-requested round, got: {alice_sp:?}"
         );
-        assert!(
-            bob_sp.is_some_and(|v| v > 0),
-            "bob should have a non-zero syncpoint for alice, got: {bob_sp:?}"
+        assert_eq!(
+            bob_sp,
+            Some(0),
+            "bob's syncpoint for alice should be her total before the round"
         );
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn get_hashes_for_agent_returns_serialised_events_for_known_peer() {
+    async fn confirmation_is_reported_only_for_a_round_in_which_this_side_sent_events() {
+        let TwoPeerHarness {
+            alice_proto,
+            bob_proto,
+            bob_kh,
+            alice_id,
+            bob_id,
+            alice_conn,
+            bob_conn,
+            ..
+        } = exchange_contact_cards_and_setup().await;
+        let round = || {
+            run_sync_round(
+                &alice_proto,
+                &bob_proto,
+                &alice_id,
+                &bob_id,
+                &alice_conn,
+                &bob_conn,
+            )
+        };
+        round().await;
+        {
+            let kh = bob_kh.lock().await;
+            create_group_with_read_members(&kh, &[&alice_id]).await;
+        }
+
+        let (_, at_bob) = round().await;
+        assert!(at_bob.confirmed, "bob sent his new ops in this round");
+
+        // Alice sends back the ops that ingesting Bob's group produced.
+        round().await;
+        let (_, at_bob) = round().await;
+        assert!(!at_bob.confirmed, "bob sent nothing in this round");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn get_events_for_agent_returns_decodable_events_for_known_peer() {
         let TwoPeerHarness {
             alice_proto,
             bob_proto,
@@ -2866,18 +3143,20 @@ mod tests {
         let alice_hashes = alice_proto
             .get_events_for_agent(&alice_id)
             .await
-            .expect("alice get_hashes_for_agent")
+            .expect("alice get_events_for_agent")
             .expect("alice agent exists");
         assert!(
             !alice_hashes.is_empty(),
             "alice's agent should have membership/cgka ops after the group was created"
         );
 
-        // Event bytes round-trip via bincode (matching keyhive-wasm).
-        for event_bytes in alice_hashes.values() {
-            bincode_deserialize::<StaticEvent<[u8; 32]>>(event_bytes)
-                .expect("event_bytes round-trips");
-        }
+        let not_ingested = KeyhiveAccess::<Local>::ingest_events(
+            &make_keyhive().await,
+            alice_hashes.values().map(|bytes| bytes.to_vec()).collect(),
+        )
+        .await
+        .expect("ingest_events");
+        assert!(not_ingested.undecodable.is_empty());
 
         // Symmetric: querying for a peer keyhive doesn't know about returns None.
         let unknown = KeyhivePeerId::from_bytes([0xAA; 32]);
@@ -2885,7 +3164,7 @@ mod tests {
             alice_proto
                 .get_events_for_agent(&unknown)
                 .await
-                .expect("get_hashes_for_agent for unknown peer")
+                .expect("get_events_for_agent for unknown peer")
                 .is_none()
         );
     }
@@ -2893,7 +3172,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn total_ops_increases_after_local_mutation() {
         let (protocol, _) = make_protocol().await;
-        let before = protocol.total_ops().await;
+        let before = protocol.total_ops().await.unwrap();
 
         // Generate some keyhive activity by creating a group.
         {
@@ -2901,7 +3180,7 @@ mod tests {
             kh.generate_group(vec![]).await.expect("generate_group");
         }
 
-        let after = protocol.total_ops().await;
+        let after = protocol.total_ops().await.unwrap();
         assert!(
             after > before,
             "total_ops should increase after creating a group: {before} -> {after}"
@@ -2938,18 +3217,21 @@ mod tests {
         )
         .await;
 
-        // Second sync round with no new ops — establishes stable syncpoints.
-        // The first round ingested ops (invalidating syncpoints), so the
-        // second round's zero-op exchange produces usable syncpoints.
-        run_sync_round(
-            &alice_proto,
-            &bob_proto,
-            &alice_id,
-            &bob_id,
-            &alice_conn,
-            &bob_conn,
-        )
-        .await;
+        // Under Keyline, peers share nothing until they share a group, so
+        // Bob can only offer his own prekey ops once he has learned of it:
+        // the second round still moves ops. The third, zero-op round
+        // establishes stable syncpoints.
+        for _ in 0..2 {
+            run_sync_round(
+                &alice_proto,
+                &bob_proto,
+                &alice_id,
+                &bob_id,
+                &alice_conn,
+                &bob_conn,
+            )
+            .await;
+        }
 
         let alice_sp = alice_proto
             .syncpoints
@@ -3165,107 +3447,151 @@ mod tests {
         );
     }
 
-    // ── Revocation chain regression tests ──────────────────────────────
-    //
-    // Scenario: A creates doc → make public → revoke public → add B →
-    // revoke B → make public again. A and B sync incrementally with the
-    // server after each step. Then fresh client C connects.
-    //
-    // These tests verify that:
-    // 1. C receives all events with complete dependencies (no stuck pending)
-    // 2. The `all_agent_events()` cache path includes delegate prekey ops
-    //    for revoked agents (the root cause of the production bug)
+    #[tokio::test(flavor = "current_thread")]
+    async fn message_outcome_reports_new_state_and_confirmation() {
+        let TwoPeerHarness {
+            alice_proto,
+            bob_proto,
+            alice_kh,
+            bob_kh,
+            alice_id,
+            bob_id,
+            alice_conn,
+            bob_conn,
+        } = exchange_contact_cards_and_setup().await;
 
-    fn assert_event_deps_complete(
-        hashes: &alloc::collections::BTreeSet<[u8; 32]>,
-        events: &alloc::collections::BTreeMap<[u8; 32], StaticEvent<[u8; 32]>>,
-        builtin_agents: &[keyhive_core::principal::identifier::Identifier],
-        label: &str,
-    ) {
-        use core::fmt::Write;
-        use keyhive_core::principal::identifier::Identifier;
+        create_group_with_read_members(&*alice_kh.lock().await, &[&bob_id]).await;
+        create_group_with_read_members(&*bob_kh.lock().await, &[&alice_id]).await;
 
-        fn to_hex(bytes: &[u8]) -> String {
-            bytes.iter().fold(String::new(), |mut s, b| {
-                let _ = write!(s, "{b:02x}");
-                s
-            })
+        let ingested_and_confirmed = MessageOutcome {
+            ingested: true,
+            confirmed: true,
+        };
+        for (expected_at_bob, expected_at_alice) in [
+            (ingested_and_confirmed, ingested_and_confirmed),
+            (MessageOutcome::default(), MessageOutcome::default()),
+        ] {
+            let (at_bob, at_alice) = run_sync_round(
+                &bob_proto,
+                &alice_proto,
+                &bob_id,
+                &alice_id,
+                &bob_conn,
+                &alice_conn,
+            )
+            .await;
+            assert_eq!(at_bob, expected_at_bob);
+            assert_eq!(at_alice, expected_at_alice);
         }
+    }
 
-        let mut missing: Vec<String> = Vec::new();
-        for (h, event) in events {
-            let hh = to_hex(&h[..8]);
-            match event {
-                StaticEvent::Delegated(signed_dlg) => {
-                    let dlg = &signed_dlg.payload;
-                    if let Some(proof) = &dlg.proof {
-                        let ph = digest_to_bytes(proof);
-                        if !hashes.contains(&ph) {
-                            missing.push(format!(
-                                "delegation {hh} missing proof_dlg:{}",
-                                to_hex(&ph[..8])
-                            ));
-                        }
-                    }
-                    for rev in &dlg.after_revocations {
-                        let rh = digest_to_bytes(rev);
-                        if !hashes.contains(&rh) {
-                            missing.push(format!(
-                                "delegation {hh} missing after_rev:{}",
-                                to_hex(&rh[..8])
-                            ));
-                        }
-                    }
-                    let delegate_id = dlg.delegate;
-                    let has_prekey = events.values().any(|e| match e {
-                        StaticEvent::PrekeysExpanded(op) => Identifier(*op.issuer()) == delegate_id,
-                        StaticEvent::PrekeyRotated(op) => Identifier(*op.issuer()) == delegate_id,
-                        _ => false,
-                    });
-                    if !has_prekey && !builtin_agents.contains(&delegate_id) {
-                        missing.push(format!(
-                            "delegation {hh} missing prekey for delegate {delegate_id:?}",
-                        ));
-                    }
-                }
-                StaticEvent::Revoked(signed_rev) => {
-                    let rev = &signed_rev.payload;
-                    let rh = digest_to_bytes(&rev.revoke);
-                    if !hashes.contains(&rh) {
-                        missing.push(format!(
-                            "revocation {hh} missing revoke_dlg:{}",
-                            to_hex(&rh[..8])
-                        ));
-                    }
-                    if let Some(proof) = &rev.proof {
-                        let ph = digest_to_bytes(proof);
-                        if !hashes.contains(&ph) {
-                            missing.push(format!(
-                                "revocation {hh} missing proof_dlg:{}",
-                                to_hex(&ph[..8])
-                            ));
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
+    #[tokio::test(flavor = "current_thread")]
+    async fn removing_a_peer_drops_its_rounds_awaiting_confirmation() {
+        let (protocol, _) = make_protocol().await;
+        let peer = KeyhivePeerId::from_bytes([7; 32]);
+        protocol
+            .awaiting_confirmation
+            .lock()
+            .await
+            .record_round(peer.clone());
+        protocol
+            .awaiting_confirmation
+            .lock()
+            .await
+            .record_round(peer.clone());
+
+        protocol.remove_peer(&peer).await;
+
+        assert!(!protocol.awaiting_confirmation.lock().await.end_round(&peer));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_failed_send_leaves_no_round_awaiting_confirmation() {
+        let TwoPeerHarness {
+            alice_proto,
+            bob_proto,
+            alice_kh,
+            alice_id,
+            bob_id,
+            alice_conn,
+            bob_conn,
+            ..
+        } = exchange_contact_cards_and_setup().await;
+        create_group_with_read_members(&*alice_kh.lock().await, &[&bob_id]).await;
+        bob_proto.sync_keyhive(Some(&alice_id)).await.unwrap();
+        let request = alice_conn.inbound_rx.recv().await.unwrap();
+        bob_conn.inbound_rx.close();
+
         assert!(
-            missing.is_empty(),
-            "{label} has {} events but missing deps:\n{}",
-            events.len(),
-            missing.join("\n")
+            alice_proto
+                .handle_message(&bob_id, request, None)
+                .await
+                .is_err()
+        );
+
+        assert!(
+            !alice_proto
+                .awaiting_confirmation
+                .lock()
+                .await
+                .end_round(&bob_id)
         );
     }
 
-    /// A → server (with B syncing) → fresh C. Verifies C has no
-    /// pending events after the revocation chain.
     #[tokio::test(flavor = "current_thread")]
-    async fn fresh_client_gets_complete_deps_after_revocation_chain() {
-        use keyhive_core::{
-            access::Access,
-            principal::{identifier::Identifier, public::Public},
-        };
+    async fn message_outcome_does_not_report_events_already_known() {
+        let TwoPeerHarness {
+            alice_proto,
+            bob_proto,
+            alice_kh,
+            alice_id,
+            bob_id,
+            alice_conn,
+            bob_conn,
+            ..
+        } = exchange_contact_cards_and_setup().await;
+        create_group_with_read_members(&*alice_kh.lock().await, &[&bob_id]).await;
+
+        bob_proto.sync_keyhive(Some(&alice_id)).await.unwrap();
+        let request = alice_conn.inbound_rx.recv().await.unwrap();
+        alice_proto
+            .handle_message(&bob_id, request, None)
+            .await
+            .unwrap();
+        let response = bob_conn.inbound_rx.recv().await.unwrap();
+
+        let first = bob_proto
+            .handle_message(&alice_id, response.clone(), None)
+            .await
+            .unwrap();
+        let again = bob_proto
+            .handle_message(&alice_id, response, None)
+            .await
+            .unwrap();
+        assert!(first.ingested);
+        assert!(!again.ingested);
+    }
+
+    // ── Revocation chain regression test ──────────────────────────────
+    //
+    // Scenario: A creates doc → add C → revoke C → add B → revoke B →
+    // add C again. A and B sync incrementally with the server after each
+    // step. Then C, a fresh client, connects to the server.
+    //
+    // Keyline certificates carry no proofs, so a delegation never waits on
+    // a missing dependency. What remains to check is that C ends up with
+    // the document and nothing left pending.
+    //
+    // The member-side checks after this test replace the pre-Keyline ones on
+    // the public agent's served set: completeness across several documents,
+    // revocations reaching the revoked, and CGKA ops reaching a late reader.
+
+    /// A → server (with B syncing) → fresh C. Verifies C has the document
+    /// and no pending events after the revocation chain.
+    #[tokio::test(flavor = "current_thread")]
+    async fn fresh_client_gets_complete_deps_after_revocation_chain() -> TestResult {
+        use keyhive_crypto::identifier::Identifier;
+        use keyline::power::Power;
 
         let kh_a = make_keyhive().await;
         let kh_b = make_keyhive().await;
@@ -3273,6 +3599,7 @@ mod tests {
         let kh_c = make_keyhive().await;
 
         exchange_all_contact_cards(&[&kh_a, &kh_b]).await;
+        exchange_all_contact_cards(&[&kh_a, &kh_c]).await;
         exchange_all_contact_cards(&[&kh_a, &kh_server]).await;
         exchange_all_contact_cards(&[&kh_b, &kh_server]).await;
         exchange_all_contact_cards(&[&kh_server, &kh_c]).await;
@@ -3283,15 +3610,18 @@ mod tests {
         let c_id = keyhive_peer_id(&kh_c);
 
         let b_identifier: Identifier = kh_b.id().into();
+        let c_identifier: Identifier = kh_c.id().into();
+        let server_identifier: Identifier = kh_server.id().into();
 
-        let doc_id = kh_a
-            .generate_doc(vec![], nonempty![[0u8; 32]])
-            .await
-            .unwrap();
+        let doc_id = kh_a.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+        // A relay, as the CLI server is: it serves the document's ops without
+        // holding the document, so C gets everything from a peer that can't read.
+        kh_a.add_member(server_identifier, doc_id, Power::Relay)
+            .await?;
 
         let (a_proto, a_kh, _) = make_protocol_with_shared_keyhive(kh_a).await;
         let (b_proto, _b_kh, _) = make_protocol_with_shared_keyhive(kh_b).await;
-        let (server_proto, server_kh, _) = make_protocol_with_shared_keyhive(kh_server).await;
+        let (server_proto, _, _) = make_protocol_with_shared_keyhive(kh_server).await;
         let (c_proto, c_kh, _) = make_protocol_with_shared_keyhive(kh_c).await;
 
         let (a_conn, server_conn_a) = create_channel_pair(a_id.clone(), &server_id);
@@ -3337,53 +3667,24 @@ mod tests {
 
         sync_a_server!();
 
-        {
-            a_kh.lock()
-                .await
-                .add_member(Public.id(), doc_id, Access::Edit, &[])
-                .await
-                .unwrap();
+        for (who, add) in [
+            (c_identifier, true),
+            (c_identifier, false),
+            (b_identifier, true),
+            (b_identifier, false),
+            (c_identifier, true),
+        ] {
+            {
+                let a = a_kh.lock().await.dupe();
+                if add {
+                    a.add_member(who, doc_id, Power::Edit).await?;
+                } else {
+                    a.revoke_member(who, true, doc_id).await?;
+                }
+            }
+            sync_a_server!();
+            sync_b_server!();
         }
-        sync_a_server!();
-        sync_b_server!();
-        {
-            a_kh.lock()
-                .await
-                .revoke_member(Public.id(), true, doc_id)
-                .await
-                .unwrap();
-        }
-        sync_a_server!();
-        sync_b_server!();
-        {
-            a_kh.lock()
-                .await
-                .add_member(b_identifier, doc_id, Access::Edit, &[])
-                .await
-                .unwrap();
-        }
-        sync_a_server!();
-        sync_b_server!();
-        {
-            a_kh.lock()
-                .await
-                .revoke_member(b_identifier, true, doc_id)
-                .await
-                .unwrap();
-        }
-        sync_a_server!();
-        sync_b_server!();
-        {
-            a_kh.lock()
-                .await
-                .add_member(Public.id(), doc_id, Access::Edit, &[])
-                .await
-                .unwrap();
-        }
-        sync_a_server!();
-        sync_b_server!();
-
-        assert!(server_kh.lock().await.has_document(doc_id).await);
 
         let (server_conn_c, c_conn) = create_channel_pair(server_id.clone(), &c_id);
         server_proto
@@ -3412,548 +3713,205 @@ mod tests {
             .await;
         }
 
-        let c = c_kh.lock().await;
+        let c = c_kh.lock().await.dupe();
         assert!(c.has_document(doc_id).await, "C should have the doc");
-        drop(c);
-
-        let snapshot = c_proto.all_agent_events(&BTreeSet::new()).await.unwrap();
-        let public_peer = KeyhivePeerId::from_identifier(&Public.id());
-        let public_hashes = snapshot.hashes_for(&public_peer).unwrap();
-
-        let mut events: alloc::collections::BTreeMap<[u8; 32], StaticEvent<[u8; 32]>> =
-            alloc::collections::BTreeMap::new();
-        for h in public_hashes {
-            if let Some(bytes) = snapshot.event_data.get(h) {
-                events.insert(*h, bincode_deserialize(bytes).unwrap());
-            }
-        }
-
-        let hash_set: alloc::collections::BTreeSet<[u8; 32]> =
-            public_hashes.iter().copied().collect();
-        let builtin = [Public.id()];
-        assert_event_deps_complete(
-            &hash_set,
-            &events,
-            &builtin,
-            "fresh client C after revocation chain",
+        assert!(
+            c.pending_event_hashes().await.is_empty(),
+            "C should have nothing pending after the revocation chain"
         );
+        Ok(())
     }
 
-    /// Verifies the `all_agent_events()` cache path (used by the
-    /// `PeriodicEventCache`) produces a dependency-
-    /// complete public hash set after the revocation chain synced
-    /// through the protocol.
-    #[tokio::test(flavor = "current_thread")]
-    async fn all_agent_events_complete_after_protocol_sync() {
-        use keyhive_core::principal::{identifier::Identifier, public::Public};
-
-        let kh_a = make_keyhive().await;
-        let kh_b = make_keyhive().await;
-        let kh_server = make_keyhive().await;
-
-        exchange_all_contact_cards(&[&kh_a, &kh_b]).await;
-        exchange_all_contact_cards(&[&kh_a, &kh_server]).await;
-        exchange_all_contact_cards(&[&kh_b, &kh_server]).await;
-
-        let a_id = keyhive_peer_id(&kh_a);
-        let b_id = keyhive_peer_id(&kh_b);
-        let server_id = keyhive_peer_id(&kh_server);
-
-        let b_identifier: Identifier = kh_b.id().into();
-
-        let doc_id = kh_a
-            .generate_doc(vec![], nonempty![[0u8; 32]])
-            .await
-            .unwrap();
-
-        let (a_proto, a_kh, _) = make_protocol_with_shared_keyhive(kh_a).await;
-        let (b_proto, _b_kh, _) = make_protocol_with_shared_keyhive(kh_b).await;
-        let (server_proto, _server_kh, _) = make_protocol_with_shared_keyhive(kh_server).await;
-
-        let (a_conn, server_conn_a) = create_channel_pair(a_id.clone(), &server_id);
-        a_proto.add_peer(server_id.clone(), a_conn.clone()).await;
-        server_proto
-            .add_peer(a_id.clone(), server_conn_a.clone())
-            .await;
-
-        let (b_conn, server_conn_b) = create_channel_pair(b_id.clone(), &server_id);
-        b_proto.add_peer(server_id.clone(), b_conn.clone()).await;
-        server_proto
-            .add_peer(b_id.clone(), server_conn_b.clone())
-            .await;
-
-        macro_rules! sync_a_server {
-            () => {
-                sync_pair_rounds(
-                    &a_proto,
-                    &server_proto,
-                    &a_id,
-                    &server_id,
-                    &a_conn,
-                    &server_conn_a,
-                    3,
-                )
-                .await
-            };
-        }
-        macro_rules! sync_b_server {
-            () => {
-                sync_pair_rounds(
-                    &b_proto,
-                    &server_proto,
-                    &b_id,
-                    &server_id,
-                    &b_conn,
-                    &server_conn_b,
-                    3,
-                )
-                .await
-            };
-        }
-
-        sync_a_server!();
-        {
-            a_kh.lock()
-                .await
-                .add_member(Public.id(), doc_id, Access::Edit, &[])
-                .await
-                .unwrap();
-        }
-        sync_a_server!();
-        sync_b_server!();
-        {
-            a_kh.lock()
-                .await
-                .revoke_member(Public.id(), true, doc_id)
-                .await
-                .unwrap();
-        }
-        sync_a_server!();
-        sync_b_server!();
-        {
-            a_kh.lock()
-                .await
-                .add_member(b_identifier, doc_id, Access::Edit, &[])
-                .await
-                .unwrap();
-        }
-        sync_a_server!();
-        sync_b_server!();
-        {
-            a_kh.lock()
-                .await
-                .revoke_member(b_identifier, true, doc_id)
-                .await
-                .unwrap();
-        }
-        sync_a_server!();
-        sync_b_server!();
-        {
-            a_kh.lock()
-                .await
-                .add_member(Public.id(), doc_id, Access::Edit, &[])
-                .await
-                .unwrap();
-        }
-        sync_a_server!();
-        sync_b_server!();
-
-        let snapshot = server_proto
-            .all_agent_events(&BTreeSet::new())
-            .await
-            .unwrap();
-        let public_peer = KeyhivePeerId::from_identifier(&Public.id());
-        let public_hashes = snapshot.hashes_for(&public_peer).unwrap();
-
-        let mut events: alloc::collections::BTreeMap<[u8; 32], StaticEvent<[u8; 32]>> =
-            alloc::collections::BTreeMap::new();
-        for h in public_hashes {
-            if let Some(bytes) = snapshot.event_data.get(h) {
-                events.insert(*h, bincode_deserialize(bytes).unwrap());
-            }
-        }
-
-        let hash_set: alloc::collections::BTreeSet<[u8; 32]> =
-            public_hashes.iter().copied().collect();
-        let builtin = [Public.id()];
-        assert_event_deps_complete(
-            &hash_set,
-            &events,
-            &builtin,
-            "all_agent_events (after protocol sync)",
-        );
+    /// A peer and a relay connected over the test channel.
+    struct Link {
+        peer_id: KeyhivePeerId,
+        relay_id: KeyhivePeerId,
+        peer_conn: crate::test_utils::ChannelConnection,
+        relay_conn: crate::test_utils::ChannelConnection,
     }
 
-    /// `all_agent_events()` public hash set is dep-complete across four docs
-    /// with varied delegation patterns (matches typical real-world TPW scenario).
-    ///
-    /// Doc 1: no extra members (baseline).
-    /// Doc 2: made public, never revoked.
-    /// Doc 3: made public then revoked.
-    /// Doc 4: full chain: make public → revoke → add B → revoke B → make public.
-    #[tokio::test(flavor = "current_thread")]
-    async fn all_agent_events_complete_multiple_docs() {
-        use keyhive_core::principal::{identifier::Identifier, public::Public};
-
-        let kh_a = make_keyhive().await;
-        let kh_b = make_keyhive().await;
-        let kh_server = make_keyhive().await;
-
-        exchange_all_contact_cards(&[&kh_a, &kh_b]).await;
-        exchange_all_contact_cards(&[&kh_a, &kh_server]).await;
-        exchange_all_contact_cards(&[&kh_b, &kh_server]).await;
-
-        let a_id = keyhive_peer_id(&kh_a);
-        let b_id = keyhive_peer_id(&kh_b);
-        let server_id = keyhive_peer_id(&kh_server);
-
-        let b_identifier: Identifier = kh_b.id().into();
-
-        // Create all four docs before wrapping in protocols.
-        let _doc1 = kh_a
-            .generate_doc(vec![], nonempty![[1u8; 32]])
-            .await
-            .unwrap();
-        let doc2_id = kh_a
-            .generate_doc(vec![], nonempty![[2u8; 32]])
-            .await
-            .unwrap();
-        let doc3_id = kh_a
-            .generate_doc(vec![], nonempty![[3u8; 32]])
-            .await
-            .unwrap();
-        let doc4_id = kh_a
-            .generate_doc(vec![], nonempty![[4u8; 32]])
-            .await
-            .unwrap();
-
-        let (a_proto, a_kh, _) = make_protocol_with_shared_keyhive(kh_a).await;
-        let (b_proto, _b_kh, _) = make_protocol_with_shared_keyhive(kh_b).await;
-        let (server_proto, _server_kh, _) = make_protocol_with_shared_keyhive(kh_server).await;
-
-        let (a_conn, server_conn_a) = create_channel_pair(a_id.clone(), &server_id);
-        a_proto.add_peer(server_id.clone(), a_conn.clone()).await;
-        server_proto
-            .add_peer(a_id.clone(), server_conn_a.clone())
-            .await;
-
-        let (b_conn, server_conn_b) = create_channel_pair(b_id.clone(), &server_id);
-        b_proto.add_peer(server_id.clone(), b_conn.clone()).await;
-        server_proto
-            .add_peer(b_id.clone(), server_conn_b.clone())
-            .await;
-
-        // Doc 1: no changes — just sync the baseline.
-        macro_rules! sync_a_server {
-            () => {
-                sync_pair_rounds(
-                    &a_proto,
-                    &server_proto,
-                    &a_id,
-                    &server_id,
-                    &a_conn,
-                    &server_conn_a,
-                    3,
-                )
-                .await
-            };
-        }
-        macro_rules! sync_b_server {
-            () => {
-                sync_pair_rounds(
-                    &b_proto,
-                    &server_proto,
-                    &b_id,
-                    &server_id,
-                    &b_conn,
-                    &server_conn_b,
-                    3,
-                )
-                .await
-            };
-        }
-
-        sync_a_server!();
-
-        // Doc 2: make public, never revoke.
-        {
-            a_kh.lock()
-                .await
-                .add_member(Public.id(), doc2_id, Access::Edit, &[])
-                .await
-                .unwrap();
-        }
-        sync_a_server!();
-        sync_b_server!();
-
-        // Doc 3: make public then revoke.
-        {
-            a_kh.lock()
-                .await
-                .add_member(Public.id(), doc3_id, Access::Edit, &[])
-                .await
-                .unwrap();
-        }
-        sync_a_server!();
-        sync_b_server!();
-        {
-            a_kh.lock()
-                .await
-                .revoke_member(Public.id(), true, doc3_id)
-                .await
-                .unwrap();
-        }
-        sync_a_server!();
-        sync_b_server!();
-
-        // Doc 4: full chain.
-        {
-            a_kh.lock()
-                .await
-                .add_member(Public.id(), doc4_id, Access::Edit, &[])
-                .await
-                .unwrap();
-        }
-        sync_a_server!();
-        sync_b_server!();
-        {
-            a_kh.lock()
-                .await
-                .revoke_member(Public.id(), true, doc4_id)
-                .await
-                .unwrap();
-        }
-        sync_a_server!();
-        sync_b_server!();
-        {
-            a_kh.lock()
-                .await
-                .add_member(b_identifier, doc4_id, Access::Edit, &[])
-                .await
-                .unwrap();
-        }
-        sync_a_server!();
-        sync_b_server!();
-        {
-            a_kh.lock()
-                .await
-                .revoke_member(b_identifier, true, doc4_id)
-                .await
-                .unwrap();
-        }
-        sync_a_server!();
-        sync_b_server!();
-        {
-            a_kh.lock()
-                .await
-                .add_member(Public.id(), doc4_id, Access::Edit, &[])
-                .await
-                .unwrap();
-        }
-        sync_a_server!();
-        sync_b_server!();
-
-        let snapshot = server_proto
-            .all_agent_events(&BTreeSet::new())
-            .await
-            .unwrap();
-        let public_peer = KeyhivePeerId::from_identifier(&Public.id());
-        let public_hashes = snapshot.hashes_for(&public_peer).unwrap();
-
-        let mut events: alloc::collections::BTreeMap<[u8; 32], StaticEvent<[u8; 32]>> =
-            alloc::collections::BTreeMap::new();
-        for h in public_hashes {
-            if let Some(bytes) = snapshot.event_data.get(h) {
-                events.insert(*h, bincode_deserialize(bytes).unwrap());
+    impl Link {
+        async fn connect(
+            peer: &TestProtocol,
+            peer_id: &KeyhivePeerId,
+            relay: &TestProtocol,
+            relay_id: &KeyhivePeerId,
+        ) -> Self {
+            let (peer_conn, relay_conn) = create_channel_pair(peer_id.clone(), relay_id);
+            peer.add_peer(relay_id.clone(), peer_conn.clone()).await;
+            relay.add_peer(peer_id.clone(), relay_conn.clone()).await;
+            Self {
+                peer_id: peer_id.clone(),
+                relay_id: relay_id.clone(),
+                peer_conn,
+                relay_conn,
             }
         }
 
-        let hash_set: alloc::collections::BTreeSet<[u8; 32]> =
-            public_hashes.iter().copied().collect();
-        let builtin = [Public.id()];
-        assert_event_deps_complete(&hash_set, &events, &builtin, "all_agent_events multi-doc");
+        async fn sync(&self, peer: &TestProtocol, relay: &TestProtocol) {
+            sync_pair_rounds(
+                peer,
+                relay,
+                &self.peer_id,
+                &self.relay_id,
+                &self.peer_conn,
+                &self.relay_conn,
+                3,
+            )
+            .await;
+        }
     }
 
-    /// CGKA ops generated by the delegation chain (add/revoke members) are
-    /// present and dependency-complete in the `all_agent_events()` public hash
-    /// set after sync through the protocol. This is a regression test for the
-    /// class of bugs where per-agent event sets silently drop CGKA ops
-    /// associated with revoked agents.
+    /// A member learns each of several documents' membership histories
+    /// through a relay: nothing is left pending, and its access matches each
+    /// history. Reading no access to the document it was revoked from means
+    /// the revocation reached it.
     #[tokio::test(flavor = "current_thread")]
-    async fn all_agent_events_includes_cgka_ops_after_revocation() {
-        use keyhive_core::principal::{identifier::Identifier, public::Public};
-
+    async fn member_sees_each_document_history_through_a_relay() -> TestResult {
         let kh_a = make_keyhive().await;
         let kh_b = make_keyhive().await;
-        let kh_server = make_keyhive().await;
+        let kh_relay = make_keyhive().await;
+        exchange_all_contact_cards(&[&kh_a, &kh_b, &kh_relay]).await;
+        let (a_id, b_id, relay_id) = (
+            keyhive_peer_id(&kh_a),
+            keyhive_peer_id(&kh_b),
+            keyhive_peer_id(&kh_relay),
+        );
+        let b: Identifier = kh_b.id().into();
+        let relay: Identifier = kh_relay.id().into();
 
-        exchange_all_contact_cards(&[&kh_a, &kh_b]).await;
-        exchange_all_contact_cards(&[&kh_a, &kh_server]).await;
-        exchange_all_contact_cards(&[&kh_b, &kh_server]).await;
-
-        let a_id = keyhive_peer_id(&kh_a);
-        let b_id = keyhive_peer_id(&kh_b);
-        let server_id = keyhive_peer_id(&kh_server);
-
-        let b_identifier: Identifier = kh_b.id().into();
-
-        let doc_id = kh_a
-            .generate_doc(vec![], nonempty![[0u8; 32]])
-            .await
-            .unwrap();
+        let new_doc = async |seed: u8| -> TestResult<DocumentId> {
+            let doc = kh_a.generate_doc(vec![], nonempty![[seed; 32]]).await?;
+            // A relay, as the CLI server is: it carries ops it can't read.
+            kh_a.add_member(relay, doc, Power::Relay).await?;
+            Ok(doc)
+        };
+        let never = new_doc(1).await?;
+        let added = new_doc(2).await?;
+        let revoked = new_doc(3).await?;
+        let readded = new_doc(4).await?;
 
         let (a_proto, a_kh, _) = make_protocol_with_shared_keyhive(kh_a).await;
-        let (b_proto, _b_kh, _) = make_protocol_with_shared_keyhive(kh_b).await;
-        let (server_proto, _server_kh, _) = make_protocol_with_shared_keyhive(kh_server).await;
+        let (b_proto, b_kh, _) = make_protocol_with_shared_keyhive(kh_b).await;
+        let (relay_proto, _, _) = make_protocol_with_shared_keyhive(kh_relay).await;
+        let a_link = Link::connect(&a_proto, &a_id, &relay_proto, &relay_id).await;
+        let b_link = Link::connect(&b_proto, &b_id, &relay_proto, &relay_id).await;
+        a_link.sync(&a_proto, &relay_proto).await;
 
-        let (a_conn, server_conn_a) = create_channel_pair(a_id.clone(), &server_id);
-        a_proto.add_peer(server_id.clone(), a_conn.clone()).await;
-        server_proto
-            .add_peer(a_id.clone(), server_conn_a.clone())
-            .await;
-
-        let (b_conn, server_conn_b) = create_channel_pair(b_id.clone(), &server_id);
-        b_proto.add_peer(server_id.clone(), b_conn.clone()).await;
-        server_proto
-            .add_peer(b_id.clone(), server_conn_b.clone())
-            .await;
-
-        // Full delegation chain — each step generates CGKA Add/Remove ops implicitly.
-        // Adding and revoking members creates CgkaOperation::Add and ::Remove events
-        // in the document's CGKA tree.
-        macro_rules! sync_a_server {
-            () => {
-                sync_pair_rounds(
-                    &a_proto,
-                    &server_proto,
-                    &a_id,
-                    &server_id,
-                    &a_conn,
-                    &server_conn_a,
-                    3,
-                )
-                .await
-            };
-        }
-        macro_rules! sync_b_server {
-            () => {
-                sync_pair_rounds(
-                    &b_proto,
-                    &server_proto,
-                    &b_id,
-                    &server_id,
-                    &b_conn,
-                    &server_conn_b,
-                    3,
-                )
-                .await
-            };
-        }
-
-        sync_a_server!();
-        {
-            a_kh.lock()
-                .await
-                .add_member(Public.id(), doc_id, Access::Edit, &[])
-                .await
-                .unwrap();
-        }
-        sync_a_server!();
-        sync_b_server!();
-        {
-            a_kh.lock()
-                .await
-                .revoke_member(Public.id(), true, doc_id)
-                .await
-                .unwrap();
-        }
-        sync_a_server!();
-        sync_b_server!();
-        {
-            a_kh.lock()
-                .await
-                .add_member(b_identifier, doc_id, Access::Edit, &[])
-                .await
-                .unwrap();
-        }
-        sync_a_server!();
-        sync_b_server!();
-        {
-            a_kh.lock()
-                .await
-                .revoke_member(b_identifier, true, doc_id)
-                .await
-                .unwrap();
-        }
-        sync_a_server!();
-        sync_b_server!();
-        {
-            a_kh.lock()
-                .await
-                .add_member(Public.id(), doc_id, Access::Edit, &[])
-                .await
-                .unwrap();
-        }
-        sync_a_server!();
-        sync_b_server!();
-
-        let snapshot = server_proto
-            .all_agent_events(&BTreeSet::new())
-            .await
-            .unwrap();
-        let public_peer = KeyhivePeerId::from_identifier(&Public.id());
-        let public_hashes = snapshot.hashes_for(&public_peer).unwrap();
-
-        let mut events: alloc::collections::BTreeMap<[u8; 32], StaticEvent<[u8; 32]>> =
-            alloc::collections::BTreeMap::new();
-        for h in public_hashes {
-            if let Some(bytes) = snapshot.event_data.get(h) {
-                events.insert(*h, bincode_deserialize(bytes).unwrap());
+        for (doc, add) in [
+            (added, true),
+            (revoked, true),
+            (revoked, false),
+            (readded, true),
+            (readded, false),
+            (readded, true),
+        ] {
+            {
+                let a = a_kh.lock().await.dupe();
+                if add {
+                    a.add_member(b, doc, Power::Read).await?;
+                } else {
+                    a.revoke_member(b, true, doc).await?;
+                }
             }
+            a_link.sync(&a_proto, &relay_proto).await;
+            b_link.sync(&b_proto, &relay_proto).await;
         }
 
-        let hash_set: alloc::collections::BTreeSet<[u8; 32]> =
-            public_hashes.iter().copied().collect();
-        let builtin = [Public.id()];
-
-        // Standard delegation/revocation dep check.
-        assert_event_deps_complete(
-            &hash_set,
-            &events,
-            &builtin,
-            "all_agent_events (cgka regression)",
+        let b_kh = b_kh.lock().await.dupe();
+        assert!(
+            b_kh.pending_event_hashes().await.is_empty(),
+            "B should have nothing pending"
         );
-
-        // Additional check: every CgkaOperation event in the public set must
-        // have at least one Delegated event also present in the set (confirming
-        // the doc was delegated and the CGKA tree was bootstrapped). This guards
-        // against the class of bug where CGKA ops exist in the keyhive but are
-        // dropped from the per-agent event set during serialization.
-        let cgka_count = events
-            .values()
-            .filter(|e| matches!(e, StaticEvent::CgkaOperation(_)))
-            .count();
-        if cgka_count > 0 {
-            let has_any_delegation = events
-                .values()
-                .any(|e| matches!(e, StaticEvent::Delegated(_)));
-            assert!(
-                has_any_delegation,
-                "public set has {cgka_count} CgkaOperation event(s) but no Delegated event — \
-                 the CGKA ops are present but their bootstrapping delegation is missing",
+        for (doc, expected, history) in [
+            (never, None, "never added"),
+            (added, Some(Power::Read), "added"),
+            (revoked, None, "added then revoked"),
+            (readded, Some(Power::Read), "added, revoked, re-added"),
+        ] {
+            assert_eq!(
+                b_kh.access_for_doc(b, doc).await?,
+                expected,
+                "B's access to the document it was {history}"
             );
         }
-        // At least some CGKA ops must be present after the delegation chain
-        // (guards against the set being silently empty).
-        assert!(
-            cgka_count > 0,
-            "expected at least one CgkaOperation in the public event set after \
-             the add/revoke delegation chain, but found none"
+        Ok(())
+    }
+
+    /// After members come and go, a reader that has never synced gets every
+    /// CGKA op it needs from a relay, and decrypts what was written after it
+    /// joined. A served set missing any of them leaves it unable to decrypt.
+    #[tokio::test(flavor = "current_thread")]
+    async fn late_reader_decrypts_after_membership_churn() -> TestResult {
+        const PLAINTEXT: &[u8] = b"after the churn";
+
+        let kh_a = make_keyhive().await;
+        let kh_b = make_keyhive().await;
+        let kh_relay = make_keyhive().await;
+        let kh_late = make_keyhive().await;
+        exchange_all_contact_cards(&[&kh_a, &kh_b, &kh_relay]).await;
+        exchange_all_contact_cards(&[&kh_a, &kh_late]).await;
+        exchange_all_contact_cards(&[&kh_relay, &kh_late]).await;
+        let (a_id, b_id, relay_id, late_id) = (
+            keyhive_peer_id(&kh_a),
+            keyhive_peer_id(&kh_b),
+            keyhive_peer_id(&kh_relay),
+            keyhive_peer_id(&kh_late),
         );
+        let b: Identifier = kh_b.id().into();
+        let late: Identifier = kh_late.id().into();
+        let relay: Identifier = kh_relay.id().into();
+
+        let doc = kh_a.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+        kh_a.add_member(relay, doc, Power::Relay).await?;
+
+        let (a_proto, a_kh, _) = make_protocol_with_shared_keyhive(kh_a).await;
+        let (b_proto, _, _) = make_protocol_with_shared_keyhive(kh_b).await;
+        let (relay_proto, _, _) = make_protocol_with_shared_keyhive(kh_relay).await;
+        let (late_proto, late_kh, _) = make_protocol_with_shared_keyhive(kh_late).await;
+        let a_link = Link::connect(&a_proto, &a_id, &relay_proto, &relay_id).await;
+        let b_link = Link::connect(&b_proto, &b_id, &relay_proto, &relay_id).await;
+        a_link.sync(&a_proto, &relay_proto).await;
+
+        // Each add and revoke changes the document's CGKA tree.
+        for add in [true, false, true, false] {
+            {
+                let a = a_kh.lock().await.dupe();
+                if add {
+                    a.add_member(b, doc, Power::Read).await?;
+                } else {
+                    a.revoke_member(b, true, doc).await?;
+                }
+            }
+            a_link.sync(&a_proto, &relay_proto).await;
+            b_link.sync(&b_proto, &relay_proto).await;
+        }
+
+        let sealed = {
+            let a = a_kh.lock().await.dupe();
+            a.add_member(late, doc, Power::Read).await?;
+            a.try_encrypt_content(doc, &[9u8; 32], &[], PLAINTEXT)
+                .await?
+        };
+        a_link.sync(&a_proto, &relay_proto).await;
+
+        let late_link = Link::connect(&late_proto, &late_id, &relay_proto, &relay_id).await;
+        late_link.sync(&late_proto, &relay_proto).await;
+
+        let late_kh = late_kh.lock().await.dupe();
+        assert!(
+            late_kh.pending_event_hashes().await.is_empty(),
+            "the late reader should have nothing pending"
+        );
+        let opened = late_kh
+            .try_decrypt_content(doc, sealed.encrypted_content())
+            .await?;
+        assert_eq!(opened.plaintext, PLAINTEXT);
+        Ok(())
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-utils"))]
 #[allow(
     clippy::expect_used,
     clippy::panic,
@@ -3974,7 +3932,7 @@ mod protocol_behavioural {
             .clone()
             .verify(expected_sender)
             .expect("verify signed message");
-        ciborium::from_reader(verified.payload.as_slice()).expect("cbor decode message")
+        Message::try_decode(&verified.payload).expect("decode message")
     }
 
     fn drain_channel(conn: &ChannelConnection, expected_sender: &KeyhivePeerId) -> Vec<Message> {
@@ -3984,7 +3942,7 @@ mod protocol_behavioural {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn initiate_sync_with_peer_with_no_syncpoint_does_full_sync() {
+    async fn sync_check_with_no_syncpoint_does_full_sync() {
         let TwoPeerHarness {
             alice_proto,
             alice_id,
@@ -3993,12 +3951,10 @@ mod protocol_behavioural {
             ..
         } = exchange_contact_cards_and_setup().await;
 
-        let alice_proto = Arc::new(alice_proto);
-
         alice_proto
-            .initiate_sync_with_peer(&bob_id)
+            .sync_with_peer(&bob_id, SyncMode::Check)
             .await
-            .expect("initiate_sync_with_peer");
+            .expect("sync_with_peer");
 
         let messages = drain_channel(&bob_conn, &alice_id);
         assert!(
@@ -4008,7 +3964,7 @@ mod protocol_behavioural {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn initiate_sync_with_peer_with_syncpoint_does_sync_check() {
+    async fn sync_check_with_syncpoint_does_sync_check() {
         let TwoPeerHarness {
             alice_proto,
             alice_id,
@@ -4017,19 +3973,40 @@ mod protocol_behavioural {
             ..
         } = exchange_contact_cards_and_setup().await;
 
-        let alice_proto = Arc::new(alice_proto);
-
         alice_proto.syncpoints.lock().await.set(bob_id.clone(), 0);
 
         alice_proto
-            .initiate_sync_with_peer(&bob_id)
+            .sync_with_peer(&bob_id, SyncMode::Check)
             .await
-            .expect("initiate_sync_with_peer");
+            .expect("sync_with_peer");
 
         let messages = drain_channel(&bob_conn, &alice_id);
         assert!(
             matches!(messages.first(), Some(Message::SyncCheck { .. })),
             "expected SyncCheck, got {messages:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn full_sync_ignores_a_syncpoint() {
+        let TwoPeerHarness {
+            alice_proto,
+            alice_id,
+            bob_id,
+            bob_conn,
+            ..
+        } = exchange_contact_cards_and_setup().await;
+        alice_proto.syncpoints.lock().await.set(bob_id.clone(), 0);
+
+        alice_proto
+            .sync_with_peer(&bob_id, SyncMode::Full)
+            .await
+            .expect("sync_with_peer");
+
+        let messages = drain_channel(&bob_conn, &alice_id);
+        assert!(
+            matches!(messages.first(), Some(Message::SyncRequest { .. })),
+            "expected SyncRequest, got {messages:?}"
         );
     }
 
@@ -4046,24 +4023,26 @@ mod protocol_behavioural {
             ..
         } = exchange_contact_cards_and_setup().await;
 
-        {
-            let kh = alice_kh.lock().await;
-            create_group_with_read_members(&kh, &[&bob_id]).await;
+        let kh = alice_kh.lock().await.dupe();
+        create_group_with_read_members(&kh, &[&bob_id]).await;
+        // Two rounds: Bob can only offer his prekey ops once he has learned
+        // of the shared group (Keyline shares nothing before that).
+        for _ in 0..2 {
+            run_sync_round(
+                &alice_proto,
+                &bob_proto,
+                &alice_id,
+                &bob_id,
+                &alice_conn,
+                &bob_conn,
+            )
+            .await;
         }
-        run_sync_round(
-            &alice_proto,
-            &bob_proto,
-            &alice_id,
-            &bob_id,
-            &alice_conn,
-            &bob_conn,
-        )
-        .await;
         drop(drain_channel(&alice_conn, &bob_id));
         drop(drain_channel(&bob_conn, &alice_id));
 
         let alice_proto = Arc::new(alice_proto);
-        let alice_total = alice_proto.total_ops().await;
+        let alice_total = alice_proto.total_ops().await.unwrap();
         alice_proto
             .syncpoints
             .lock()
@@ -4158,7 +4137,7 @@ mod protocol_behavioural {
         let alice_proto = Arc::new(alice_proto);
 
         alice_proto.refresh_cache().await.expect("first refresh");
-        let (total_after_first, agent_count_after_first, public_hash_count_after_first) = {
+        let (total_after_first, agent_count_after_first) = {
             let cache = alice_proto.cache.lock().await;
             assert!(!cache.is_empty(), "cache populated after first refresh");
             let agent_count = cache.agent_count();
@@ -4166,8 +4145,7 @@ mod protocol_behavioural {
             let total = cache
                 .last_total_ops()
                 .expect("last_total_ops should be Some after refresh");
-            let public_count = cache.public_hashes().len();
-            (total, agent_count, public_count)
+            (total, agent_count)
         };
 
         alice_proto.refresh_cache().await.expect("second refresh");
@@ -4177,11 +4155,6 @@ mod protocol_behavioural {
             cache.agent_count(),
             agent_count_after_first,
             "agent count unchanged"
-        );
-        assert_eq!(
-            cache.public_hashes().len(),
-            public_hash_count_after_first,
-            "public hash count unchanged"
         );
     }
 
