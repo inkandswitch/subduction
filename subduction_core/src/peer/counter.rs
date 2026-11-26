@@ -17,6 +17,7 @@
 //! `wall_clock_seed`) so a restarted *process* also resumes above previous
 //! values. The default seed is zero: in-process monotonicity only.
 //!
+//! [`FilteredHeadsNotifier::remove_peer`]: crate::remote_heads::FilteredHeadsNotifier::remove_peer
 //! [`SyncHandler`]: crate::handler::sync::SyncHandler
 //! [`Subduction`]: crate::subduction::Subduction
 
