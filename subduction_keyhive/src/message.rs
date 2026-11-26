@@ -45,8 +45,8 @@ pub type AgentHashMap = BTreeMap<EventHash, Arc<[u8]>>;
 /// ```
 ///
 /// Totals are big-endian `u64`s and the digest is 32 bytes. A hash list is
-/// a big-endian `u32` count and 32 bytes per hash. An event list is a `u32`
-/// count and, per event, a bijou64 length and the event's bytes. Lists keep
+/// a bijou64 count and 32 bytes per hash. An event list is a bijou64 count
+/// and, per event, a bijou64 length and the event's bytes. Lists keep
 /// the order they were built in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
@@ -407,7 +407,7 @@ fn put_hashes(hashes: &[EventHash], buf: &mut Vec<u8>) {
 }
 
 const fn hashes_size(hashes: &[EventHash]) -> usize {
-    4 + hashes.len() * 32
+    codec::count_size(hashes.len()) + hashes.len() * 32
 }
 
 fn read_hashes(
@@ -426,10 +426,11 @@ fn put_events(events: &[Arc<[u8]>], buf: &mut Vec<u8>) {
 }
 
 fn events_size(events: &[Arc<[u8]>]) -> usize {
-    4 + events
-        .iter()
-        .map(|event| codec::bytes_size(event))
-        .sum::<usize>()
+    codec::count_size(events.len())
+        + events
+            .iter()
+            .map(|event| codec::bytes_size(event))
+            .sum::<usize>()
 }
 
 fn read_events(
@@ -554,10 +555,12 @@ mod tests {
             pending: Vec::new(),
         }
         .encode();
-        // Overwrite `found`'s count, which follows the tag and two
-        // suffix-less peer IDs.
+        // Replace `found`'s one-byte zero count, which follows the tag and
+        // two suffix-less peer IDs.
         let count_at = 1 + 33 + 33;
-        bytes[count_at..count_at + 4].copy_from_slice(&u32::MAX.to_be_bytes());
+        let mut huge = Vec::new();
+        bijoux::u64::encode(u64::MAX, &mut huge);
+        bytes.splice(count_at..=count_at, huge);
         assert!(matches!(
             Message::try_decode(&bytes),
             Err(WireDecodeError::Codec(DecodeError::ArrayTooLarge(_)))

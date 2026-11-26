@@ -1,8 +1,12 @@
 //! Reading and writing keyhive protocol values in Subduction's canonical
 //! codec ([`sedimentree_core::codec`]).
 //!
-//! Integers are big-endian, lists carry a `u32` count, and byte strings a
-//! bijou64 length prefix.
+//! Integers are big-endian. Lists carry a bijou64 element count and byte
+//! strings a bijou64 length prefix.
+//!
+//! The format puts no limit on counts or lengths. The decoder enforces one
+//! instead: a declared size the remaining bytes can't hold is rejected
+//! before anything is allocated for it.
 
 use alloc::vec::Vec;
 
@@ -22,16 +26,14 @@ pub(crate) const fn bytes_size(bytes: &[u8]) -> usize {
     bijoux::u64::encoded_len(bytes.len() as u64) + bytes.len()
 }
 
-/// Append a list's `u32` element count.
-///
-/// # Panics
-///
-/// Panics if the list has more than `u32::MAX` elements, which no protocol
-/// message can hold.
-#[allow(clippy::expect_used)]
+/// Append a list's bijou64 element count.
 pub(crate) fn put_count(count: usize, buf: &mut Vec<u8>) {
-    let count = u32::try_from(count).expect("a message list holds at most u32::MAX elements");
-    buf.extend_from_slice(&count.to_be_bytes());
+    bijoux::u64::encode(count as u64, buf);
+}
+
+/// The encoded size of `count` under [`put_count`].
+pub(crate) const fn count_size(count: usize) -> usize {
+    bijoux::u64::encoded_len(count as u64)
 }
 
 /// A cursor over encoded bytes.
@@ -64,14 +66,21 @@ impl<'a> Reader<'a> {
         Ok(value)
     }
 
+    fn bijou64(&mut self) -> Result<u64, DecodeError> {
+        let (value, consumed) = bijoux::u64::decode(
+            self.buf.get(self.offset..).unwrap_or_default(),
+        )
+        .map_err(|kind| Bijou64Error {
+            offset: self.offset,
+            kind,
+        })?;
+        self.offset += consumed;
+        Ok(value)
+    }
+
     /// A byte string written by [`put_bytes`].
     pub(crate) fn bytes(&mut self) -> Result<&'a [u8], DecodeError> {
-        let (len, consumed) = bijoux::u64::decode(self.buf.get(self.offset..).unwrap_or_default())
-            .map_err(|kind| Bijou64Error {
-                offset: self.offset,
-                kind,
-            })?;
-        self.offset += consumed;
+        let len = self.bijou64()?;
         let len = usize::try_from(len).map_err(|_| BlobTooLarge {
             size: len,
             max: usize::MAX as u64,
@@ -91,8 +100,9 @@ impl<'a> Reader<'a> {
         field: &'static str,
         min_element_size: usize,
     ) -> Result<usize, DecodeError> {
-        let count = decode::u32(self.buf, self.offset)? as usize;
-        self.offset += 4;
+        // A count past `usize::MAX` (possible on 32-bit targets) can't fit in
+        // the buffer either, so saturating keeps it failing the check below.
+        let count = usize::try_from(self.bijou64()?).unwrap_or(usize::MAX);
         let max = self.remaining() / min_element_size.max(1);
         if count > max {
             return Err(ArrayTooLarge { count, max, field }.into());
