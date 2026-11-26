@@ -20,6 +20,7 @@ use subduction_core::{
         self,
         audience::{Audience, DiscoveryId},
     },
+    metrics::requestor_tally::RequestorTally,
     minimized_tree_store::memory::MemoryMinimizedTreeStore,
     nonce_cache::NonceCache,
     peer::{
@@ -48,7 +49,9 @@ use tokio_util::sync::CancellationToken;
 use tungstenite::{http::Uri, protocol::WebSocketConfig};
 
 use subduction_ephemeral::{
-    clock::std_clock::StdClock, config::EphemeralConfig, handler::EphemeralHandler,
+    clock::std_clock::StdClock,
+    config::{EphemeralConfig, EphemeralEvent},
+    handler::EphemeralHandler,
     policy::OpenEphemeralPolicy,
 };
 
@@ -581,18 +584,7 @@ where
                 TokioSpawn,
             );
 
-            // Drain ephemeral events — the server is a relay, not a consumer.
-            tokio::spawn(async move {
-                while let Ok(event) = ephemeral_rx.recv().await {
-                    tracing::debug!(
-                        sender = %event.sender,
-                        topic = %event.id,
-                        nonce = event.nonce,
-                        payload_size = event.payload.len(),
-                        "ephemeral event relayed"
-                    );
-                }
-            });
+            tokio::spawn(drain_ephemeral_events(ephemeral_rx));
 
             let handler = make_handler(sync_handler, ephemeral_handler.clone());
 
@@ -611,54 +603,12 @@ where
     // the tally must be drained regardless — an undrained map sits at its cap
     // doing eviction scans forever — and the "top requestors" log line is
     // useful on its own.
-    {
-        let resident_subduction = subduction.clone();
-        let resident_token = token.clone();
-        let refresh_interval = Duration::from_secs(args.metrics_refresh_interval);
-        tokio::spawn(async move {
-            let mut interval = time::interval(refresh_interval);
-            // Skip the immediate first tick: nothing to report at t=0.
-            interval.tick().await;
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {
-                        let resident = resident_subduction.minimized_tree_store().len().await;
-                        subduction_core::metrics::set_sedimentree_cache_resident(resident);
-
-                        // Heals the connections gauge if an event-driven
-                        // refresh was missed.
-                        subduction_core::metrics::set_connections_active(
-                            resident_subduction.total_connection_count().await,
-                        );
-
-                        // Rank-shaped gauges carry the skew; the log line
-                        // carries the peer ids (see `requestor_tally` docs).
-                        if let Some(tally) = &requestor_tally {
-                            let ranked = tally.take_window().await;
-                            let counts: Vec<u64> =
-                                ranked.iter().map(|(_, count)| *count).collect();
-                            let total: u64 = counts.iter().sum();
-                            subduction_core::metrics::set_top_requestors(&counts, total);
-                            if !ranked.is_empty() {
-                                let top: Vec<String> = ranked
-                                    .iter()
-                                    .take(10)
-                                    .map(|(peer, count)| format!("{peer}={count}"))
-                                    .collect();
-                                tracing::info!(
-                                    window_secs = refresh_interval.as_secs(),
-                                    total_requestors = ranked.len(),
-                                    top = ?top,
-                                    "top requestors by batch-sync requests"
-                                );
-                            }
-                        }
-                    }
-                    () = resident_token.cancelled() => break,
-                }
-            }
-        });
-    }
+    tokio::spawn(refresh_node_gauges(
+        subduction.clone(),
+        requestor_tally,
+        Duration::from_secs(args.metrics_refresh_interval),
+        token.clone(),
+    ));
 
     // Set up the HTTP long-poll handler (uses its own NonceCache)
     let lp_handler = LongPollHandler::new(
@@ -709,44 +659,18 @@ where
     // reached by waking from `token.cancelled().await`, whose internal
     // synchronization makes the store visible.
     let supervised_failure = Arc::new(AtomicBool::new(false));
-    let actor_cancel = token.clone();
-    let listener_cancel = token.clone();
-
-    let manager_supervisor = actor_cancel.clone();
-    let manager_failed = Arc::clone(&supervised_failure);
-    tokio::spawn(async move {
-        tokio::select! {
-            _ = manager_fut => {
-                if !manager_supervisor.is_cancelled() {
-                    tracing::error!(
-                        "connection manager exited unexpectedly; \
-                         shutting down for supervised restart"
-                    );
-                    manager_failed.store(true, Ordering::Release);
-                    manager_supervisor.cancel();
-                }
-            },
-            () = actor_cancel.cancelled() => {}
-        }
-    });
-
-    let listener_supervisor = listener_cancel.clone();
-    let listener_failed = Arc::clone(&supervised_failure);
-    tokio::spawn(async move {
-        tokio::select! {
-            _ = listener_fut => {
-                if !listener_supervisor.is_cancelled() {
-                    tracing::error!(
-                        "dispatch listener exited unexpectedly; \
-                         shutting down for supervised restart"
-                    );
-                    listener_failed.store(true, Ordering::Release);
-                    listener_supervisor.cancel();
-                }
-            },
-            () = listener_cancel.cancelled() => {}
-        }
-    });
+    tokio::spawn(supervise(
+        manager_fut,
+        "connection manager",
+        token.clone(),
+        Arc::clone(&supervised_failure),
+    ));
+    tokio::spawn(supervise(
+        listener_fut,
+        "dispatch listener",
+        token.clone(),
+        Arc::clone(&supervised_failure),
+    ));
 
     // Spawn the accept loop
     let accept_cancel = token.child_token();
@@ -779,139 +703,22 @@ where
     });
 
     // ── Iroh (QUIC) transport ────────────────────────────────────────────────
-    let mut iroh_node_id: Option<String> = None;
-    let mut iroh_addrs: Vec<SocketAddr> = Vec::new();
-    let iroh_accept_task = if iroh_enabled {
-        let relay_mode = if args.iroh_direct_only {
-            iroh::endpoint::RelayMode::Disabled
-        } else if let Some(url) = &args.iroh_relay_url {
-            let relay_map =
-                iroh::RelayMap::try_from_iter([url.as_str()]).map_err(|e| eyre::eyre!(e))?;
-            iroh::endpoint::RelayMode::Custom(relay_map)
-        } else {
-            iroh::endpoint::RelayMode::Default
-        };
-
-        let iroh_endpoint = iroh::Endpoint::builder(presets::N0)
-            .alpns(vec![subduction_iroh::ALPN.to_vec()])
-            .relay_mode(relay_mode)
-            .bind()
-            .await?;
-
-        let iroh_addr = iroh_endpoint.addr();
-        iroh_node_id = Some(iroh_addr.id.to_string());
-        iroh_addrs = iroh_addr.ip_addrs().copied().collect();
-        tracing::info!(node_id = %iroh_addr.id, "Iroh endpoint bound");
-        for addr in &iroh_addr.addrs {
-            tracing::info!(addr = ?addr, "transport address");
-        }
-
-        // Spawn iroh accept loop
-        let iroh_subduction = subduction.clone();
-        let iroh_signer = signer.clone();
-        let iroh_nonce_cache = NonceCache::default();
-        let iroh_ep = iroh_endpoint.clone();
-        let iroh_cancel = token.child_token();
-        let iroh_ephemeral = ephemeral.clone();
-        let iroh_keyhive_proto = keyhive_protocol.clone();
-
-        let task = tokio::spawn({
-            let cancel = iroh_cancel.clone();
-            async move {
-                loop {
-                    tokio::select! {
-                        () = cancel.cancelled() => {
-                            tracing::info!("iroh accept loop canceled");
-                            break;
-                        }
-                        result = subduction_iroh::server::accept_one(
-                            &iroh_ep,
-                            &iroh_signer,
-                            &iroh_nonce_cache,
-                            server_peer_id,
-                            discovery_audience,
-                            handshake_max_drift,
-                        ) => {
-                            match result {
-                                Ok(accepted) => {
-                                    let remote = accepted.authenticated.peer_id();
-                                    tokio::spawn(accepted.listener_task);
-                                    tokio::spawn(accepted.sender_task);
-
-                                    let auth = accepted.authenticated.map(|c| MessageTransport::new(UnifiedTransport::Iroh(c)));
-                                    let auth_for_keyhive = auth.clone();
-                                    match iroh_subduction.add_connection(auth).await {
-                                        Ok(_) => {
-                                            iroh_ephemeral.subscribe_peer(remote).await;
-                                            notify_peer_connect(iroh_keyhive_proto.as_ref(), auth_for_keyhive).await;
-                                            iroh_subduction.full_sync_with_peer(&remote, true, CallTimeout::Default).await;
-                                            tracing::info!(peer = %remote, "iroh: added peer");
-                                        }
-                                        Err(e) => {
-                                            tracing::error!(error = %e, "failed to add iroh connection");
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::warn!(error = %e, "iroh accept error");
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
-        // Connect to iroh peers
-        for iroh_peer_str in &args.iroh_peers {
-            let node_id: iroh::PublicKey = match iroh_peer_str.parse() {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::error!(node_id = %iroh_peer_str, error = %e, "invalid iroh peer node ID");
-                    continue;
-                }
-            };
-
-            let mut peer_addr = EndpointAddr::new(node_id);
-            for addr in &args.iroh_peer_addrs {
-                peer_addr = peer_addr.with_ip_addr(*addr);
-            }
-            let peer_ep = iroh_endpoint.clone();
-            let peer_subduction = subduction.clone();
-            let peer_ephemeral = ephemeral.clone();
-            let peer_signer = signer.clone();
-            let peer_cancel = token.clone();
-            let peer_service_name = service_name.clone();
-            let peer_keyhive = keyhive_protocol.clone();
-
-            tokio::spawn(async move {
-                match try_connect_iroh(
-                    &peer_ep,
-                    peer_addr,
-                    &peer_subduction,
-                    &peer_ephemeral,
-                    peer_keyhive.as_ref(),
-                    &peer_signer,
-                    &peer_service_name,
-                    peer_cancel,
-                )
-                .await
-                {
-                    Ok(remote_id) => {
-                        tracing::info!(
-                            node_id = %node_id,
-                            peer = %remote_id,
-                            "iroh: connected to peer"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::error!(node_id = %node_id, error = %e, "iroh: failed to connect to peer");
-                    }
-                }
-            });
-        }
-
-        Some(task)
+    let iroh = if iroh_enabled {
+        Some(
+            start_iroh(
+                &args,
+                &subduction,
+                &ephemeral,
+                keyhive_protocol.as_ref(),
+                &signer,
+                &service_name,
+                server_peer_id,
+                discovery_audience,
+                handshake_max_drift,
+                &token,
+            )
+            .await?,
+        )
     } else {
         None
     };
@@ -926,46 +733,25 @@ where
             }
         };
 
-        let peer_subduction = subduction.clone();
-        let peer_ephemeral = ephemeral.clone();
-        let peer_signer = signer.clone();
-        let peer_service_name = service_name.clone();
-        let peer_cancel = token.clone();
-        let peer_max_message_size = args.max_message_size;
-        let peer_max_frame_size = args.max_frame_size();
-        let peer_keyhive = keyhive_protocol.clone();
-        let peer_keepalive = KeepAlive::balanced();
-
-        tokio::spawn(async move {
-            match try_connect_ws(
-                uri.clone(),
-                &peer_subduction,
-                &peer_ephemeral,
-                peer_keyhive.as_ref(),
-                &peer_signer,
-                &peer_service_name,
-                peer_cancel,
-                peer_max_message_size,
-                peer_max_frame_size,
-                peer_keepalive,
-            )
-            .await
-            {
-                Ok(remote_id) => {
-                    tracing::info!(uri = %uri, peer = %remote_id, "Connected to peer");
-                }
-                Err(e) => {
-                    tracing::error!(uri = %uri, error = %e, "Failed to connect to peer");
-                }
-            }
-        });
+        tokio::spawn(dial_ws_peer(
+            uri,
+            subduction.clone(),
+            ephemeral.clone(),
+            keyhive_protocol.clone(),
+            signer.clone(),
+            service_name.clone(),
+            token.clone(),
+            args.max_message_size,
+            args.max_frame_size(),
+        ));
     }
 
     // Write ready file if requested (for integration tests)
     if let Some(ref ready_path) = args.ready_file {
-        let iroh_line = iroh_node_id
-            .as_deref()
-            .map_or(String::new(), |id| format!("iroh_node_id={id}\n"));
+        let iroh_line = iroh
+            .as_ref()
+            .map_or(String::new(), |i| format!("iroh_node_id={}\n", i.node_id));
+        let iroh_addrs = iroh.as_ref().map_or(&[][..], |i| &i.addrs[..]);
         let iroh_addrs_line = if iroh_addrs.is_empty() {
             String::new()
         } else {
@@ -986,8 +772,8 @@ where
     token.cancelled().await;
     tracing::info!("Shutting down server...");
     accept_task.abort();
-    if let Some(iroh_task) = iroh_accept_task {
-        iroh_task.abort();
+    if let Some(iroh) = iroh {
+        iroh.accept_task.abort();
     }
 
     // A supervision-initiated shutdown must exit nonzero so
@@ -999,6 +785,343 @@ where
     }
 
     Ok(())
+}
+
+// `serve`'s background tasks live in the named functions below rather than in
+// inline `async` blocks: rust-analyzer infers a function together with every
+// closure and `async` block nested in it, and that cost grows superlinearly
+// with the combined body. Inlined, `serve` took ~20s to analyze.
+
+/// Drain ephemeral events; the server is a relay, not a consumer.
+async fn drain_ephemeral_events(events: async_channel::Receiver<EphemeralEvent>) {
+    while let Ok(event) = events.recv().await {
+        tracing::debug!(
+            sender = %event.sender,
+            topic = %event.id,
+            nonce = event.nonce,
+            payload_size = event.payload.len(),
+            "ephemeral event relayed"
+        );
+    }
+}
+
+/// Periodically publish the in-memory cache occupancy and the top-requestor
+/// window until `token` is cancelled.
+///
+/// Lives here (not in the storage refresh task) because both come from
+/// `Subduction`/handler state, not the storage backend. The resident count,
+/// compared against `subduction_storage_sedimentrees`, shows eviction pressure.
+///
+/// Runs even without `--metrics` (gauge sets are no-ops with no recorder): the
+/// tally must be drained regardless — an undrained map sits at its cap doing
+/// eviction scans forever — and the "top requestors" log line is useful on its
+/// own.
+async fn refresh_node_gauges<H: CliWireHandler>(
+    subduction: CliSubduction<H>,
+    requestor_tally: Option<Arc<RequestorTally>>,
+    refresh_interval: Duration,
+    token: CancellationToken,
+) {
+    let mut interval = time::interval(refresh_interval);
+    // Skip the immediate first tick: nothing to report at t=0.
+    interval.tick().await;
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                let resident = subduction.minimized_tree_store().len().await;
+                subduction_core::metrics::set_sedimentree_cache_resident(resident);
+
+                // Heals the connections gauge if an event-driven refresh was
+                // missed.
+                subduction_core::metrics::set_connections_active(
+                    subduction.total_connection_count().await,
+                );
+
+                // Rank-shaped gauges carry the skew; the log line carries the
+                // peer ids (see `requestor_tally` docs).
+                if let Some(tally) = &requestor_tally {
+                    publish_top_requestors(tally, refresh_interval).await;
+                }
+            }
+            () = token.cancelled() => break,
+        }
+    }
+}
+
+async fn publish_top_requestors(tally: &RequestorTally, window: Duration) {
+    let ranked = tally.take_window().await;
+    let counts: Vec<u64> = ranked.iter().map(|(_, count)| *count).collect();
+    let total: u64 = counts.iter().sum();
+    subduction_core::metrics::set_top_requestors(&counts, total);
+    if !ranked.is_empty() {
+        let top: Vec<String> = ranked
+            .iter()
+            .take(10)
+            .map(|(peer, count)| format!("{peer}={count}"))
+            .collect();
+        tracing::info!(
+            window_secs = window.as_secs(),
+            total_requestors = ranked.len(),
+            top = ?top,
+            "top requestors by batch-sync requests"
+        );
+    }
+}
+
+/// Run a critical background future; if it exits outside an orderly shutdown,
+/// record the failure and cancel `token` so the process exits nonzero and the
+/// service manager restarts it.
+///
+/// The flag store must precede `cancel()`: `serve`'s final check is only
+/// reached by waking from `token.cancelled().await`, whose internal
+/// synchronization makes the store visible.
+async fn supervise<F: Future>(
+    fut: F,
+    what: &'static str,
+    token: CancellationToken,
+    failed: Arc<AtomicBool>,
+) {
+    tokio::select! {
+        _ = fut => {
+            if !token.is_cancelled() {
+                tracing::error!("{what} exited unexpectedly; shutting down for supervised restart");
+                failed.store(true, Ordering::Release);
+                token.cancel();
+            }
+        },
+        () = token.cancelled() => {}
+    }
+}
+
+/// The running iroh transport: its accept loop and the addresses to advertise.
+struct IrohTransport {
+    accept_task: tokio::task::JoinHandle<()>,
+    node_id: String,
+    addrs: Vec<SocketAddr>,
+}
+
+/// Bind the iroh endpoint, spawn its accept loop, and dial the configured
+/// iroh peers.
+#[allow(clippy::too_many_arguments)]
+async fn start_iroh<H: CliWireHandler>(
+    args: &ServerArgs,
+    subduction: &CliSubduction<H>,
+    ephemeral: &CliEphemeralHandler,
+    keyhive_protocol: Option<&CliKeyhiveProtocol>,
+    signer: &MemorySigner,
+    service_name: &str,
+    server_peer_id: PeerId,
+    discovery_audience: Option<Audience>,
+    handshake_max_drift: Duration,
+    token: &CancellationToken,
+) -> Result<IrohTransport> {
+    let relay_mode = if args.iroh_direct_only {
+        iroh::endpoint::RelayMode::Disabled
+    } else if let Some(url) = &args.iroh_relay_url {
+        let relay_map =
+            iroh::RelayMap::try_from_iter([url.as_str()]).map_err(|e| eyre::eyre!(e))?;
+        iroh::endpoint::RelayMode::Custom(relay_map)
+    } else {
+        iroh::endpoint::RelayMode::Default
+    };
+
+    let endpoint = iroh::Endpoint::builder(presets::N0)
+        .alpns(vec![subduction_iroh::ALPN.to_vec()])
+        .relay_mode(relay_mode)
+        .bind()
+        .await?;
+
+    let iroh_addr = endpoint.addr();
+    tracing::info!(node_id = %iroh_addr.id, "Iroh endpoint bound");
+    for addr in &iroh_addr.addrs {
+        tracing::info!(addr = ?addr, "transport address");
+    }
+
+    let accept_task = tokio::spawn(iroh_accept_loop(
+        endpoint.clone(),
+        subduction.clone(),
+        ephemeral.clone(),
+        keyhive_protocol.cloned(),
+        signer.clone(),
+        server_peer_id,
+        discovery_audience,
+        handshake_max_drift,
+        token.child_token(),
+    ));
+
+    for iroh_peer_str in &args.iroh_peers {
+        let node_id: iroh::PublicKey = match iroh_peer_str.parse() {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::error!(node_id = %iroh_peer_str, error = %e, "invalid iroh peer node ID");
+                continue;
+            }
+        };
+
+        let peer_addr = args
+            .iroh_peer_addrs
+            .iter()
+            .fold(EndpointAddr::new(node_id), |addr, ip| {
+                addr.with_ip_addr(*ip)
+            });
+
+        tokio::spawn(dial_iroh_peer(
+            endpoint.clone(),
+            node_id,
+            peer_addr,
+            subduction.clone(),
+            ephemeral.clone(),
+            keyhive_protocol.cloned(),
+            signer.clone(),
+            service_name.to_owned(),
+            token.clone(),
+        ));
+    }
+
+    Ok(IrohTransport {
+        accept_task,
+        node_id: iroh_addr.id.to_string(),
+        addrs: iroh_addr.ip_addrs().copied().collect(),
+    })
+}
+
+/// Accept iroh connections until `cancel` fires, registering each with the
+/// node and starting a full sync.
+#[allow(clippy::too_many_arguments)]
+async fn iroh_accept_loop<H: CliWireHandler>(
+    endpoint: iroh::Endpoint,
+    subduction: CliSubduction<H>,
+    ephemeral: CliEphemeralHandler,
+    keyhive_protocol: Option<CliKeyhiveProtocol>,
+    signer: MemorySigner,
+    server_peer_id: PeerId,
+    discovery_audience: Option<Audience>,
+    handshake_max_drift: Duration,
+    cancel: CancellationToken,
+) {
+    let nonce_cache = NonceCache::default();
+    loop {
+        tokio::select! {
+            () = cancel.cancelled() => {
+                tracing::info!("iroh accept loop canceled");
+                break;
+            }
+            result = subduction_iroh::server::accept_one(
+                &endpoint,
+                &signer,
+                &nonce_cache,
+                server_peer_id,
+                discovery_audience,
+                handshake_max_drift,
+            ) => {
+                match result {
+                    Ok(accepted) => {
+                        register_iroh_peer(accepted, &subduction, &ephemeral, keyhive_protocol.as_ref()).await;
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "iroh accept error");
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn register_iroh_peer<H: CliWireHandler>(
+    accepted: subduction_iroh::server::AcceptResult,
+    subduction: &CliSubduction<H>,
+    ephemeral: &CliEphemeralHandler,
+    keyhive_protocol: Option<&CliKeyhiveProtocol>,
+) {
+    let remote = accepted.authenticated.peer_id();
+    tokio::spawn(accepted.listener_task);
+    tokio::spawn(accepted.sender_task);
+
+    let auth = accepted
+        .authenticated
+        .map(|c| MessageTransport::new(UnifiedTransport::Iroh(c)));
+    let auth_for_keyhive = auth.clone();
+    match subduction.add_connection(auth).await {
+        Ok(_) => {
+            ephemeral.subscribe_peer(remote).await;
+            notify_peer_connect(keyhive_protocol, auth_for_keyhive).await;
+            subduction
+                .full_sync_with_peer(&remote, true, CallTimeout::Default)
+                .await;
+            tracing::info!(peer = %remote, "iroh: added peer");
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "failed to add iroh connection");
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn dial_iroh_peer<H: CliWireHandler>(
+    endpoint: iroh::Endpoint,
+    node_id: iroh::PublicKey,
+    addr: EndpointAddr,
+    subduction: CliSubduction<H>,
+    ephemeral: CliEphemeralHandler,
+    keyhive_protocol: Option<CliKeyhiveProtocol>,
+    signer: MemorySigner,
+    service_name: String,
+    cancel: CancellationToken,
+) {
+    match try_connect_iroh(
+        &endpoint,
+        addr,
+        &subduction,
+        &ephemeral,
+        keyhive_protocol.as_ref(),
+        &signer,
+        &service_name,
+        cancel,
+    )
+    .await
+    {
+        Ok(remote_id) => {
+            tracing::info!(node_id = %node_id, peer = %remote_id, "iroh: connected to peer");
+        }
+        Err(e) => {
+            tracing::error!(node_id = %node_id, error = %e, "iroh: failed to connect to peer");
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn dial_ws_peer<H: CliWireHandler>(
+    uri: Uri,
+    subduction: CliSubduction<H>,
+    ephemeral: CliEphemeralHandler,
+    keyhive_protocol: Option<CliKeyhiveProtocol>,
+    signer: MemorySigner,
+    service_name: String,
+    cancel: CancellationToken,
+    max_message_size: usize,
+    max_frame_size: usize,
+) {
+    match try_connect_ws(
+        uri.clone(),
+        &subduction,
+        &ephemeral,
+        keyhive_protocol.as_ref(),
+        &signer,
+        &service_name,
+        cancel,
+        max_message_size,
+        max_frame_size,
+        KeepAlive::balanced(),
+    )
+    .await
+    {
+        Ok(remote_id) => {
+            tracing::info!(uri = %uri, peer = %remote_id, "Connected to peer");
+        }
+        Err(e) => {
+            tracing::error!(uri = %uri, error = %e, "Failed to connect to peer");
+        }
+    }
 }
 
 /// Publish on-disk footprint gauges: the redb database file size (one `stat`,
