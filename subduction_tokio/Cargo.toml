@@ -1,6 +1,6 @@
 [package]
 name = "subduction_tokio"
-version = "0.1.0"
+version = "0.2.0"
 description = "Owned Tokio nodes, transport connectors, and supervised reconnection for Subduction"
 categories = ["network-programming"]
 keywords = ["subduction", "sync", "tokio"]
